@@ -1,0 +1,30 @@
+# Build outputs
+out/
+dist/
+*.vsix
+
+# Dependencies
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Runtime artifacts (generated per-session, not committed)
+.deep-architect/
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.vscode/launch.json
+*.swp
