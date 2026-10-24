@@ -1,0 +1,197 @@
+{
+ "topic": "Observability and cost control for a mixed local/cloud LLM stack on a single RTX 3060 workstation (Oct 2026): lightest setup yielding per-agent cost, latency and quality signals",
+ "summary": "The lightest stack that gives per-department cost, latency and quality signals is a gateway-centric one: put LiteLLM Proxy (already OSS, Prometheus metrics ungated in current docs, per-virtual-key/team spend, custom per-token pricing incl. $0 for Ollama models) in front of both Ollama and Anthropic, one virtual key per department agent; export LiteLLM traces over OTLP to Arize Phoenix (a single container with SQLite, ports 6006/4317, no feature gates) for traces, annotations and evals; scrape LiteLLM plus a native-Windows nvidia_gpu_exporter (port 9835, wraps nvidia-smi) with the OTel-collector + Prometheus + Grafana compose Anthropic already publishes for Claude Code; and turn on Claude Code's own OTel export (CLAUDE_CODE_ENABLE_TELEMETRY=1, claude_code.cost.usage / claude_code.token.usage with model, agent.name, skill.name attributes). Langfuse v4 is the richer self-improvement platform (judges, datasets, prompt mgmt) but its official compose stack is six containers and the docs recommend 4 cores/16 GiB (component minimums sum to ~21.5 GiB), which is too heavy beside Ollama on a 32 GB box; Opik and Helicone also require ClickHouse. Economics findings that change the routing design: Haiku 5.5 is $0.10/$0.50 per MTok, Sonnet 5.5 $2/$10, Opus 5.5 $4/$20 (cache reads $0.20, i.e. 5%), Batch API is 50% off and stacks with caching, and a Max subscription now includes $100 (5x) or $200 (20x) per month of API credits. Claude Code cost metrics are list-price estimates (not billed on a subscription), the Admin Usage/Cost API is unavailable for individual accounts, OTel GenAI semantic conventions are still 'Development' (moved to a new repo June 2026, no release), Ollama exposes no native metrics (tok/s must be computed from eval_count/eval_duration), and Open WebUI's native OTel covers only service spans, so quality/cost capture must happen at the gateway, not the UI.",
+ "findings": [
+  {
+   "claim": "Langfuse v4's official docker-compose stack is six services (langfuse-web:4, langfuse-worker:4, ClickHouse 25.12, Postgres 17, Redis 7, MinIO) and the docs recommend at least 4 cores and 16 GiB RAM for the VM; the scaling page's per-component minimums are web 2 CPU/4 GiB, worker 2 CPU/4 GiB, Postgres 2 CPU/4 GiB, Redis 1 CPU/1.5 GiB, ClickHouse 2 CPU/8 GiB (16 GiB for larger), MinIO 2 CPU/4 GiB.",
+   "evidence": "docker-compose.yml lists exactly those six images; docker-compose.mdx: 'We recommend that you use at least 4 cores and 16 GiB of memory, e.g. a t3.xlarge on AWS' and 'The docker compose setup lacks high-availability, scaling capabilities, and backup functionality.' scaling.mdx minimum table as quoted. clickhouse.mdx: 'Langfuse v4 requires ClickHouse >= 25.12 (26.4 recommended)'.",
+   "source_url": "https://raw.githubusercontent.com/langfuse/langfuse-docs/main/content/self-hosting/deployment/docker-compose.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Rules Langfuse out as the default on a 32 GB workstation that must also hold Ollama + 14B models; if the footprint were ~2-4 GB, Langfuse would be the first choice because of its judges/datasets/prompt management.",
+   "source_date": "2026 (v4 docs, current main)"
+  },
+  {
+   "claim": "Arize Phoenix runs as a single container (`docker run -p 6006:6006 -p 4317:4317 arizephoenix/phoenix:latest`), defaults to file-based SQLite (set PHOENIX_WORKING_DIR to a volume), accepts OTLP traces on 6006 (/v1/traces HTTP) and 4317 (gRPC), optionally uses Postgres via PHOENIX_SQL_DATABASE_URL, and is free to self-host with 'no license fees, no usage limits, no feature gates' under Elastic License 2.0.",
+   "evidence": "deployment-options/docker.mdx and configuration.mdx quotes: '6006 ... accepts OTLP traces at /v1/traces', '4317 (gRPC)', 'file-based SQLite database in a temporary folder'; self-hosting.mdx: 'No license fees, no usage limits, no feature gates'; README: 'licensed under the terms of the Elastic License 2.0 (ELv2)'. Third-party sizing: Railway template min 1 GB RAM, Arize staff forum reply 'hosted Phoenix on 2GB RAM and a single CPU'.",
+   "source_url": "https://raw.githubusercontent.com/Arize-ai/phoenix/main/docs/phoenix/self-hosting/deployment-options/docker.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Phoenix is the proposed trace/eval store precisely because it is one container; if it required ClickHouse/Postgres the recommendation would fall back to LiteLLM-only spend logs.",
+   "source_date": "current main (2026)"
+  },
+  {
+   "claim": "LiteLLM Proxy exposes Prometheus metrics with `litellm_settings: callbacks: [\"prometheus\"]`; spend metric `litellm_spend_metric` and token metrics `litellm_input_tokens_metric`/`litellm_output_tokens_metric`/`litellm_total_tokens_metric` carry labels end_user, hashed_api_key, api_key_alias, model, team, team_alias, user, requested_model, api_provider; latency histograms `litellm_request_total_latency_metric`, `litellm_llm_api_latency_metric`, `litellm_llm_api_time_to_first_token_metric`. The current docs page carries no enterprise/license notice except for 'Managed Batch Metrics ... Enterprise only'.",
+   "evidence": "litellm-docs/docs/proxy/prometheus.md as of Oct 2026 (docs repo moved to BerriAI/litellm-docs). Historical caveat: a Sept 2024 commit (#5774) gated Prometheus behind enterprise with banner 'Prometheus Metrics will be moving to LiteLLM Enterprise on September 15th, 2024', and the current litellm.ai pricing page lists Prometheus under the free self-hosted tier per search snippet; verify on your deployed version's /metrics.",
+   "source_url": "https://raw.githubusercontent.com/BerriAI/litellm-docs/main/docs/proxy/prometheus.md",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "Per-department cost/latency without any extra tool depends on these metrics being free; if they are license-gated again, cost attribution must come from Phoenix traces or LiteLLM's /spend DB endpoints instead.",
+   "source_date": "2026-10 (latest LiteLLM release v1.106.0, 2026-10-18)"
+  },
+  {
+   "claim": "LiteLLM lets you override per-token cost per model via `model_info: input_cost_per_token / output_cost_per_token`, and explicitly documents setting both to 0 for Ollama models (`model: ollama/llama3`, `api_base: http://localhost:11434`) so budgets skip them; `cost_per_second` (v1.105.0+) is also available.",
+   "evidence": "custom_pricing.md: 'add a model_info key to your model in the config, and override the desired keys'; example on-prem-llama with input_cost_per_token: 0 / output_cost_per_token: 0 'Explicitly set to 0'.",
+   "source_url": "https://raw.githubusercontent.com/BerriAI/litellm-docs/main/docs/proxy/custom_pricing.md",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Enables a single cost ledger across local and cloud; you can also set a non-zero synthetic $/token for Ollama (electricity + depreciation) to make local-vs-cloud comparisons honest.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Claude Code exports OpenTelemetry metrics when CLAUDE_CODE_ENABLE_TELEMETRY=1 with OTEL_METRICS_EXPORTER (otlp|prometheus|console) and OTEL_LOGS_EXPORTER; metrics include claude_code.cost.usage (USD; attributes model, query_source, speed, effort, agent.name, skill.name, plugin.name, mcp_server.name, mcp_tool.name), claude_code.token.usage (type input/output/cacheRead/cacheCreation), claude_code.session.count, lines_of_code.count, commit.count, pull_request.count, active_time.total; events include api_request (cost_usd 'Estimated cost in USD', duration_ms, token fields), tool_result, tool_decision, api_error. Default export intervals 60 s metrics / 5 s logs; cardinality flags OTEL_METRICS_INCLUDE_SESSION_ID (true) etc. Tracing (spans) is beta behind CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1.",
+   "evidence": "code.claude.com/docs/en/monitoring-usage metric table and events list; Prometheus names used by Anthropic's monitoring guide: claude_code_cost_usage_USD_total, claude_code_token_usage_tokens_total.",
+   "source_url": "https://code.claude.com/docs/en/monitoring-usage",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "This is the only per-agent/per-skill cost signal available for Claude Code work on a subscription; the dashboard design keys off these attribute names.",
+   "source_date": "2026-10 (page references v2.1.307)"
+  },
+  {
+   "claim": "Claude Code's dollar figures (/usage, status line, OTel cost.usage) are computed locally from token counts at list price and are estimates; 'Claude Max and Pro subscribers have usage included in their subscription, so the session cost figure isn't relevant for billing purposes'. Authoritative billing is only in the Console Usage page. Across enterprise deployments the average is ~$13/developer/active day and $150-250/developer/month at API rates.",
+   "evidence": "code.claude.com/docs/en/costs: 'Claude Code computes the dollar figure locally from token counts at list price ... The figure is an estimate'; '/usage' also shows attribution to skills, subagents, plugins and MCP servers plus a 'Prompt cache (main)' hit-rate line (v2.1.251+).",
+   "source_url": "https://code.claude.com/docs/en/costs",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "On a Max plan the cost dashboard must be framed as 'API-equivalent spend avoided' and plan-limit consumption, not dollars billed; this changes which panels are meaningful.",
+   "source_date": "2026-10"
+  },
+  {
+   "claim": "Current Anthropic API list prices (per MTok, input/output, cache write/cache read): Fable 5.1 $10/$50, $12.50/$0.25; Opus 5.5 $4/$20, $5/$0.20; Sonnet 5.5 $2/$10, $2.50/$0.10; Haiku 5.5 $0.10/$0.50, $0.125/$0.01 (prompts <=100K; $0.50/$2.50 above). Batch processing saves 50% (Opus 5.5 batch $2/$10, Sonnet 5.5 $1/$5, Haiku 5.5 $0.05/$0.25, Haiku 4.5 $0.50/$2.50). US-only inference is 1.1x; Opus 5.5 fast mode is 2x.",
+   "evidence": "claude.com/pricing table and platform.claude.com batch-processing pricing table (lines 87-106). Note Opus 5.5 cache read is $0.20 = 5% of input, Fable 5.1 $0.25 = 2.5%.",
+   "source_url": "https://claude.com/pricing",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Haiku 5.5 at $0.10/MTok input makes the 'local is cheaper' premise marginal for simple tasks; the router's tiering should be justified by privacy/offline/latency/rate limits rather than cost alone, and the cheap cloud tier should be Haiku 5.5 rather than a 7B local model for anything quality-sensitive.",
+   "source_date": "2026-10-24 (live page)"
+  },
+  {
+   "claim": "Claude Max plans include monthly API credits: $100/month for Max 5x and $200/month for Max 20x ('$100 to $200/month in API credits to build on the Claude Platform'); Max is 'From $100' per month; Claude Code is included in all paid plans and shares one usage pool with chat, with rolling 5-hour windows plus weekly limits; Fable usage is capped at '50% of weekly limits' on Max.",
+   "evidence": "claude.com/pricing FAQ and comparison table quotes as listed.",
+   "source_url": "https://claude.com/pricing",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Changes the subscription-vs-API economics: a Max 5x/20x subscriber effectively gets an API budget for the orchestrator's programmatic calls (router, nightly batch evals) at no extra cost, so the design should route Claude Code interactive work through the subscription and programmatic department-agent calls through API credits.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "The Message Batches API is 50% off every token including cache reads/writes, limits are 100,000 requests or 256 MB per batch, most batches finish within 1 hour with a 24 h expiry, and prompt caching stacks with batch but cache hits are 'best-effort' (30-98%); the docs recommend the 1-hour cache TTL for batches sharing context.",
+   "evidence": "batch-processing page lines 22, 43-44, 78, 1042: 'The pricing discounts from prompt caching and Message Batches can stack ... cache hits are provided on a best-effort basis. Users typically experience cache hit rates ranging from 30 percent to 98 percent'.",
+   "source_url": "https://platform.claude.com/docs/en/build-with-claude/batch-processing",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "The self-improvement loop (nightly LLM-as-judge grading of the day's traces, prompt A/B evals) should run as batches: that halves judge cost and is the main cost lever beyond caching.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Prompt caching economics: cache writes cost 1.25x base input for the 5-minute TTL and 2x for the 1-hour TTL; cache reads are ~0.1x base (0.05x on Opus 5.5, 0.025x on Fable 5.1); a read refreshes the TTL; max 4 breakpoints; minimum cacheable prefix 512-4096 tokens depending on model. Claude Code requests the 1-hour TTL for the main conversation only on a subscription within plan usage, and 5 minutes for API-key/usage-credit billing and for all subagents; override with promptCacheTtl / CLAUDE_CODE_PROMPT_CACHE_TTL and subagentPromptCacheTtl (v2.1.242+).",
+   "evidence": "claude-api skill shared/prompt-caching.md 'Economics' paragraph; code.claude.com/docs/en/prompt-caching 'Which TTL each request gets' table and 'Choose the TTL yourself'. Verify via `claude -p \"hello\" --output-format json` -> usage.cache_creation.ephemeral_1h_input_tokens.",
+   "source_url": "https://code.claude.com/docs/en/prompt-caching",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10"
+  },
+  {
+   "claim": "The OpenTelemetry GenAI semantic conventions (gen_ai.* spans/metrics/events) are still at 'Development' stability; on 2026-06-12 (semantic-conventions v1.42.0) they were deprecated in the main repo and moved to open-telemetry/semantic-conventions-genai, which has no tagged release and a 'Schema URL: TODO'.",
+   "evidence": "GitHub repo page shows empty Releases, 670 commits, 'Schema URL ... TODO'; July/Aug 2026 write-ups confirm every gen_ai.* item carries the Development badge; some blogs incorrectly claim stability.",
+   "source_url": "https://github.com/open-telemetry/semantic-conventions-genai",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Standardizing on OTLP is still right, but attribute names can change; the stack should pin collector/instrumentation versions and keep a single mapping layer (LiteLLM's OTel callback or the router) rather than hand-writing gen_ai.* attributes in many places.",
+   "source_date": "2026-06-12 (repo move); checked 2026-10-24"
+  },
+  {
+   "claim": "Langfuse ingests OTLP traces at /api/public/otel (signal path /api/public/otel/v1/traces) over HTTP/JSON or HTTP/protobuf only (no gRPC), with Basic auth of public:secret key; it maps OpenTelemetry GenAI gen_ai.*, OpenInference (llm.model_name, llm.token_count.*) and MLflow attributes, reads usage from gen_ai.usage.* and cost from gen_ai.usage.cost, and otherwise prices generations via model definitions (custom ones required for self-hosted/Ollama models, usage keys must match exactly). LiteLLM's recommended Langfuse path for v3/v4 is the `langfuse_otel` callback.",
+   "evidence": "langfuse-docs opentelemetry/index.mdx quotes: 'Langfuse currently supports OTLP over HTTP with both HTTP/JSON and HTTP/protobuf. gRPC is not supported yet.'; token-and-cost-tracking docs on custom model definitions; LiteLLM docs: 'for Langfuse v3 and v4, the langfuse_otel preset ... is recommended'.",
+   "source_url": "https://raw.githubusercontent.com/langfuse/langfuse-docs/main/content/integrations/native/opentelemetry/index.mdx",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Open WebUI's built-in OpenTelemetry export (ENABLE_OTEL, ENABLE_OTEL_TRACES/METRICS/LOGS, OTEL_EXPORTER_OTLP_ENDPOINT default http://lgtm:4317) covers only service spans (FastAPI routes, SQLAlchemy, Redis, outbound HTTP) and two metrics (http.server.requests, http.server.duration), not LLM content or tokens. The Langfuse integration is now a Filter Function installed in Admin Panel > Functions (requires langfuse~=3.11; valves for pk/sk/host), token counts are read from the last assistant message's usage (prompt_eval_count/eval_count or prompt_tokens/completion_tokens) and require the per-model 'Usage' capability for streamed replies; the filter sends traces, generations, user_id (email), session_id (chat id) but does not send thumbs-up/down scores.",
+   "evidence": "open-webui/docs reference/monitoring/otel.md; tutorials/integrations/monitoring/langfuse.md ('Most OpenAI-compatible providers only report token counts for a streamed reply when asked' -> turn on Usage capability); open-webui/pipelines langfuse_filter_pipeline.py source ('contains no score calls').",
+   "source_url": "https://raw.githubusercontent.com/open-webui/docs/main/docs/reference/monitoring/otel.md",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Means the UI cannot be the capture point for cost or quality; capture LLM traces at the gateway (LiteLLM -> Phoenix/Langfuse) and collect human feedback via a separate scores write (Phoenix annotations API or Langfuse scores) triggered from Open WebUI's feedback or a tiny filter.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Comet Opik's local docker-compose starts MySQL 8.4, Redis, ClickHouse 26.3, ZooKeeper, MinIO (+init), opik-backend, opik-python-backend (privileged), opik-frontend (UI on :5173), optional guardrails and an otel-collector/Jaeger profile; Opik states the local install 'is not meant for production deployments' and recommends Helm; it is Apache-2.0 with no user management in self-hosted builds. Helicone self-host needs ClickHouse, Supabase/Postgres, MinIO, Jawn API and a Kafka profile marked unstable.",
+   "evidence": "comet-ml/opik deployment/docker-compose/docker-compose.yaml service list; docs-v2/self-host/local_deployment.mdx; Helicone docker/README.md ('some stability issues with the local Kafka and worker configurations').",
+   "source_url": "https://raw.githubusercontent.com/comet-ml/opik/main/deployment/docker-compose/docker-compose.yaml",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Ollama has no native Prometheus/OTel metrics endpoint; tokens/sec must be computed from the final /api/generate or /api/chat response fields (eval_count / eval_duration * 1e9, durations in nanoseconds; also prompt_eval_count, prompt_eval_duration, load_duration, total_duration), and loaded-model VRAM from /api/ps (size_vram, expires_at). The OpenAI-compatible endpoint supports stream_options.include_usage but drops the timing fields. Third-party sidecar exporters exist (e.g. evandhoffman/ollama-prometheus-exporter).",
+   "evidence": "ollama/docs/api.md: 'divide eval_count / eval_duration * 10^9', '\"size_vram\": 5137025024'; docs/api/openai-compatibility.mdx: '[x] stream_options - [x] include_usage'; searches found no native /metrics route.",
+   "source_url": "https://raw.githubusercontent.com/ollama/ollama/main/docs/api.md",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "Local latency/throughput signals must be emitted by whichever component talks to Ollama natively (the router today, or a thin sidecar); routing Ollama purely through LiteLLM's OpenAI path loses tok/s and load_duration unless LiteLLM's latency histograms are accepted as the proxy.",
+   "source_date": "current main (2026)"
+  },
+  {
+   "claim": "For GPU telemetry on a Windows 11 host, utkuozdemir/nvidia_gpu_exporter 'Runs on Linux, Windows and macOS', wraps nvidia-smi, installs as a native Windows service via winget/Scoop, serves :9835/metrics with nvidia_smi_temperature_gpu, nvidia_smi_utilization_gpu_ratio, nvidia_smi_memory_used_bytes, nvidia_smi_power_draw_watts, and has Grafana dashboards 14574 (per-GPU) and 25547 (overview). NVIDIA dcgm-exporter targets datacenter Linux/Kubernetes (Docker Desktop 4.37.1+ required for the container), profiling DCGM_FI_PROF_* fields return zero on Ampere, and no source confirms DCGM support under WSL2 or on GeForce.",
+   "evidence": "nvidia_gpu_exporter README/METRICS.md; dcgm-exporter Docker Hub and hardened-image notes ('On Ampere and older GPUs, DCGM_FI_PROF_* fields return zero'); NVIDIA support matrix not retrievable (docs.nvidia.com DNS blocked in this session).",
+   "source_url": "https://raw.githubusercontent.com/utkuozdemir/nvidia_gpu_exporter/master/README.md",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Determines that GPU temp/VRAM gating (DESIGN.md's thermal gating and dynamic num_ctx) should read a host-side nvidia-smi exporter, not a DCGM container inside WSL2.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Anthropic's Usage and Cost Admin API (/v1/organizations/usage_report/messages, /v1/organizations/cost_report) requires an Admin API key and 'is unavailable for individual accounts'; the Cost API is daily-granularity only. Anthropic's SDKs and the API can also emit OpenTelemetry gen_ai.* spans (beta): SDK tracing in-process, and server-side 'API tracing' destinations added via Console/Admin API; Anthropic publishes anthropics/claude-code-monitoring-guide, a compose of otel/opentelemetry-collector-contrib (:4317/:4318/:8889), prom/prometheus (:9090) and grafana/grafana (:3000) with provisioned dashboards.",
+   "evidence": "platform.claude.com usage-cost-api Tip: 'The Admin API is unavailable for individual accounts.'; claude-api skill shared/opentelemetry.md; claude-code-monitoring-guide docker-compose.yml service list.",
+   "source_url": "https://platform.claude.com/docs/en/manage-claude/usage-cost-api",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "An individual owner cannot reconcile against billed cost programmatically, so the stack must compute cost client-side (LiteLLM pricing map + Claude Code OTel) and reconcile manually against the Console; the Anthropic compose can be reused as-is for the Prometheus/Grafana layer.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Langfuse self-hosted runs LLM-as-a-judge evaluators, datasets/experiments and scores (stable evaluator API under /api/public/v2 since 2026-04-15), and community setups connect it to Ollama as the judge via the OpenAI-compatible API; Langfuse core is MIT, ClickHouse Inc. acquired Langfuse in Jan 2026 committing to keep MIT and self-hosting; v3 gets security patches until end of Jan 2027.",
+   "evidence": "Langfuse changelog 2026-04-15 (LLM-as-a-judge API), upgrade-v3-to-v4 guide, MohsinCreed/LangfuseOllama repo (third-party), elest.io/TrueFoundry comparisons.",
+   "source_url": "https://langfuse.com/changelog/2026-04-15-llm-as-a-judge-api.md",
+   "confidence": "medium",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-04-15"
+  },
+  {
+   "claim": "The repo's current router (router/main.py) returns estimated token counts for Ollama (estimate_tokens on the text) and only input_tokens from Anthropic, emits no structured per-request usage/latency log, and the README still references claude-sonnet-4-6 and claude-opus-4-8, which are superseded by Sonnet 5.5 / Opus 5.5 at lower prices.",
+   "evidence": "grep of router/main.py lines 78-82, 149-166, 229-230, 298-299; README.md lines 46-51.",
+   "source_url": "file:///home/user/personal-agent-stack/router/main.py",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Any per-department cost signal from the custom router today would be fabricated token counts; either replace the router with LiteLLM (which reads real usage from both providers) or make the router record Ollama's native eval_count/prompt_eval_count and Anthropic's full usage block (incl. cache_read_input_tokens).",
+   "source_date": "2026-10-24 (repo state)"
+  }
+ ],
+ "recommendations": [
+  "Adopt a gateway-centric observability design: run LiteLLM Proxy (with its Postgres for spend logs) as the single OpenAI-compatible entry point for Ollama and Anthropic; create one virtual key / team per department agent (app-dev, testing, security, devops, code-review, docs) so `litellm_spend_metric`, token and latency histograms are labeled by `team`/`api_key_alias` for free. Set `model_info.input_cost_per_token/output_cost_per_token` for each Ollama model (0, or a small synthetic electricity+depreciation rate) so local vs cloud cost is comparable in one ledger. Either retire router/main.py or keep it only as a routing policy layer in front of LiteLLM and stop fabricating token counts.",
+  "Use Arize Phoenix as the trace/eval store (one container, SQLite on a named volume, ports 6006/4317, ~1-2 GB RAM) and send LiteLLM traces to it via LiteLLM's OpenTelemetry callback (OTLP to the collector or directly to Phoenix). Tag every request with department, task type and routing decision (local/cloud, model, effort) via LiteLLM metadata so Phoenix can slice latency and quality per department. Add quality signals as Phoenix annotations: (a) a nightly Haiku 5.5 or local-judge pass over the day's traces, run through the Batch API when cloud-graded (50% off, use 1h cache TTL), (b) human thumbs from Open WebUI written as annotations, (c) deterministic signals (tests passed, lint clean, PR merged). These annotated traces are the dataset the self-improvement loop mines for prompt/routing changes.",
+  "Reuse Anthropic's claude-code-monitoring-guide compose (otel-collector-contrib + Prometheus + Grafana) as the metrics layer, and enable Claude Code telemetry in user settings env: CLAUDE_CODE_ENABLE_TELEMETRY=1, OTEL_METRICS_EXPORTER=otlp, OTEL_LOGS_EXPORTER=otlp, OTEL_EXPORTER_OTLP_PROTOCOL=grpc, OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317, OTEL_METRICS_INCLUDE_SESSION_ID=false (cardinality). Build Grafana panels on claude_code_cost_usage_USD_total by model/agent.name/skill.name and token.usage by type (cacheRead share = caching health). Label the cost panel 'API-equivalent (list price)', since on a Max plan it is not billed.",
+  "Collect local-side signals without DCGM: install utkuozdemir/nvidia_gpu_exporter as a native Windows service (winget), scrape host.docker.internal:9835 from Prometheus, import dashboards 14574/25547, and alert on nvidia_smi_temperature_gpu and nvidia_smi_memory_used_bytes (this replaces DESIGN.md's pynvml sidecar for thermal gating). For tok/s, have the component that calls Ollama natively (router or a 50-line sidecar) emit a histogram from eval_count/eval_duration and prompt_eval_duration, and poll /api/ps for size_vram; LiteLLM's time-to-first-token and total-latency histograms cover cloud and local latency uniformly.",
+  "Reframe the routing tiers around the Oct-2026 price list: Haiku 5.5 ($0.10/$0.50) is the cheap cloud tier and usually beats a 7B local model on quality for near-zero cost, so route local only for privacy/offline/rate-limit reasons or for autocomplete/embedding; Sonnet 5.5 ($2/$10) is the default heavy tier; Opus 5.5 ($4/$20, cache read $0.20) only for security/architecture; avoid Fable 5.1 ($10/$50, 50% of weekly limits on Max) except by explicit request. Update README/agents.yaml model IDs (claude-sonnet-4-6/claude-opus-4-8 are stale). If the owner holds Max 5x/20x, spend the included $100/$200 monthly API credits on the programmatic department agents and nightly batch evals, and keep interactive Claude Code on the subscription (1h cache TTL there by default).",
+  "Treat the OTel GenAI conventions as moving: pin otel-collector-contrib, LiteLLM and Phoenix versions, keep gen_ai.* attribute mapping in one place (LiteLLM's callback), and avoid hand-emitting gen_ai.* from the router. Keep Langfuse v4 as the documented upgrade path (its judges, datasets and prompt management are the richest self-improvement toolkit) only if RAM grows to 64 GB or the stack moves off the GPU box; its compose needs ~16 GiB and ClickHouse >= 25.12. Skip Opik/Helicone for this workstation (both need ClickHouse plus MySQL/Supabase/MinIO).",
+  "Make cost control intuitive: expose one Grafana 'Daily spend by department' board (LiteLLM spend + Claude Code cost), one 'Local health' board (GPU temp, VRAM, tok/s, Ollama load time), and one Phoenix project per department; set LiteLLM per-key budgets (max_budget, budget_duration) as the hard stop that replaces DESIGN.md's 20-calls/session CloudBudget, and set Claude Code's --max-budget-usd for unattended runs. Reconcile monthly against the Console Usage page manually, since the Admin Usage/Cost API is unavailable for individual accounts."
+ ],
+ "open_questions": [
+  "Model ID discrepancy: the task text lists claude-haiku-4-5-20251001 as the current Haiku, but claude.com/pricing and the claude-api skill both list Claude Haiku 5.5 ($0.10/$0.50) with ID claude-haiku-5-5; confirm which Haiku the owner's account can call (GET /v1/models) before encoding it in agents.yaml.",
+  "LiteLLM Prometheus licensing: the current docs show no enterprise gate (only managed-batch metrics), but a Sept-2024 commit gated Prometheus behind a license key; verify on the deployed LiteLLM version that /metrics returns litellm_spend_metric without a license, otherwise fall back to LiteLLM's /spend/* DB endpoints or Phoenix cost attributes.",
+  "Exact RAM footprint of Phoenix with SQLite at this trace volume (vendor gives no SQLite benchmark; third-party sizing 1-3 GB) and whether SQLite is adequate for several months of traces or Postgres should be added on day one.",
+  "Whether DCGM/dcgm-exporter supports GeForce RTX 3060 under WSL2 at all (NVIDIA support matrix not retrievable in this session); the recommendation sidesteps it with nvidia_gpu_exporter on the Windows host, but confirm nvidia-smi is on PATH for the service account.",
+  "Whether the owner is on Max 5x or 20x (or Pro/API-only): this decides if the included $100/$200 API credits can fund the department agents and nightly batch judges, and therefore whether 'cost minimized' means minimizing API dollars or minimizing plan-limit consumption.",
+  "Which quality signal source is acceptable for the self-improvement loop: cloud judge (Haiku 5.5 via Batch, cheapest but sends code off-box), local judge (qwen/deepseek 14B on the 3060, free but slower and competes for VRAM), or deterministic-only (tests/lint/PR outcomes).",
+  "Open WebUI feedback capture: the Langfuse filter function does not forward thumbs up/down; decide whether to write a small filter/webhook that posts Phoenix annotations (or Langfuse scores) from Open WebUI feedback, or rely on Claude Code/CLI-side signals only.",
+  "Whether Anthropic's beta API tracing destination (server-side OTLP export configured in the Console) is available to an individual Console account; if so it gives per-request gen_ai spans for cloud calls with zero client code.",
+  "Langfuse v4 as a later upgrade: confirm available system RAM (32 vs 64 GB) and whether running Langfuse's ClickHouse alongside Ollama models is tolerable; a 64 GB box makes Langfuse viable and would change the recommendation toward it for its judge/dataset/prompt-management features."
+ ]
+}

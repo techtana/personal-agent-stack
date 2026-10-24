@@ -1,0 +1,239 @@
+{
+ "topic": "Self-developing mechanisms for a personal local coding-agent stack (Oct 2026): skills, AGENTS.md, memory, trace-driven prompt optimization, eval gates, feedback capture, model promotion",
+ "summary": "The mature October-2026 pattern for a \"self-developing\" agent stack is NOT online learning or auto-merge; it is a closed, human-gated loop: (1) capture structured traces and explicit feedback cheaply (Claude Code hooks writing JSONL, Open WebUI thumbs exported via its admin feedback API, router request logs), (2) run a scheduled retrospective in which a model reads the traces and proposes small textual deltas to skills/prompts/routing (ACE-style \"delta updates to a playbook\", GEPA-style reflection on failing traces), (3) gate every proposal with a deterministic eval harness that includes regression on currently-passing tasks and a comparison against an unchanged control (the Kiro kiro-trace design: 8 PRs opened, 7 merged in week one, with a three-stage preselection/regression/confirmation gate), and (4) deliver the result as a PR a human approves. Two real closed-loop implementations/write-ups with published designs: Kiro's kiro-trace (internal, AWS, 2026) and OpenAI's \"Agent Improvement Loop\" cookbook (May 2026: traces -> feedback -> Promptfoo evals -> HALO ranking -> Codex handoff, reviewed-PR mode recommended); plus open-source research loops SICA (MIT, agent edits its own code against a benchmark archive) and Karpathy's autoresearch (MIT, program.md + one editable file + 5-minute time-boxed experiments, keep/revert). For the storage format, Claude Code Skills (SKILL.md, open Agent Skills standard, progressive disclosure, hot-reloaded, 500-line guidance) are the right unit of \"improvable knowledge\", and Anthropic's skill-creator already ships an eval loop (evals.json, with/without-skill runs, grading.json, benchmark with variance, blind comparator, description optimizer) that can serve as the eval gate for skill changes. Claude Code now reads AGENTS.md natively (v2.1.277+) and has built-in auto memory (MEMORY.md index, first 200 lines/25KB loaded), so a git-committed markdown memory plus auto memory covers the memory need; mem0/Letta are optional later. The repo today has no trace capture, duplicates system prompts in agents.yaml and six Modelfiles, routes by keyword+length, and references stale model IDs, so the first concrete step is a single source of truth (SKILL.md per department) consumed by both Claude Code and the router, plus a hooks-based trace logger. A local 7-8B model on the RTX 3060 is adequate for trace triage/clustering and cheap regression scoring but is a weak reflection/judge model; use Haiku 4.5 (or Sonnet 5.5 for the weekly deep pass) as the reflection LM with a hard monthly budget.",
+ "findings": [
+  {
+   "claim": "Claude Code skills are directories with a SKILL.md (YAML frontmatter + Markdown) loaded in three stages: name+description always in context (combined description/when_to_use capped at 1,536 chars), full body only on invocation, supporting files only when referenced; guidance is to keep SKILL.md under 500 lines; after compaction Claude re-attaches up to 5,000 tokens per invoked skill (25,000 combined). Skill directories are watched, so edits apply within the current session. Frontmatter supports allowed-tools, disable-model-invocation, user-invocable, model/effort overrides, context: fork, hooks, and paths globs.",
+   "evidence": "Official Claude Code skills reference page (fetched 2026-10-24): 'Keep SKILL.md under 500 lines', 'Combined description and when_to_use are capped at 1,536 characters', 'Claude Code watches skill directories, so changes apply within the current session', full frontmatter field table.",
+   "source_url": "https://code.claude.com/docs/en/skills",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Makes SKILL.md the natural unit of 'self-developing' knowledge: small, hot-reloadable, cheap-at-rest text files the retrospective can diff and the human can review. If skills were not hot-reloaded/progressively disclosed, prompt changes would have to go through Modelfiles/agents.yaml only.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Claude Code skills follow the open Agent Skills standard (agentskills.io, published by Anthropic Dec 2025); Cursor's official docs state each skill is a folder containing a SKILL.md and that Cursor also loads skills from Claude and Codex directories; OpenCode and Codex CLI are also reported to read the format. Portable fields are name, description, license, compatibility, metadata, allowed-tools; Claude-only fields cause validation errors elsewhere.",
+   "evidence": "Claude Code skills doc: 'Claude Code skills follow the open Agent Skills standard and extend it'; Cursor docs 'Agent Skills' page; multiple 2026 write-ups report 26-40+ tools adopting SKILL.md.",
+   "source_url": "https://cursor.com/docs/skills",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "Justifies storing department prompts as SKILL.md rather than agents.yaml/Modelfile-only: the same files work in Claude Code, Cursor/Continue-class editors, and can be read by the local router. If only Claude Code read SKILL.md, a separate canonical prompt store would be needed.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Anthropic's skill-creator (anthropics/skills, installable as /plugin install skill-creator@claude-plugins-official) implements an eval loop for skills: evals/evals.json (id, prompt, expected_output, files, assertions), each case run twice in isolated subagents with and without the skill (or against an old_skill/ snapshot when improving), a grader subagent writes grading.json (text/passed/evidence per assertion), scripts.aggregate_benchmark produces benchmark.json/.md with pass rate, time and tokens as mean±stddev and delta, an analyzer flags non-discriminating assertions and high-variance (flaky) evals, an optional blind comparator judges two outputs, and scripts.run_loop optimizes the description with a 60/40 train/test split, 3 runs per query, up to 5 iterations.",
+   "evidence": "Raw SKILL.md of skill-creator fetched from GitHub main: describes iteration-N workspaces, timing.json, grading.json schema, agents/grader.md, agents/comparator.md, agents/analyzer.md, python -m scripts.aggregate_benchmark, python -m scripts.run_loop, eval-viewer/generate_review.py.",
+   "source_url": "https://raw.githubusercontent.com/anthropics/skills/main/skills/skill-creator/SKILL.md",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Provides an off-the-shelf eval gate for skill edits with variance analysis and a blind A/B judge, so the stack does not need to build its own skill-eval harness. If it did not exist, promptfoo would have to cover skill-level evals too.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Claude Code reads a repository's AGENTS.md directly as project instructions when no CLAUDE.md/CLAUDE.local.md exists in or above the working directory (requires v2.1.277+); the default setting is claude-md-or-agents-md, and claude-md-and-agents-md loads both. A CLAUDE.md that imports @AGENTS.md remains the portable fallback. CLAUDE.md should target under 200 lines; /doctor prompt-audit (v2.1.283+) audits CLAUDE.md, AGENTS.md, rules, skills and subagents for conflicts and stale instructions.",
+   "evidence": "Official memory doc: table 'Your repository has / Claude reads', 'Reading AGENTS.md directly requires Claude Code v2.1.277 or later', pluginConfigs cc-plugin-agents-md@builtin instructionFiles option, 'target under 200 lines per CLAUDE.md file', '/doctor prompt-audit requires Claude Code v2.1.283 or later'.",
+   "source_url": "https://code.claude.com/docs/en/memory",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "The repo already uses AGENTS.md as persisted state; this confirms AGENTS.md can be the single shared instruction file for Claude Code and other tools, and that a nightly job can run a prompt audit. It also implies the current AGENTS.md (session-state FSM blob) should be split: instructions in AGENTS.md, mutable state elsewhere, to stay under the 200-line guidance.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "The agents.md repository (MIT, ~25.1k stars) defines AGENTS.md as a plain-Markdown 'README for agents' with no required schema; secondary sources report it is read natively by Codex, GitHub Copilot coding agent, Cursor, Gemini CLI (via config), Jules, Aider, Continue.dev, Roo/Kilo Code, Zed, Amp and Devin, under Linux Foundation / Agentic AI Foundation governance. Nested files: nearest file wins (secondary).",
+   "evidence": "GitHub agentsmd/agents.md README (format sections: dev environment tips, testing instructions, PR instructions; Technical_Charter.pdf present); multiple 2026 guides listing readers.",
+   "source_url": "https://github.com/agentsmd/agents.md",
+   "confidence": "medium",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Claude Code auto memory is on by default in local sessions, stored machine-locally at ~/.claude/projects/<project>/memory/ with a MEMORY.md index plus one topic file per memory, typed as user/feedback/project/reference; only the first 200 lines or 25KB of MEMORY.md load at session start, topic files load on demand; it can be relocated via autoMemoryDirectory (any settings scope), disabled via autoMemoryEnabled:false or CLAUDE_CODE_DISABLE_AUTO_MEMORY=1; subagents can have their own memory via the subagent memory field; Claude skips facts derivable from the codebase or already in CLAUDE.md.",
+   "evidence": "Official memory doc 'Auto memory' section: storage layout, 'The first 200 lines of MEMORY.md, or the first 25KB, whichever comes first, are loaded', autoMemoryDirectory setting, 'Subagents can also maintain their own auto memory'.",
+   "source_url": "https://code.claude.com/docs/en/memory",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Setting autoMemoryDirectory to a git-tracked folder inside the repo (e.g. memory/claude/) turns Claude's own learnings into reviewable, diffable, git-committed markdown with zero extra infrastructure, which removes the need for mem0/Letta in the minimal loop. If auto memory could not be relocated, a separate memory store would be required for review/versioning.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Claude Code hooks expose 30+ lifecycle events (SessionStart/SessionEnd, UserPromptSubmit, Stop/StopFailure, PreToolUse/PostToolUse/PostToolUseFailure, SubagentStart/SubagentStop, TaskCreated/TaskCompleted, PreCompact/PostCompact, PreModelSwitch/PostModelSwitch, InstructionsLoaded, etc.). Every event receives JSON on stdin with session_id, transcript_path, cwd, hook_event_name, permission_mode; Stop and SubagentStop add last_assistant_message. The transcript file is written asynchronously and may lag the in-memory conversation when a hook fires. Exit 0 = success, exit 2 = block (where blockable), other = non-blocking error. SessionEnd hooks share a 1.5s default budget (raisable to 60s). Hooks live in ~/.claude/settings.json, .claude/settings.json or .claude/settings.local.json.",
+   "evidence": "Official hooks reference (fetched 2026-10-24): event list, common input table, 'the file is written asynchronously and can lag', exit code table, settings.json example.",
+   "source_url": "https://code.claude.com/docs/en/hooks",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Hooks are the zero-cost feedback-capture mechanism for Claude Code sessions (tool-loop length, test pass/fail from Bash tool results, token usage, model switches). The transcript-lag caveat means the trace logger must run from Stop/SessionEnd with a short delay or parse the JSONL later (nightly), not synchronously inside PostToolUse.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Open WebUI stores thumbs feedback in a Feedback table with fields id, user_id, version, type, data{rating ('1'/'-1' or other), model_id, sibling_model_ids, reason, comment}, meta{arena, chat_id, message_id, tags}, snapshot{chat}, created_at/updated_at, and exposes admin endpoints including GET /feedbacks/all/export (optionally filtered by model_id), GET /feedbacks/list (paginated, order_by, model_id), GET /feedbacks/models, under the evaluations router. Only ratings with a sibling (regenerate or side-by-side/arena) count toward the Elo leaderboard.",
+   "evidence": "GitHub open-webui/backend/open_webui/models/feedbacks.py (RatingData, MetaData, SnapshotData) and routers/evaluations.py (endpoint list); Open WebUI evaluation docs (via search excerpts) on sibling requirement and snapshots.",
+   "source_url": "https://github.com/open-webui/open-webui/blob/main/backend/open_webui/routers/evaluations.py",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Confirms the owner's existing Open WebUI can be the human-feedback UI with no custom frontend: a nightly job pulls /api/v1/evaluations/feedbacks/all/export with an admin token and joins on chat snapshot + model_id. If no export existed, feedback capture would need a custom UI or DB scraping.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "GEPA (Genetic-Pareto, gepa-ai/gepa, MIT; paper arXiv:2507.19457) optimizes textual parameters (prompts, code, configs) by having a reflection LM read full execution traces including error messages and textual feedback, maintaining a Pareto frontier of candidates, and mutating/merging them; it needs 100-500 evaluations versus 5,000-25,000+ for GRPO. The optimize() API takes seed_candidate, trainset/valset, task_lm, reflection_lm (required), max_metric_calls, and adapters (DefaultAdapter, DSPy, LangChain). DSPy docs recommend a strong reflection model and describe a cheap task LM + stronger reflection LM as the standard configuration; metrics should return textual feedback, not just a score. Running the reflection LM on Ollama via LiteLLM-style model strings (e.g. ollama_chat/qwen3:8b) is reported in third-party configs but not in official docs.",
+   "evidence": "gepa-ai/gepa README (fetched): 'GEPA needs 100–500 evaluations, compared with 5,000–25,000+ for GRPO', optimize() quick start, adapters section, MIT; DSPy GEPA docs via search: 'GEPA benefits from a strong reflection model', 'Passing reflection_lm=dspy.LM(\"openai/gpt-4o\") while running the program on gpt-4o-mini is the standard configuration'; SuperOptiX write-up showing reflection_lm: qwen3:8b.",
+   "source_url": "https://github.com/gepa-ai/gepa",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Defines the economics of prompt optimization on this hardware: the expensive part is rollouts (run on the local task model for free), the scarce part is the reflection LM (use Haiku 4.5 or Sonnet 5.5 sparingly, ~100-500 metric calls per optimization). If GEPA needed RL-scale rollouts, trace-driven prompt optimization would be unaffordable locally.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Karpathy's autoresearch (MIT, March 2026) is a three-file loop: prepare.py (fixed infra + eval), train.py (the only file the agent may edit), and program.md (human-edited instructions, called a lightweight 'skill'). Each experiment is time-boxed to 5 minutes wall-clock so results are comparable; metric is val_bpb (lower is better); the agent keeps or discards each change and loops (~12 experiments/hour, ~100 overnight); one reported run did 700 experiments in 2 days and found ~20 improvements. The README suggests humans iterate on program.md to improve the 'research org'.",
+   "evidence": "GitHub karpathy/autoresearch README (fetched): file roles, 'fixed 5-minute wall-clock budget', 'about 12 experiments per hour, or roughly 100 overnight', MIT; secondary coverage of 700-experiment run.",
+   "source_url": "https://github.com/karpathy/autoresearch",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-03"
+  },
+  {
+   "claim": "Kiro (AWS) runs an internal system, kiro-trace, that reads Kiro's own runs to find where it fails or wastes effort, has a model propose a change, and lets deterministic code decide acceptance through a three-stage gate (preselection, regression, confirmation): candidates must also pass tasks Kiro already succeeds at, and the final candidate is compared against an unchanged control on the full benchmark before a normal human code review. In its first week it opened 8 PRs, 7 merged, 1 closed for unrelated reasons, none bounced in review. A documented false positive (a fix that passed more tasks with fewer tokens) was exposed only by splitting results by host: nearly all the gain came from one lucky run escaping a loop. It is not open source.",
+   "evidence": "Kiro blog 'How Kiro fixes itself, and how we keep the fixes honest' (English page blocked by proxy; details quoted from search excerpts of the English and French versions): 'Models can propose changes, but deterministic code decides', 'three-stage gate (preselection, regression, confirmation)', '8 pull requests... 7 merged'.",
+   "source_url": "https://kiro.dev/blog/how-kiro-fixes-itself",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "This is the clearest production design of the exact loop requested and it dictates two gate requirements the minimal loop must copy: (a) regression on currently-passing tasks, (b) comparison against an unchanged control with per-run variance inspection, because single-run deltas on small eval sets are dominated by noise. Without these the loop will merge spurious prompt changes.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "OpenAI's cookbook 'Build an Agent Improvement Loop with Traces, Evals, and Codex' (May 12, 2026) captures OpenTelemetry-style JSONL traces from agent runs, attaches human SME feedback separately from model critique, converts feedback into Promptfoo evals that can be re-run as a validation gate, uses HALO to rank the next harness changes (harness = instructions, tools, routing, output requirements, validation checks), and writes codex_handoff.md with diagnosis, ranked recommendations and evidence for a coding agent to implement; it recommends starting as a reviewed loop where a developer approves the proposed diff before merge, with deeper automation only once the eval gate is trusted. Default run ~20 minutes for five traces.",
+   "evidence": "Raw notebook from openai/openai-cookbook (fetched): intro and steps 1-4; search excerpt dating it May 12, 2026.",
+   "source_url": "https://raw.githubusercontent.com/openai/openai-cookbook/main/examples/agents_sdk/agent_improvement_loop.ipynb",
+   "confidence": "high",
+   "load_bearing": true,
+   "load_bearing_note": "",
+   "why_load_bearing": "Second independent implementation of trace -> feedback -> eval -> proposed diff -> human review; confirms Promptfoo as the gate layer and 'reviewed PR first, automate later' as the default. Supports choosing promptfoo + PR-based review for the minimal loop.",
+   "source_date": "2026-05-12"
+  },
+  {
+   "claim": "SICA (Self-Improving Coding Agent, Robeyns/Szummer/Aitchison, ICLR 2025 workshop; MIT) is an open-source loop that (1) evaluates the current agent on benchmark tasks, (2) archives results per iteration (results/run_{id}/agent_{i} with traces, perf.jsonl, meta-improvement logs), (3) runs the agent on its own codebase to implement an improvement, and (4) repeats; it runs inside a provided Docker container for isolation and has an overseer channel. swebench is a dependency; benchmarks are toggled in base_agent/src/benchmarks/__init__.py.",
+   "evidence": "GitHub MaximeRobeyns/self_improving_coding_agent README (fetched).",
+   "source_url": "https://github.com/MaximeRobeyns/self_improving_coding_agent",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2025"
+  },
+  {
+   "claim": "Socratic-SWE (arXiv:2606.07412, June 2026, Alibaba/SJTU) distills a coding agent's own solving traces into 'agent skills' capturing recurring failures and repair patterns, uses them to synthesize verifiable repair tasks in real repos, filters tasks with execution checks and a solver-gradient alignment reward, and iterates; reports 50.40% SWE-bench Verified after three iterations and gains on SWE-bench Lite/Pro and Terminal-Bench 2.0. It is a training-time (fine-tuning) loop, not a prompt-only loop.",
+   "evidence": "arXiv abstract via search excerpts (arxiv.org blocked by proxy); emergentmind/papers.cool mirrors.",
+   "source_url": "https://arxiv.org/abs/2606.07412",
+   "confidence": "medium",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-06"
+  },
+  {
+   "claim": "ACE (Agentic Context Engineering, Zhang et al., Stanford/SambaNova, arXiv:2510.04618, ICLR 2026) treats the context as an evolving playbook maintained by three roles, Generator, Reflector, Curator, where the Curator emits compact 'delta' items merged into the playbook by lightweight non-LLM logic, explicitly to avoid 'brevity bias' and 'context collapse' from whole-prompt rewrites; reported +10.6% on agent benchmarks and +8.6% on finance. Open implementations exist (sci-m-wang/ACE-open; a PyPI framework released June 2026; kayba-ai agentic-context-engine).",
+   "evidence": "Berkeley iSchool publication listing, alphaXiv resources page listing ACE-open, PyPI listing (June 29, 2026), besthub summary of Generator/Reflector/Curator.",
+   "source_url": "https://www.alphaxiv.org/resources/2510.04618",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "Dictates HOW the nightly job should edit skills: append/replace bullet-level deltas with provenance (trace IDs, counts) rather than regenerating whole SKILL.md files, which is also what makes PR diffs small enough for a human to approve daily. A whole-file rewrite strategy would erode accumulated knowledge and produce unreviewable diffs.",
+   "source_date": "2025-10"
+  },
+  {
+   "claim": "Zoroval/agent-gates (MIT, 2026, 0 stars) is an agent skill plus GitHub Actions workflow that blocks merge of any PR touching protected prompt/model/context-builder paths declared in .github/intelligence-policy.json until a JSON eval report in evals/experiments/ with a matching SHA-256 fingerprint of the protected diff shows pass; it recomputes pass/fail from reported numbers, checks sample size and recency, and supports a per-PR, expiring, reasoned owner_override 'break-glass'. It does not run evals itself.",
+   "evidence": "GitHub Zoroval/agent-gates README (fetched).",
+   "source_url": "https://github.com/Zoroval/agent-gates",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026"
+  },
+  {
+   "claim": "promptfoo is an MIT-licensed CLI/library for LLM evals and red-teaming that runs locally, supports Ollama and 'any LLM API' as providers (so an OpenAI-compatible router endpoint works), is designed for CI/CD regression gates (promptfoo eval / GitHub Action), and is now part of OpenAI while remaining open source. Comparison write-ups consistently position promptfoo as the config-driven prompt-regression gate and Inspect AI as the research-grade benchmark builder (datasets/solvers/scorers/sandboxes), not a PR gate.",
+   "evidence": "GitHub promptfoo/promptfoo README (fetched): 'Open source', 'MIT licensed', Ollama listed among providers, CI/CD listed, 'Promptfoo is now part of OpenAI'; 2026 comparison articles.",
+   "source_url": "https://github.com/promptfoo/promptfoo",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "promptfoo is the chosen eval-gate layer for per-department golden tests; it must be able to hit the local router (OpenAI-compatible) and Ollama directly. If it could not target custom OpenAI-compatible endpoints the gate would need a different runner.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Harbor (harbor-framework/harbor) is the official harness for Terminal-Bench 2.0 (harbor run --dataset terminal-bench@2.0), runs tasks in local Docker by default, calls models through LiteLLM provider/model strings, can run agents such as Claude Code, OpenHands and Codex CLI, and exposes third-party datasets (SWE-Bench, Aider Polyglot) via harbor datasets list; task subsets are selectable with -l/--n-tasks and -t/--task-name globs, and custom OpenAI-compatible endpoints are passed with --ae OPENAI_BASE_URL=... (also OPENAI_API_BASE for LiteLLM-based agents). A smoke test is harbor run -d terminal-bench/terminal-bench-2 -a oracle -l 5.",
+   "evidence": "Harbor GitHub README (fetched); tbench.ai run docs via search ('harbor run -d terminal-bench/terminal-bench-2 -a oracle -l 5'); tessl commands reference listing -t/--task-name and -l/--n-tasks; Novita docs example using --ae OPENAI_BASE_URL and --model openai/....",
+   "source_url": "https://github.com/harbor-framework/harbor",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "Harbor is the single harness that can run small Terminal-Bench 2.0, SWE-bench and Aider-polyglot subsets against both local models and Claude Code, which is needed for weekly model promotion/demotion decisions. If subsets or custom endpoints were unsupported, a full run would be unaffordable on one RTX 3060.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "mini-swe-agent (SWE-agent team, MIT) is a ~100-line agent that supports docker/podman environments, batch SWE-bench inference, and models via LiteLLM/OpenRouter/Portkey, making it the cheapest way to run a SWE-bench Lite/Verified subset against a local model. lm-evaluation-harness supports local OpenAI-compatible servers via --model local-completions / local-chat-completions with --model_args base_url=..., and --limit N to run a subset; EvalPlus (HumanEval+/MBPP+) recommends Docker for safe code execution.",
+   "evidence": "GitHub SWE-agent/mini-swe-agent README (fetched); EleutherAI/lm-evaluation-harness README (fetched): 'base_url=http://{yourip}:8000/v1/completions', 'using --limit 10 first'; EvalPlus search excerpt.",
+   "source_url": "https://github.com/SWE-agent/mini-swe-agent",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026"
+  },
+  {
+   "claim": "mem0 OSS (Apache 2.0) is a bolt-on memory layer requiring an LLM for fact extraction (default OpenAI gpt-5-mini) and an embedder (default text-embedding-3-small); Ollama is a supported llm provider ({'llm': {'provider': 'ollama', 'config': {'model': ...}}}); its headline LoCoMo/LongMemEval scores (92.5 / 94.4) are measured on the managed platform with optimizations 'not available in the open-source SDK'. Letta (Apache 2.0, formerly MemGPT) is a full agent runtime with labeled, size-limited memory blocks shareable between agents and experimental 'sleep-time agents' (enable_sleeptime: true) that rewrite memory asynchronously in the background; Letta Code is a memory-first coding agent harness (npm). Neither is needed for a git-committed markdown memory.",
+   "evidence": "GitHub mem0ai/mem0 README and docs/components/llms/models/ollama.mdx (fetched); Letta README (fetched) and docs.letta.com sleep-time agents page via search excerpts ('sleep-time agents are experimental and may be unstable').",
+   "source_url": "https://github.com/mem0ai/mem0",
+   "confidence": "medium",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026"
+  },
+  {
+   "claim": "On a 12GB RTX 3060 the consensus in 2026 guides is a fully-resident 7-8B coder (Qwen2.5-Coder 7B / Qwen3 8B class) at interactive speed, or a 14B at Q4 (~8GB weights) with tight context; Qwen3-Coder 30B-A3B at Q4 (~18GB) does not fit in VRAM. No benchmark-backed October-2026 ranking for this card was found.",
+   "evidence": "haimaker.ai 'Ollama coding models by NVIDIA RTX VRAM', computingforgeeks cheat sheet, tembo.io local-coding-LLM guide (all secondary, partly conflicting).",
+   "source_url": "https://haimaker.ai/blog/ollama-coding-models-by-nvidia-rtx-vram",
+   "confidence": "low",
+   "load_bearing": true,
+   "why_load_bearing": "Determines what the 'local model' can do in the loop: a 7-8B model is fine for trace triage, clustering, rubric pre-scoring and running as the task LM in evals, but is too weak to be the sole reflection/judge LM. If a strong 30B-class coder fit in 12GB, the reflection step could be fully local and cloud cost would approach zero.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "No open-source gateway (LiteLLM, OpenRouter) natively promotes/demotes models from eval results; the documented pattern is a scheduled eval against a golden set per routing pool, flagging a model whose pass rate drops >5% and deprioritizing it until verified, and measuring cost per acceptable answer rather than per token.",
+   "evidence": "2026 router/benchmarking guides (tkmxai, braintrust) describing eval-driven rebalancing on top of gateways; OpenRouter described as recording cost/latency but not quality.",
+   "source_url": "https://www.tkmxai.it.com/benchmarking-llms-in-production-2",
+   "confidence": "low",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026"
+  },
+  {
+   "claim": "The repo as of 2026-10-24 has no trace capture or feedback path, duplicates each department system prompt in router/agents.yaml and config/ollama/Modelfile.*, routes local-vs-cloud with keyword lists plus a len(text)//4 token estimate (classify_complexity in router/main.py), references cloud_model claude-sonnet-4-6 (stale), and uses AGENTS.md '[Lessons Learned]' as its only memory, while docs/DESIGN.md plans a custom RAG sidecar, episodic log and lesson-salvaging context pruner that were never built.",
+   "evidence": "Local inspection: router/agents.yaml (cloud_model: claude-sonnet-4-6; system_prompt blocks), router/main.py lines 79-96 and 353-367, config/ollama/Modelfile.* list, AGENTS.md sections, docs/DESIGN.md lines 14-16, 175, 283, 334-336.",
+   "source_url": "file:///home/user/personal-agent-stack/router/main.py",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Any self-developing loop needs one canonical place to write improved prompts and a stream of traces to learn from; today there are two prompt copies and zero traces. The first implementation step must therefore be de-duplication (SKILL.md as source, generated agents.yaml/Modelfiles) plus logging, before any optimizer is useful.",
+   "source_date": "2026-10-24"
+  }
+ ],
+ "recommendations": [
+  "Adopt a 'human-gated nightly PR' loop, never auto-merge: (data captured) -> (02:00 local retrospective by local model, escalating only summaries to Haiku 4.5) -> (proposed delta diffs to skills/prompts/routing on a branch) -> (eval gate) -> (PR the owner approves in the morning). This mirrors Kiro kiro-trace and the OpenAI cookbook loop and keeps cloud spend bounded.",
+  "Make SKILL.md the single source of truth for each department (skills/<dept>/SKILL.md following the Agent Skills standard, under 500 lines, with references/ for long material). Generate router/agents.yaml system prompts and config/ollama/Modelfile.* from the SKILL.md bodies with a small build script (scripts/build-prompts.py) so Claude Code, Continue/Cursor-class editors, Open WebUI (via the router) and Ollama all run the identical text; delete the hand-maintained duplicates. Replace stale model IDs with claude-haiku-4-5-20251001 (cheap tier), claude-sonnet-5-5 (default cloud) and claude-opus-5-5 (rare escalation).",
+  "Data capture layer (all local, zero cloud cost): (a) router/main.py writes one JSONL record per request to traces/router/YYYY-MM-DD.jsonl: agent, route decision and reason, model, prompt/completion tokens, latency, estimated cost, request hash; (b) Claude Code hooks in .claude/settings.json: Stop and SubagentStop -> scripts/hooks/log_turn.py (reads transcript_path with a short retry because the transcript lags, records tool-call count, Bash tool results matched against pytest/vitest/go test pass-fail regexes, is_error counts, model switches, last_assistant_message length) and SessionEnd -> flush; (c) nightly export of Open WebUI thumbs via GET /api/v1/evaluations/feedbacks/all/export with an admin token (rating, model_id, sibling_model_ids, reason, comment, snapshot.chat) joined to router traces by chat text hash; (d) keep raw traces out of git (traces/ in .gitignore), commit only the derived daily summaries.",
+  "Memory layer: set autoMemoryDirectory in .claude/settings.json to ./memory/claude so Claude Code's auto memory (MEMORY.md index + topic files) is git-tracked and reviewable; keep AGENTS.md as short, stable instructions (<200 lines) and move the mutable session state the old design put there into memory/state.md; add memory/lessons.md maintained ACE-style as dated bullet deltas with trace IDs. Skip mem0/Letta until the markdown memory is demonstrably insufficient; if a vector memory is later needed, mem0 OSS with provider 'ollama' is the lightest add.",
+  "Nightly retrospective job (scripts/retro.py, run by a scheduled task/cron or Windows Task Scheduler, or as a Claude Code skill /retro with disable-model-invocation: true for manual runs): step 1 local model (qwen2.5-coder:7b or qwen3:8b on Ollama) clusters the day's failures (thumbs-down, test failures, tool loops > N calls, cloud escalations whose local attempt would plausibly have sufficed) and drafts a 1-page diagnosis; step 2 Haiku 4.5 (reflection LM, hard cap e.g. 50k tokens/night) reads the diagnosis plus up to 10 raw failing traces and proposes at most 3 deltas, each as (file, bullet-level change, evidence trace IDs, expected effect), restricted to allowlisted paths: skills/*/SKILL.md, router/routing.yaml (keywords, length thresholds, per-agent local/cloud model), memory/lessons.md; step 3 apply deltas on branch retro/YYYY-MM-DD and commit with the evidence in the message. Follow ACE: append/replace bullets, never regenerate whole files.",
+  "Eval gate, two tiers, both deterministic code decides: Tier A (every night, local only, ~15 min): promptfoo config per department (evals/<dept>/promptfooconfig.yaml) with 15-30 golden prompts derived from past thumbs-down/pass cases, run against the router's OpenAI-compatible endpoint with the local model, asserting with code/regex/python checks and a local llm-rubric only for soft criteria; require no regression on previously passing cases and run each case 3x so flaky cases are flagged, not counted (Kiro lesson). For skill changes additionally run skill-creator's eval loop (evals.json with/without old_skill snapshot, grading.json, aggregate_benchmark) and attach benchmark.md to the PR. Tier B (weekly, Sunday, optional cloud spend): Harbor subsets, e.g. harbor run -d terminal-bench/terminal-bench-2 -l 10 and an Aider Polyglot or SWE-bench Lite slice of 10-20 tasks via mini-swe-agent, against the current local model, the candidate local model, and the cloud default, with an unchanged control; publish evals/results/weekly.md.",
+  "Model promotion/demotion rule (routing.yaml, edited only via PR): a local model is promoted to handle a department tier when its Tier B subset pass rate is within 10 points of the cloud model for that department's task class for two consecutive weeks and its Tier A pass rate is >= the incumbent's; it is demoted when Tier A drops > 5 points week over week or thumbs-down rate exceeds the cloud model's by 2x. Track cost per accepted answer (router cost / thumbs-up or test-pass count) per agent as the headline metric in the weekly report.",
+  "PR and gate plumbing: open the PR with gh from the nightly job (title 'retro: <date> - <n> deltas'), body listing each delta with evidence and the Tier A result table; add a GitHub Action or local pre-merge script modeled on agent-gates: protected paths (skills/, router/routing.yaml, config/ollama/) require an eval report whose fingerprint matches the diff; a break-glass label with a written reason is allowed but recorded. The human approves/merges in the morning; merging triggers scripts/build-prompts.py and ollama create for changed Modelfiles.",
+  "Intuitive interaction surface: keep Open WebUI as the chat/feedback UI (thumbs + arena between local and cloud for the same agent), Claude Code as the heavy-work and skills surface, and expose three slash-style skills in the repo: /retro (run the retrospective now), /promote <model> <agent> (open a promotion PR with the eval evidence), /why-routed (explain the last routing decision from traces). The morning PR is the one place the owner reads; everything else is automatic.",
+  "Cost ceilings to encode in config: local-only nightly Tier A; Haiku 4.5 reflection capped per night; Sonnet 5.5 only for the weekly deep retrospective and for live heavy tasks; Opus 5.5 never auto-invoked by the loop. Log and display monthly spend in the weekly report.",
+  "Drop from the old DESIGN.md: the 9-hour autonomous VS Code extension, custom RAG sidecar, thermal gating and circuit-breaker FSM as prerequisites; the loop above supplies the feedback and memory those components were meant to provide using existing open-source tools (Claude Code hooks/skills/auto memory, Open WebUI feedback, promptfoo, Harbor, GEPA). Revisit GEPA only after 4-6 weeks of traces exist: run gepa.optimize with the local model as task_lm, Haiku 4.5 as reflection_lm, max_metric_calls 100-300, on one department's golden set, and treat the output as a proposed SKILL.md delta going through the same PR gate."
+ ],
+ "open_questions": [
+  "The Kiro blog (kiro.dev) and arXiv were unreachable through the sandbox proxy; the kiro-trace gate details (preselection/regression/confirmation, 8 PRs/7 merged) are quoted from search excerpts and should be re-read from the primary post before copying thresholds.",
+  "Exact current Harbor CLI flags for task subsets and local OpenAI-compatible endpoints (-l/--n-tasks, -t/--task-name, --ae OPENAI_BASE_URL) differ across secondary sources; confirm with harbor run --help, and measure wall-clock for a 10-task Terminal-Bench 2.0 slice on the 3060 (Docker Desktop on Windows may be the bottleneck).",
+  "Is a local 7-8B model acceptable as the nightly triage/clustering model and as the promptfoo llm-rubric judge, or does judge quality force Haiku 4.5 for grading too? Needs a small calibration study against human thumbs on the first 100 feedback items.",
+  "Open WebUI feedback export: confirm the mounted path (/api/v1/evaluations/feedbacks/all/export), admin-token auth, and whether snapshot.chat is populated for non-arena single-response thumbs in the installed version.",
+  "Claude Code transcript lag: how long after Stop/SessionEnd the JSONL is complete on Windows; decide between delayed hook parsing and a nightly transcript sweep of ~/.claude/projects/<project>/.",
+  "Whether Open WebUI should call Ollama directly (losing routing traces) or only via the router; if via router, confirm the router preserves streaming and tool-calling features Open WebUI expects.",
+  "Which local coder (Qwen2.5-Coder 14B Q4 vs Qwen3 8B vs newer Oct-2026 releases) actually wins Tier A/B on this card; no benchmark-backed October-2026 ranking for RTX 3060 12GB was found, so the first weekly Harbor run should settle it empirically.",
+  "Whether to run GEPA at all in month one; it needs a stable golden set and 100-500 rollouts per department, which is cheap locally but only meaningful once traces exist.",
+  "Letta sleep-time agents and Letta Code were not evaluated hands-on; they are flagged experimental and are only worth revisiting if the markdown memory proves insufficient.",
+  "System RAM on the host is assumed 32-64GB; CPU-offloaded 14B+ models and Docker-based evals running concurrently with Ollama may contend for RAM/VRAM and need scheduling (evals when the user is idle)."
+ ]
+}

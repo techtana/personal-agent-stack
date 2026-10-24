@@ -1,0 +1,93 @@
+{
+ "area": "Developer experience / interaction model (Continue config, Ollama Modelfiles, Open WebUI, README usage, AGENTS.md)",
+ "summary": "From the owner's chair, \"ask the security agent to review this file\" currently has roughly eight entry points (Open WebUI via router, Open WebUI via Ollama direct, Continue model dropdown, Continue slash commands, `ollama run agent-*`, the router REST API, Continue's direct-Claude entries, and Claude Code) exposing ~30 selectable \"models\" for 6 departments under three naming schemes (app-developer / agent-app-dev / Modelfile.app-dev / \"App Developer (Local → Cloud)\"), and none of them is agentic: the router has no tool support, so every surface is chat-only, state lives in three unrelated silos (Open WebUI SQLite, ~/.continue sessions, Claude Code), and the repo's AGENTS.md is a dead skeleton read by nothing. The department prompts already exist in two drifted copies (all six Modelfile/agents.yaml pairs differ), the Continue config is in the legacy JSON format with slash commands that cannot work as written, and the model IDs are stale. Proposal: collapse to ONE agentic runtime that all surfaces are thin clients of. Concretely: Claude Code is the orchestrator, each department is a subagent file in `.claude/agents/<dept>.md` (frontmatter picks the tier: `model: haiku` for cheap work, `sonnet`/`opus` for heavy) with a matching `/dept` slash command in `.claude/commands/`, a LiteLLM proxy replaces router/main.py and exposes both the Anthropic Messages API (so `ANTHROPIC_BASE_URL` lets Claude Code's \"haiku\" alias resolve to qwen2.5-coder on Ollama) and the OpenAI API (so Open WebUI and Continue autocomplete use the same model names), and CLAUDE.md imports `@AGENTS.md` so one memory file with [Lessons Learned]/[Routing decisions] is shared by terminal (`claude` + `/security review src/auth.py`), IDE (Claude Code VS Code extension, same commands), and chat (Open WebUI pointed at LiteLLM for Q&A only, with a stop hook that appends lessons back to AGENTS.md). Self-development then becomes a `/retro` command that reads LiteLLM's per-request cost/outcome log and proposes edits to the agent files and routing aliases as a reviewable diff. Continue survives only as a config.yaml for local tab-autocomplete; the Modelfiles, the custom router, and the 4-phase Deep-Architect extension are dropped.",
+ "findings": [
+  {
+   "title": "Nothing in the stack can edit files or run tests; every surface is chat-only",
+   "severity": "critical",
+   "file": "/home/user/personal-agent-stack/router/main.py",
+   "detail": "ChatCompletionRequest only declares model/messages/stream/temperature/max_tokens; pydantic silently discards `tools`, `tool_choice`, and `response_format`, and neither stream_ollama nor stream_anthropic ever emits tool_calls. So Continue Agent mode and Open WebUI tools degrade silently to plain chat when pointed at the router. `Message.content: str` additionally 422s on multipart content (Continue sends arrays for images/context). The owner's two canonical requests ('run the tests and fix failures', 'security agent review this file') cannot be executed by anything shipped here except Claude Code, which has no knowledge of the six departments.",
+   "recommendation": "Stop treating the router as the agent. Put the departments inside an agentic runtime that already has file/shell/test tools (Claude Code subagents, or OpenCode agents if you want the local tier to be agentic too) and keep the proxy as a dumb model multiplexer that forwards tools untouched (LiteLLM does this)."
+  },
+  {
+   "title": "~8 entry points and 3 naming schemes for 6 departments",
+   "severity": "critical",
+   "file": "/home/user/personal-agent-stack/README.md",
+   "detail": "Open WebUI is wired to BOTH the router (OPENAI_API_BASE_URL) and Ollama (OLLAMA_BASE_URL), so its picker shows the 6 router agents plus agent-app-dev..agent-docs plus qwen2.5-coder:7b/14b, deepseek-r1:14b and nomic-embed-text. Continue shows 11 more entries (6 routed, 2 direct Claude, 3 raw). The same department is 'app-developer' (router/Continue), 'agent-app-dev' (Ollama), 'Modelfile.app-dev' (repo) and 'App Developer (Local → Cloud)' (UI). Behaviour differs per path: router entries escalate to cloud, agent-* entries never do, raw entries have no persona, and the README itself says 'Both appear in the model picker' as if that were a feature.",
+   "recommendation": "One name per department everywhere (`security`, `testing`, ...), one way to invoke it per surface (`/security` in terminal and IDE, a Workspace model named `security` in Open WebUI), and delete the agent-* Ollama models so the picker only shows departments."
+  },
+  {
+   "title": "Continue config is legacy config.json; slash commands are not valid and cannot switch models",
+   "severity": "high",
+   "file": "/home/user/personal-agent-stack/config/vscode/continue.config.json",
+   "detail": "Continue moved to `~/.continue/config.yaml` (models with `roles:`, `rules:`, `prompts:`, `context:`; secrets as `${{ secrets.NAME }}`); config.json is auto-migrated/deprecated. Beyond format: the six custom slash commands use `step: \"Comment\"` with a `params.comment` string, which is not a Continue schema (custom prompts in the legacy format were `customCommands: [{name, prompt}]`), so /dev /test /sec /ops /review /doc either do nothing or run the built-in comment step. The text 'Use model: security at http://localhost:8000/v1' inside the comment is prose, not a model switch. `/edit`, `/commit`, `/share`, `/cmd` are built-ins and need no declaration. `apiKey: \"${ANTHROPIC_API_KEY}\"` is not interpolated in config.json and will be sent literally.",
+   "recommendation": "Rewrite as config.yaml with exactly one chat model (the proxy), one autocomplete model (qwen2.5-coder:7b local, role autocomplete), one embed model, and six `prompts:` entries, or drop Continue chat entirely in favour of the Claude Code VS Code extension and keep Continue only for tab-autocomplete."
+  },
+  {
+   "title": "Department prompts exist in two drifted copies; agent-* models bypass routing",
+   "severity": "high",
+   "file": "/home/user/personal-agent-stack/config/ollama/Modelfile.security",
+   "detail": "All six Modelfile SYSTEM blocks differ from the matching agents.yaml system_prompt (e.g. security: 1523 vs 1991 chars; code-review: 1312 vs 2128). Literal double-injection does NOT occur today, because the router's local_model points at raw qwen/deepseek (not agent-*) and Ollama replaces, rather than appends, a Modelfile SYSTEM when the request carries a system message. The real problems are: (a) the owner gets a different security reviewer depending on which picker entry they click, (b) agent-* models never escalate to cloud, and (c) if anyone later sets local_model to agent-* or configures an Open WebUI Workspace system prompt, the router's inject_system_prompt prepends a second persona on top, producing a tripled prompt.",
+   "recommendation": "Delete config/ollama/Modelfile.* and scripts/create-agents.sh. Each department's prompt lives in exactly one file (the subagent .md), and local models are plain base models that receive the prompt at request time."
+  },
+  {
+   "title": "No shared state or memory; AGENTS.md is a dead skeleton nothing reads",
+   "severity": "high",
+   "file": "/home/user/personal-agent-stack/AGENTS.md",
+   "detail": "AGENTS.md is the state file for the never-built Deep-Architect extension (`phase: idle`, `model_cloud: claude-opus-4-5`). The router is stateless, Open WebUI keeps history in its own volume, Continue keeps sessions in ~/.continue, Claude Code keeps its own. Nothing shares lessons, project conventions, or routing outcomes across surfaces, which makes the 'self-developing' requirement impossible: there is no place where experience accumulates.",
+   "recommendation": "Repurpose AGENTS.md as the single shared memory: project conventions + [Lessons Learned] + [Routing decisions]. Have CLAUDE.md `@AGENTS.md` import it so Claude Code (and Codex/Cursor, which read AGENTS.md natively) all see it; a Claude Code Stop/SubagentStop hook appends lessons; a `/retro` command turns LiteLLM logs into proposed prompt/routing edits."
+  },
+  {
+   "title": "Keyword routing scans the whole conversation, so threads get stuck on cloud (Opus for 'compliance')",
+   "severity": "medium",
+   "file": "/home/user/personal-agent-stack/router/main.py",
+   "detail": "classify_complexity joins ALL messages (system, assistant, user) and routes to cloud on any substring hit. Once 'architecture', 'migrate' or 'compliance' appears anywhere in a thread, including in the assistant's own earlier answer, every subsequent turn of that thread goes to cloud; for the security agent that means Opus. This is invisible to the owner (no header, no UI indicator) and directly contradicts the cost-minimisation goal.",
+   "recommendation": "Let the orchestrator choose the tier explicitly per task (subagent `model:` field, or `/security --deep`) and surface the chosen model in the response. If automatic routing is wanted, use LiteLLM routing/fallbacks or RouteLLM, scoped to the current user message only, with the decision logged per request."
+  },
+  {
+   "title": "Stale Claude model IDs in four places",
+   "severity": "medium",
+   "file": "/home/user/personal-agent-stack/router/agents.yaml",
+   "detail": "agents.yaml, continue.config.json and README reference claude-sonnet-4-6 and claude-opus-4-8; AGENTS.md references claude-opus-4-5. Authoritative current IDs are claude-sonnet-5-5, claude-opus-5-5, claude-haiku-4-5-20251001 (and claude-fable-5-1). Cloud escalation will 404 on first use.",
+   "recommendation": "Define cloud tiers once as LiteLLM aliases (cheap→claude-haiku-4-5-20251001, standard→claude-sonnet-5-5, heavy→claude-opus-5-5) and reference only the aliases from agent files."
+  },
+  {
+   "title": "Department switching will stall 10-20 s on a 12 GB GPU",
+   "severity": "medium",
+   "file": "/home/user/personal-agent-stack/infrastructure/docker-compose.yml",
+   "detail": "Departments are spread across qwen2.5-coder:14b (~10 GB), deepseek-r1:14b (~10 GB), qwen2.5-coder:7b (~5 GB) plus nomic-embed-text and the 7b autocompleter. OLLAMA_MAX_LOADED_MODELS=3 cannot hold two 14b models, so going from app-dev to code-review evicts and reloads a 14b model every time; the owner experiences the stack as randomly slow. deepseek-r1 also streams raw <think> text which the router does not strip.",
+   "recommendation": "Standardise the local tier on ONE resident coder model (qwen2.5-coder:14b at a quant that leaves room for the 7b autocompleter) and let personas differ by prompt, not by weights. Reserve a second model only if measured quality demands it."
+  },
+  {
+   "title": "README teaches the fragmented model as intended usage",
+   "severity": "low",
+   "file": "/home/user/personal-agent-stack/README.md",
+   "detail": "The VS Code section says 'choose agent → ask question' and 'Switch agents from the model dropdown per conversation'; the Open WebUI section says to create a Workspace per agent and notes both router and Ollama entries appear. There is no terminal story at all, and Claude Code (which the owner uses daily) is never mentioned.",
+   "recommendation": "Rewrite the usage section around one verb set: `/dev`, `/test`, `/security`, `/ops`, `/review`, `/docs` work identically in the terminal and in the IDE; Open WebUI is for conversation only and shows the same six names."
+  }
+ ],
+ "keep": [
+  "The six department definitions and the quality of their prompts (TDD-first app-dev, severity-rated security/code-review output formats, docs rules); move them verbatim into one-file-per-department agent definitions.",
+  "The local/cloud tiering idea and the ollama/ vs cloud/ force-prefix: keep as explicit tier selection by the orchestrator, not keyword sniffing.",
+  "Tab autocomplete on local qwen2.5-coder:7b (always local, zero cost) and nomic-embed-text for local embeddings.",
+  "docker-compose for Ollama + Open WebUI, and the setup/pull-models scripts.",
+  "AGENTS.md as the persisted, git-committed memory file and its [Lessons Learned] / [Next Steps] sections; the idea is right, only the reader was missing.",
+  "Open WebUI as the chat surface, but pointed at one proxy so model names match the other surfaces."
+ ],
+ "replace": [
+  "router/main.py (custom FastAPI proxy) → LiteLLM proxy: OpenAI- and Anthropic-shaped endpoints, model aliases per tier, fallbacks, per-request cost logging, tool-call passthrough.",
+  "Keyword+length complexity classifier → explicit tier per subagent (`model:` frontmatter) plus LiteLLM routing; optionally RouteLLM if automatic classification is still wanted.",
+  "config/ollama/Modelfile.* + create-agents.sh → `.claude/agents/<dept>.md` subagent files (prompt, allowed tools, model tier) shared by terminal and IDE.",
+  "Continue chat + custom slash commands → Claude Code slash commands in `.claude/commands/` and the Claude Code VS Code extension; Continue kept only as a config.yaml autocomplete provider.",
+  "docs/DESIGN.md Deep-Architect extension (4-phase FSM, Python RAG sidecar, circuit breaker) → Claude Code subagents + hooks (Stop/SubagentStop for memory write-back, PreToolUse for guardrails) and its built-in codebase search; if a fully local agentic loop is required, OpenCode or Aider pointed at the same LiteLLM proxy.",
+  "Hand-rolled cost monitoring (README 'check console.anthropic.com') → LiteLLM spend logs feeding a `/retro` command that proposes prompt/routing changes as a diff."
+ ],
+ "drop": [
+  "The six agent-* Ollama custom models and the duplicated Modelfile prompts.",
+  "The legacy Continue config.json, its 2 direct-Claude and 3 raw-Ollama dropdown entries, and the non-functional /dev /test /sec /ops /review /doc slash commands.",
+  "Open WebUI's direct Ollama connection (OLLAMA_BASE_URL) so raw base models and agent-* clones stop appearing in the picker.",
+  "Stale model IDs claude-sonnet-4-6, claude-opus-4-8, claude-opus-4-5.",
+  "The 9-hour autonomous session / thermal gating / VRAM telemetry scope from DESIGN.md; it is not needed for the owner's stated workflow and no surface here could drive it.",
+  "deepseek-r1:14b as a second resident 14b model on a 12 GB card."
+ ]
+}

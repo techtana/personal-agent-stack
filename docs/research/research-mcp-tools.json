@@ -1,0 +1,267 @@
+{
+ "topic": "MCP and tool ecosystem for department coding agents (October 2026): spec/registry status, essential servers, security, orchestrator-as-MCP-server pattern, Open WebUI/A2A, and per-client config formats",
+ "summary": "The MCP ecosystem in October 2026 is stable enough to build on but has just gone through its largest break: spec revision 2026-07-28 removed sessions and the initialize handshake, made Mcp-Method/Mcp-Name headers mandatory on Streamable HTTP POSTs, deprecated Roots/Sampling/Logging and the old HTTP+SSE transport (12-month windows), deprecated OAuth DCR in favour of Client ID Metadata Documents, and moved long-running Tasks into an extension (io.modelcontextprotocol/tasks, poll-based). All Tier-1 SDKs speak it (python `mcp` 2.3.0, `fastmcp` 4.1.3, TS SDK 1.32.2 as of Oct 2026). The official registry is still a preview (API v0.1 frozen, ~30-45k entries) and verifies only namespace ownership, not code safety, so it must not be treated as a trust signal.\n\nThe reference-server set has shrunk: only everything/fetch/filesystem/git/memory/sequential-thinking/time remain (filesystem/memory/sequential-thinking 2.0.0 need Node 24); GitHub, Postgres, SQLite, Puppeteer etc. are archived. The practical coding toolset is: filesystem (allowed dirs by CLI args; read-only only via Docker `,ro` mounts), mcp-server-git, GitHub's official server (remote at api.githubcopilot.com/mcp or local Docker, with `--toolsets` and `--read-only`), Playwright MCP (`@playwright/mcp`, `--headless --isolated`, `--port` gives Streamable HTTP), Context7 (remote `https://mcp.context7.com/mcp`, tools resolve-library-id/query-docs), Serena 2.1.0 (LSP symbol tools, `--context claude-code`, modes planning/editing, `--transport streamable-http --port`, one instance per project), Semgrep MCP (beta) and Aqua's Trivy MCP plugin for security.\n\nClient config formats are settled: Claude Code uses `.mcp.json` (`mcpServers`, `type: stdio|http`, `${VAR}` expansion, tool search deferral on by default, per-server `timeout`, `alwaysLoad`) plus `.claude/agents/*.md` whose `mcpServers:` and `tools: mcp__server__*` fields scope servers per subagent; OpenCode uses `opencode.json` with an `mcp` map (`type: local|remote`, `command` array, `environment`, `url`, `headers`, `timeout` default 30 s) and `tools: {\"server_*\": false}` per agent; Continue uses `.continue/mcpServers/*.yaml` (`type: stdio|sse|streamable-http`, agent mode only); Open WebUI (>=0.6.31) is natively Streamable-HTTP-only (Admin > Integrations > External Tool Servers, needs WEBUI_SECRET_KEY) and otherwise needs mcpo (last release Feb 2026, slow maintenance). Therefore the orchestrator should be exposed as one Streamable HTTP MCP server with `delegate(department, task)` + `get_job(job_id)` + `list_departments()`, served from the router container on the compose network, so Claude Code, OpenCode, Continue and Open WebUI all reach it with no proxy. Because MCP calls are synchronous and client timeouts are short (OpenCode 30 s), delegate must return a job handle for long work (the 2026-07-28 guidance literally says to mint handles and pass them back as arguments).\n\nSecurity: OWASP MCP Top 10 (MCP03 tool poisoning, MCP06 prompt injection via context, MCP02 scope creep) and the Client-Side Tool Risk Gating control give the concrete playbook: pin every tool definition by SHA-256 on first sight and quarantine silently changed tools (rug-pull defence), classify tools from `readOnlyHint/destructiveHint` annotations, require human approval for destructive tools, deny by default above a ceiling, and never auto-approve. Claude Code supports this natively via per-tool permission rules, `.mcp.json` project approval prompts, and the `_meta[\"anthropic/requiresUserInteraction\"]` flag; MCP has no built-in signed manifests, so pin package versions (no `@latest`) and ship a fingerprint file. A2A reached v1.0.0 (Mar 2026) / v1.0.1 (May 2026) under the Linux Foundation but is irrelevant for a single-user stack; MCP delegation covers the need. The repo's Continue config still names `claude-sonnet-4-6`/`claude-opus-4-8`, which must be replaced with the authoritative IDs.",
+ "findings": [
+  {
+   "claim": "The current MCP specification revision is 2026-07-28; it removes the initialize/initialized handshake and the Mcp-Session-Id header, requires Mcp-Method and Mcp-Name headers on Streamable HTTP POST requests, adds a server/discover RPC that servers must implement, and carries protocol version and client capabilities in _meta on every request.",
+   "evidence": "Official blog: 'we've officially retired the initialize/initialized exchange' along with Mcp-Session-Id; 'Streamable HTTP requests now must include Mcp-Method and Mcp-Name'. Spec changelog (SEP-2567, SEP-2575, SEP-2243) confirms removal of protocol-level sessions, mandatory headers, and server/discover.",
+   "source_url": "https://blog.modelcontextprotocol.io/posts/2026-07-28/",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "2026-07-28",
+   "why_load_bearing": "The orchestrator MCP server and any custom gateway must be built on an SDK that speaks 2026-07-28 while still accepting 2025-11-25 clients (Open WebUI); a hand-rolled JSON-RPC endpoint from older examples would be rejected by new clients."
+  },
+  {
+   "claim": "In 2026-07-28, Roots, Sampling and Logging are deprecated with a minimum twelve-month support window; the legacy HTTP+SSE transport is formally deprecated; OAuth Dynamic Client Registration is deprecated in favour of Client ID Metadata Documents but 'continues to work for backward compatibility'; Tasks move from core into the io.modelcontextprotocol/tasks extension using poll-based tasks/get and tasks/update.",
+   "evidence": "Changelog: 'Roots, Sampling, and Logging are deprecated and remain functional during the window' (SEP-2577); HTTP+SSE reclassified Deprecated (SEP-2596); DCR deprecated (PR #2858); Tasks extension with tasks/get polling (SEP-2663). Blog: 'DCR continues to work for backward compatibility, but will be removed in a future version'.",
+   "source_url": "https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2026-07-28/changelog.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "2026-07-28",
+   "why_load_bearing": "Determines that the orchestrator should not rely on Roots (filesystem scoping) or Sampling (server-initiated LLM calls), should use Streamable HTTP not SSE, and should model long department jobs either via the Tasks extension or server-minted job handles."
+  },
+  {
+   "claim": "The 2026-07-28 spec recommends that servers needing cross-call state mint an explicit handle from a tool and have the model pass it back as an argument; all four Tier-1 SDKs (TypeScript, Python, Go, C#) support 2026-07-28 at release, Rust in beta.",
+   "evidence": "Blog post: protocol-level state is gone; servers 'mint an explicit handle from a tool and have the model pass it back as an argument'; 'TypeScript, Python, Go, and C# all support 2026-07-28 as of release'. PyPI shows mcp 2.3.0 (2026-10-02) and fastmcp 4.1.3 (2026-10-20); npm @modelcontextprotocol/sdk 1.32.2 (2026-10-23).",
+   "source_url": "https://blog.modelcontextprotocol.io/posts/2026-07-28/",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "2026-07-28",
+   "why_load_bearing": "Justifies the delegate(department, task) -> job_id + get_job(job_id) design and the choice of python mcp>=2.3 / fastmcp>=4.1 for the orchestrator server."
+  },
+  {
+   "claim": "The official MCP Registry (registry.modelcontextprotocol.io) is still a preview with the API frozen at v0.1 and GA undated; it verifies only namespace ownership (GitHub OAuth/OIDC, DNS or HTTP proof) and performs no code or security vetting; entries grew from ~17k (Jul 2026) to ~30k (Sep 2026) to ~45k names (Oct 2026).",
+   "evidence": "Registry README: 'Preview... breaking changes or data resets may occur'; 'validates namespace ownership when publishing'; no mention of code review. Third-party counts: 16,967 (2026-07-16), 30,375 (2026-09-10), 44,805 distinct names (2026-10-17).",
+   "source_url": "https://github.com/modelcontextprotocol/registry",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "",
+   "why_load_bearing": "If the registry vetted servers, the stack could auto-install from it; because it does not, every server must be hand-allowlisted and version-pinned in the shipped config files."
+  },
+  {
+   "claim": "Only seven reference servers remain maintained in modelcontextprotocol/servers (everything, fetch, filesystem, git, memory, sequential-thinking, time); GitHub, GitLab, PostgreSQL, SQLite, Puppeteer, Brave Search, Slack, Redis, Google Drive/Maps, Sentry, AWS KB and EverArt are archived. Current versions: @modelcontextprotocol/server-filesystem, server-memory and server-sequential-thinking 2.0.0 (2026-10-19, Node 24+ required); mcp-server-git 2026.10.19 on PyPI.",
+   "evidence": "Repo README lists current vs archived servers and says the reference servers are 'educational examples, not production-ready'. npm registry dist-tags: filesystem/memory/sequential-thinking 2.0.0 published 2026-10-19; memory README: 'Node.js 24 or later is required'. PyPI mcp-server-git 2026.10.19.",
+   "source_url": "https://github.com/modelcontextprotocol/servers",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "2026-10-19",
+   "why_load_bearing": "The archived sqlite/postgres servers must not be shipped; the orchestrator keeps its own job/lessons store (SQLite via Python) instead of an MCP DB server, and the setup script must install Node 24 on the Windows host."
+  },
+  {
+   "claim": "The filesystem reference server scopes access by positional allowed-directory arguments ('the only method that works on every protocol version'); MCP Roots are deprecated and unusable on 2026-07-28 connections; there is no global read-only flag, read-only is achieved per Docker bind mount with ',ro' and write_file refuses read-only files.",
+   "evidence": "Filesystem README: allowed dirs via CLI args recommended; 'Roots are deprecated as of protocol version 2026-07-28'; Docker example '--mount type=bind,src=...,dst=/projects/...,ro' and 'Adding the ro flag will make the directory readonly by the server'.",
+   "source_url": "https://github.com/modelcontextprotocol/servers/blob/main/src/filesystem/README.md",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "",
+   "why_load_bearing": "Read-only departments (code-review, security, docs-reading) must get the filesystem server as a container with ro mounts, or a separate read-only server, rather than a flag; this shapes docker-compose and the per-department config."
+  },
+  {
+   "claim": "GitHub's official MCP server runs remotely at https://api.githubcopilot.com/mcp/ (OAuth or PAT as Bearer) or locally via ghcr.io/github/github-mcp-server; tool exposure is controlled with --toolsets / GITHUB_TOOLSETS ('default' = context, repos, issues, pull_requests, users; 20+ toolsets incl. actions, code_security, dependabot, secret_protection), --tools for individual tools, and --read-only which 'skips write tools even if requested'.",
+   "evidence": "github-mcp-server README sections on remote endpoint, Docker image, GITHUB_PERSONAL_ACCESS_TOKEN precedence over OAuth, toolset list, --read-only. OpenCode docs warn the GitHub MCP server 'can add many tokens and exceed the context limit'.",
+   "source_url": "https://github.com/github/github-mcp-server",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "",
+   "why_load_bearing": "Each department ships a different --toolsets/--read-only combination (e.g. code-review: pull_requests + --read-only; security: code_security,dependabot,secret_protection + --read-only), which keeps local 7B/14B models from drowning in tool schemas."
+  },
+  {
+   "claim": "Playwright MCP (@playwright/mcp, 0.0.83 published 2026-09-28) runs via npx @playwright/mcp@latest; default mode uses accessibility snapshots (no screenshots), --caps=vision opts into coordinate tools; --headless, --isolated, --allowed-origins/--blocked-origins ('does not serve as a security boundary'), --output-dir and --port N expose Streamable HTTP at http://localhost:N/mcp.",
+   "evidence": "playwright-mcp README flag list; '--port 8931 serves the MCP endpoint at http://localhost:8931/mcp'; npm dist-tag latest 0.0.83 (2026-09-28).",
+   "source_url": "https://github.com/microsoft/playwright-mcp",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "2026-09-28",
+   "why_load_bearing": "The testing department's browser tooling can be reached by Open WebUI only because --port gives native Streamable HTTP, removing the need for mcpo; the origin flags are not a sandbox so the container must run isolated."
+  },
+  {
+   "claim": "Context7 is available as a remote Streamable HTTP server at https://mcp.context7.com/mcp with 'Authorization: Bearer <API key>' (free key from context7.com/dashboard gives higher rate limits) or locally via @upstash/context7-mcp (4.4.4, 2026-10-19); it exposes two tools, resolve-library-id(libraryName, query) and query-docs(libraryId, query, language?); `npx ctx7 setup --claude|--opencode` auto-configures clients (Node 22.13+).",
+   "evidence": "upstash/context7 README: remote URL, Bearer header, tool names and parameters, 'npx ctx7 setup' with --claude/--opencode flags; npm latest 4.4.4.",
+   "source_url": "https://github.com/upstash/context7",
+   "confidence": "high",
+   "load_bearing": false,
+   "source_date": "2026-10-19",
+   "why_load_bearing": ""
+  },
+  {
+   "claim": "Serena (serena-agent 2.1.0 on PyPI, 2026-10-19; MIT) provides LSP-backed symbol tools for 40+ languages; it is started with `serena start-mcp-server` with --context (desktop-app default; claude-code 'disables tools that would duplicate Claude Code's built-in capabilities'; codex; ide; agent/oaicompat-agent), --mode (planning, editing, interactive, one-shot, no-onboarding, no-memories, ...), --project / --project-from-cwd, --transport stdio|streamable-http|sse (sse discouraged) and --port; it is stateful with one active project, so one streamable-http instance should be shared only by clients on the same project.",
+   "evidence": "Serena docs 020_running.md and 050_configuration.md: flag list, context/mode lists, 'A single streamable-http instance should therefore be shared only by clients working on the same project'; README: 'uv tool install -p 3.13 serena-agent', supported clients incl. Claude Code, Codex, OpenCode, OpenWebUI; PyPI 2.1.0.",
+   "source_url": "https://github.com/oraios/serena/blob/main/docs/02-usage/020_running.md",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "2026-10-19",
+   "why_load_bearing": "Because Serena is single-project and stateful, the orchestrator must spawn one Serena per repository (stdio per department run, or one HTTP instance per project) rather than a shared global instance; context=claude-code avoids duplicate tools in Claude Code."
+  },
+  {
+   "claim": "Serena's read_only project setting and tool exclusions are 'not a security mechanism': editing tools are refused but REPL-submitted code can still modify files; project trust is keyed on trusted_project_path_patterns (v1.6.0+) and is 'a functionality boundary, not a containment boundary'; the recommended hard sandbox is running Serena in Docker exposing only necessary files.",
+   "evidence": "docs/02-usage/070_security.md: 'The only full protection against unintended consequences is a sandboxed environment'; read_only 'is not a hard guarantee'; Docker 'highly recommended for security-conscious users'.",
+   "source_url": "https://github.com/oraios/serena/blob/main/docs/02-usage/070_security.md",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "",
+   "why_load_bearing": "Code-review and security departments cannot rely on Serena read_only for safety; they must get a container with read-only mounts or have execute_shell_command excluded and run under the client's permission gate."
+  },
+  {
+   "claim": "The memory reference server stores a knowledge graph in a JSONL file set by MEMORY_FILE_PATH (default memory.jsonl beside the server) and exposes create_entities, create_relations, add_observations, delete_*, read_graph, search_nodes, open_nodes; run with `npx -y @modelcontextprotocol/server-memory` (on Windows prefix `cmd /c`).",
+   "evidence": "memory README as fetched: env var, tool list, run command, Windows prefix, Node 24 requirement.",
+   "source_url": "https://github.com/modelcontextprotocol/servers/blob/main/src/memory/README.md",
+   "confidence": "high",
+   "load_bearing": false,
+   "source_date": "",
+   "why_load_bearing": ""
+  },
+  {
+   "claim": "Claude Code MCP config: three scopes (local in ~/.claude.json, project in ./.mcp.json shared via git, user in ~/.claude.json) with precedence local > project > user > plugin > claude.ai connectors and no field merging; .mcp.json uses an `mcpServers` object where `type` is stdio | http (alias streamable-http) | sse (deprecated) | ws, stdio entries have command/args/env, remote entries url/headers/headersHelper, optional per-server `timeout` ms and `alwaysLoad`; `${VAR}` and `${VAR:-default}` expand in command/args/env/url/headers, but credential-like names (ANTHROPIC_API_KEY, NPM_TOKEN, HTTPS_PROXY...) read as empty in url/headers; project .mcp.json servers require interactive approval (reset with `claude mcp reset-project-choices`).",
+   "evidence": "Official Claude Code MCP page: scope table, precedence, .mcp.json example, 'A url entry without a type is rejected', env-expansion rules and credential redaction list, approval prompt and reset command.",
+   "source_url": "https://code.claude.com/docs/en/mcp",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "",
+   "why_load_bearing": "Defines the exact shape of the .mcp.json the repo ships and forbids using ANTHROPIC_API_KEY-style names in headers for the orchestrator's own auth header."
+  },
+  {
+   "claim": "Claude Code tool search is on by default (MCP tool definitions deferred; only names and server instructions load at start) on Opus 4/Sonnet 4/Haiku 4.5 and later; ENABLE_TOOL_SEARCH=false|auto|auto:N controls it; `alwaysLoad: true` on a server loads its tools upfront and makes startup wait up to the 5 s connect timeout; MCP output warns at 10,000 tokens, defaults to a 25,000-token cap (MAX_MCP_OUTPUT_TOKENS), persists results over 50,000 chars to a file (raise per tool via _meta['anthropic/maxResultSizeChars'] up to 500k); tool names over 128 chars are dropped; tool descriptions loaded via search may be up to 16,384 chars.",
+   "evidence": "Official page sections 'Scale with MCP tool search', 'Configure tool search', output-limit bullets, '128 characters' note, description length limits (v2.1.296).",
+   "source_url": "https://code.claude.com/docs/en/mcp",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "",
+   "why_load_bearing": "The orchestrator's delegate tool should be marked alwaysLoad with a concise description and strong server instructions so Claude Code surfaces it without a search round-trip; department result payloads must stay under ~25k tokens or be returned as file paths/handles."
+  },
+  {
+   "claim": "Claude Code subagents are Markdown files in .claude/agents/ (project) or ~/.claude/agents/ (user) with YAML frontmatter name, description, tools, disallowedTools, model (sonnet|opus|haiku|fable|full ID|inherit) and mcpServers; mcpServers accepts inline server definitions (connected only while the subagent runs, so their schemas stay out of the main context) or string references to session servers; tools/disallowedTools accept mcp__<server>__* patterns and mcp__* to withhold all MCP tools; subagents nest up to 3 levels (CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH); a whole session can run as one agent via `claude --agent <name>`.",
+   "evidence": "Official sub-agents page: frontmatter table, 'Inline definition... connects when the subagent starts and disconnects when it finishes', tools table with mcp__github__* / mcp__* entries, nesting limit env var, `claude --agent code-reviewer`.",
+   "source_url": "https://code.claude.com/docs/en/sub-agents",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "",
+   "why_load_bearing": "This is the cheapest way to make the six departments first-class inside Claude Code: ship .claude/agents/{app-dev,testing,security,devops,code-review,docs}.md with per-department mcpServers and tool allowlists, and let `claude --agent` or the orchestrator's delegate call `claude -p --agent <dept>` for cloud-tier work."
+  },
+  {
+   "claim": "`claude mcp serve` runs Claude Code itself as a stdio MCP server that exposes its built-in tools (Bash/Read/Write/Edit/etc.) to another MCP client; it prints nothing on start, and 'your own client is responsible for implementing user confirmation for individual tool calls'; MCP servers can force a per-call approval prompt with _meta['anthropic/requiresUserInteraction']=true, and MCP prompts appear as /servername:promptname commands.",
+   "evidence": "Official page 'Use Claude Code as an MCP server' and the requiresUserInteraction section ('shows that tool's permission prompt on every call, even in acceptEdits, auto, and bypassPermissions'), MCP prompts section.",
+   "source_url": "https://code.claude.com/docs/en/mcp",
+   "confidence": "high",
+   "load_bearing": false,
+   "source_date": "",
+   "why_load_bearing": ""
+  },
+  {
+   "claim": "OpenCode configures MCP in its config (opencode.json with \"$schema\": \"https://opencode.ai/config.json\") under a top-level `mcp` map: local servers use type \"local\", `command` as an array, optional `cwd`, `environment`, `enabled`, `timeout` (ms, default 30000 'when connecting and fetching tools'); remote servers use type \"remote\", `url`, `headers`, `oauth` ({clientId, clientSecret, scope} or false), with `opencode mcp auth|list|logout|debug` and tokens in ~/.local/share/opencode/mcp-auth.json; tools are named <server>_<tool> and can be disabled globally with `tools: {\"server_*\": false}` then re-enabled per agent; docs warn each server adds context and the GitHub server can exceed the context limit.",
+   "evidence": "OpenCode docs mcp-servers.mdx in anomalyco/opencode (dev branch): field list, OAuth options, enable/disable patterns, context-cost warning. Web search noted a v2 docs variant nesting under mcp.servers; the dev-branch source shows the flat `mcp` map.",
+   "source_url": "https://github.com/anomalyco/opencode/blob/dev/packages/web/src/content/docs/mcp-servers.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "",
+   "why_load_bearing": "Defines the opencode.json the repo ships and the 30 s default timeout that forces delegate() to be asynchronous (return a job id) for department tasks longer than ~25 s."
+  },
+  {
+   "claim": "Continue configures MCP servers as standalone YAML files in .continue/mcpServers/ (fields name, version, schema: v1, then an mcpServers list with name, type stdio|sse|streamable-http, command, args, env, url; secrets via ${{ secrets.NAME }}) or in the main config's mcpServers block; JSON configs in Claude-Desktop format dropped into the same folder are auto-detected; 'MCP can only be used in the agent mode'.",
+   "evidence": "continuedev/continue docs/customize/deep-dives/mcp.mdx: file location, required metadata, field list, transports, agent-mode restriction.",
+   "source_url": "https://github.com/continuedev/continue/blob/main/docs/customize/deep-dives/mcp.mdx",
+   "confidence": "high",
+   "load_bearing": false,
+   "source_date": "",
+   "why_load_bearing": ""
+  },
+  {
+   "claim": "Open WebUI has native MCP support since v0.6.31 (2025-09-25) but only for Streamable HTTP ('Native MCP support in Open WebUI is Streamable HTTP only'); servers are added by admins at Settings > Admin > Integrations > External Tool Servers with Type 'MCP (Streamable HTTP)' and auth None/Bearer/Session/OAuth/OAuth 2.1 (DCR or static); WEBUI_SECRET_KEY must be set or OAuth tokens fail to decrypt after restart; users enable tools per chat via + > Integrations > Tools, admins can set non-OAuth tools as model defaults, tools appear to the model as <server ID>_<tool name> (64-char limit), Tool Search can defer definitions, and OpenAPI 'remains the preferred integration path' for most deployments. stdio/SSE servers still require mcpo (mcpo 0.0.20, last PyPI release 2026-02-27).",
+   "evidence": "open-webui/docs features/extensibility/mcp.mdx as fetched; search summary dating 0.6.31 to 2025-09-25 and noting OAuth 2.1 DCR added; PyPI mcpo 0.0.20 upload 2026-02-27; mcpo README shows --server-type streamable-http and --config with mcpServers and disabledTools.",
+   "source_url": "https://github.com/open-webui/docs/blob/main/docs/features/extensibility/mcp.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "",
+   "why_load_bearing": "The orchestrator must be reachable from Open WebUI as a Streamable HTTP endpoint on the compose network (e.g. http://router:8000/mcp) with Bearer auth; avoiding stdio-only servers in the Open WebUI path removes the mcpo dependency, whose maintenance has slowed."
+  },
+  {
+   "claim": "A2A is a Linux Foundation project (Apache 2.0, contributed by Google) that reached v1.0.0 on 2026-03-12 (breaking changes, tasks/list, gRPC multi-tenancy, spec split into protocol + transport mappings) and v1.0.1 on 2026-05-28; signed Agent Cards and mTLS arrived in v0.3.0 (2025-07-30); it uses JSON-RPC 2.0 over HTTP(S) with SSE streaming and push notifications and is positioned as complementary to MCP (agents collaborating vs. agents using tools); 150+ supporting organizations as of April 2026.",
+   "evidence": "a2aproject/A2A releases page (tags/dates/highlights) and repo README (governance, transport, 'complements MCP'); Linux Foundation press release April 2026 (150+ orgs). A Cloud Magazin claim of 'v1.2' is uncorroborated by the release list.",
+   "source_url": "https://github.com/a2aproject/A2A/releases",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "2026-05-28",
+   "why_load_bearing": "Decision to skip A2A: for a single-user stack where every client already speaks MCP, an MCP delegate tool covers dispatch; A2A would only matter for cross-vendor/async agent discovery, so adding it now would be extra surface for no benefit. If A2A were required by a target client, the orchestrator would need a second (A2A) binding."
+  },
+  {
+   "claim": "Exposing an orchestrator/agent as an MCP server with a delegate-style tool is an established pattern (Microsoft Agent Framework 'agents as MCP tools' with one tool per operation or a single ask-anything entry point; sub-agents-mcp run_agent backed by claude/cursor CLIs; SubMCP delegate_parallel with read-only sandboxed sub-agents by default), with the recognised caveat that MCP tool calls are synchronous request/response so long delegations need async handling.",
+   "evidence": "Search results: Microsoft Agent Framework post ('Each operation becomes its own MCP tool'), sub-agents-mcp ('bringing Claude Code's sub-agent style to other MCP-compatible tools'), SubMCP (delegate_parallel; 'read-only and sandboxed by default'); commentary that MCP 'is synchronous and stateless' so A2A/async patterns are suggested for delegation.",
+   "source_url": "https://ravichaganti.com/blog/exposing-microsoft-agent-framework-agents-as-mcp-servers/",
+   "confidence": "medium",
+   "load_bearing": true,
+   "source_date": "",
+   "why_load_bearing": "Validates the delegate(department, task) design but requires the job-handle/Tasks-extension shape; if MCP clients supported long-held calls universally the simpler synchronous tool would suffice."
+  },
+  {
+   "claim": "OWASP's MCP Top 10 (2025) lists MCP01 token mismanagement, MCP02 privilege escalation via scope creep, MCP03 tool poisoning, MCP04 supply-chain tampering, MCP05 command injection, MCP06 prompt injection via contextual payloads, MCP07 insufficient authn/authz, MCP08 lack of audit/telemetry, MCP09 shadow MCP servers, MCP10 context injection & over-sharing.",
+   "evidence": "OWASP/www-project-mcp-top-10 repository README category list as fetched.",
+   "source_url": "https://github.com/OWASP/www-project-mcp-top-10",
+   "confidence": "high",
+   "load_bearing": false,
+   "source_date": "",
+   "why_load_bearing": ""
+  },
+  {
+   "claim": "OWASP's recommended 'Client-Side Tool Risk Gating' control: record a SHA-256 fingerprint of each tool's canonical definition (name, description, input schema) on first sight, recompute on every reconnect, and move any changed tool to AWAITING_REREVIEW 'withheld from re-exposure until a human explicitly re-approves it' so 'a rug-pull redefinition therefore cannot ride in on a prior approval'; classify tools L0-L5 from readOnlyHint/destructiveHint/idempotentHint/openWorldHint with floors for destructive verbs (delete_, drop_, purge_, wipe_) and missing metadata raising risk; gate designated tools behind per-invocation human approval; enforce a deny-by-default ceiling so 'the model never sees a tool above the ceiling'; explicit registration only, no silent auto-discovery; it does not inspect tool results, so injection via retrieved content is 'bounded, not detected'.",
+   "evidence": "Control document in the OWASP MCP Top 10 repo (2025/recommended-controls/Client-Side-Tool-Risk-Gating.md) as fetched; CSA May-2026 whitepaper and 2026 threat-model posts (search summaries) agree MCP has no built-in pinning or signed manifests and most clients re-fetch descriptions every session.",
+   "source_url": "https://github.com/OWASP/www-project-mcp-top-10/blob/main/2025/recommended-controls/Client-Side-Tool-Risk-Gating.md",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "",
+   "why_load_bearing": "Dictates the shipped mitigations: a committed tool-fingerprint file checked at orchestrator start, readOnlyHint/destructiveHint annotations on every orchestrator tool, read-only servers for review/security departments, human approval for write tools in Claude Code permissions, and treating all tool output and delegated-agent output as untrusted data."
+  },
+  {
+   "claim": "Claude Code enforces trust boundaries around MCP configs: project .mcp.json servers prompt for approval; a headersHelper (arbitrary shell) runs only after the project trust dialog (fixed in v2.1.238 for -p/SDK sessions); inline subagent MCP servers in .claude/agents/ load only after the folder is trusted; organizations can pin servers with managed-mcp.json / managedMcpServers and restrict with allowedMcpServers / deniedMcpServers (deny wins).",
+   "evidence": "Official MCP page: 'Trust a folder before its headersHelper runs', 'Inline servers in a project's .claude/agents/ folder load only after you trust that folder', Managed MCP configuration section.",
+   "source_url": "https://code.claude.com/docs/en/mcp",
+   "confidence": "high",
+   "load_bearing": false,
+   "source_date": "",
+   "why_load_bearing": ""
+  },
+  {
+   "claim": "Security-scanner MCP servers exist but are less mature: Semgrep's official semgrep-mcp (PyPI 0.9.0, 2025-09-29, self-described beta; requires semgrep installed; `uvx semgrep-mcp`) and Aqua Security's official Trivy MCP plugin (filesystem, image and remote-repo scans; stdio and SSE transports). Community Trivy/Semgrep servers are mostly proofs of concept.",
+   "evidence": "PyPI semgrep-mcp 0.9.0 (2025-09-29); search summaries of Glama listings for Semgrep MCP ('beta project under active development') and aquasecurity/trivy-mcp README (scan types, stdio and SSE).",
+   "source_url": "https://glama.ai/mcp/servers/@aquasecurity/trivy-mcp/blob/263ca01534197f590ad57ee9de048d07730f98c4/README.md",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2025-09-29",
+   "why_load_bearing": ""
+  },
+  {
+   "claim": "Docker's MCP Toolkit/Gateway (Docker Desktop) runs each MCP server in its own container capped at 1 CPU / 2 GB with no host filesystem access by default, uses Docker-built, signed catalog images with SBOMs, keeps secrets out of plain env vars via Docker Desktop secrets, and presents one gateway endpoint to all clients; isolation still depends on mounts and network policy.",
+   "evidence": "Docker docs 'Docker MCP Toolkit' and Docker blog posts on the MCP Catalog (search summaries); mcp-gateway Go module v0.41.0 released 2026-03-18.",
+   "source_url": "https://docs.docker.com/ai/mcp-catalog-and-toolkit/toolkit.md",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2026-03-18",
+   "why_load_bearing": ""
+  },
+  {
+   "claim": "The repository's shipped Continue config (config/vscode/continue.config.json) hardcodes the stale cloud model IDs claude-sonnet-4-6 and claude-opus-4-8 in both model entries and descriptions, and points every department at the router's OpenAI-compatible endpoint without any MCP server configuration.",
+   "evidence": "Read of /home/user/personal-agent-stack/config/vscode/continue.config.json: entries 'Claude Sonnet (Direct)' model 'claude-sonnet-4-6', 'Claude Opus (Direct)' model 'claude-opus-4-8'; no mcpServers block; repo has no .mcp.json, opencode.json or .claude/agents directory (ls -R).",
+   "source_url": "file:///home/user/personal-agent-stack/config/vscode/continue.config.json",
+   "confidence": "high",
+   "load_bearing": true,
+   "source_date": "",
+   "why_load_bearing": "Model IDs must be replaced with the authoritative ones (claude-sonnet-5-5 for default cloud, claude-opus-5-5 / claude-fable-5-1 for heavy tiers, claude-haiku-4-5-20251001 for cheap cloud), and MCP config files must be added for all three IDE clients."
+  }
+ ],
+ "recommendations": [
+  "Expose the orchestrator as ONE Streamable HTTP MCP server (python `mcp>=2.3` or `fastmcp>=4.1`, 2026-07-28 with backward compat), mounted at http://router:8000/mcp inside the compose network and http://localhost:8000/mcp on the host, with Bearer auth from an env var NOT named like a credential Claude Code redacts (use ORCHESTRATOR_TOKEN, not *_API_KEY/NPM_TOKEN). Tools: list_departments() [readOnlyHint], delegate(department, task, context?, tier?: auto|local|cloud, wait_seconds?: 0-20) -> {job_id, status, result?} [openWorldHint, not readOnly], get_job(job_id) [readOnlyHint, idempotentHint], cancel_job(job_id). Return a job handle whenever work exceeds ~20 s because OpenCode's default timeout is 30 s and Claude Code has per-server timeouts. Set alwaysLoad-friendly short descriptions and a strong server `instructions` string so tool search finds it. Optionally also register the io.modelcontextprotocol/tasks extension later; job handles work on every client today.",
+  "Ship these config files: (1) `.mcp.json` (Claude Code project scope) with `orchestrator` (type http, url http://localhost:8000/mcp, headers Authorization: Bearer ${ORCHESTRATOR_TOKEN}, alwaysLoad true, timeout 120000), `context7` (http, https://mcp.context7.com/mcp, Bearer ${CONTEXT7_KEY}), `serena` (stdio, `serena start-mcp-server --context claude-code --project-from-cwd --mode planning` via `uvx --from serena-agent==2.1.0`), `playwright` (stdio, `npx -y @playwright/mcp@0.0.83 --headless --isolated`), `github` (http, https://api.githubcopilot.com/mcp/ with Bearer ${GH_MCP_TOKEN} and X-MCP-Toolsets header or local docker with GITHUB_TOOLSETS), `memory` (stdio, server-memory@2.0.0, MEMORY_FILE_PATH=./.agent-stack/memory.jsonl). (2) `.claude/agents/{app-dev,testing,security,devops,code-review,docs}.md` with model: sonnet/haiku per tier and per-department `mcpServers:` references plus `tools:` allowlists (mcp__serena__*, mcp__github__get_file_contents, ...) and `disallowedTools: mcp__orchestrator` on leaf agents to prevent recursion. (3) `opencode.json` with the same servers under `mcp` (type local/remote, command arrays, `timeout: 120000` for orchestrator) and per-agent `tools` maps. (4) `.continue/mcpServers/agent-stack.yaml` (schema v1, streamable-http entries for orchestrator/context7/github, stdio for serena/playwright). (5) Open WebUI: no file, but a README step: Admin > Integrations > External Tool Servers > MCP (Streamable HTTP) http://router:8000/mcp, Bearer, and set WEBUI_SECRET_KEY in docker-compose; do not add stdio servers to Open WebUI, so mcpo is not needed.",
+  "Minimal MCP toolset per department (least privilege, matching local-model context budgets): app-dev = filesystem(rw, repo root), git, serena(editing+interactive), context7, github(toolsets repos,issues,pull_requests; rw). testing = filesystem(rw limited to tests/ and src/), git, playwright(--headless --isolated --blocked-origins for non-local hosts), github(--read-only, toolsets actions,pull_requests). security = filesystem(ro container mount ',ro'), git(read), semgrep-mcp, trivy-mcp (optional), fetch (advisories only), github(--read-only, toolsets code_security,dependabot,secret_protection). devops = filesystem(rw limited to infrastructure/, scripts/, .github/), git, fetch, github(toolsets actions,repos); container/compose actions via the client's shell tool, not an MCP docker server. code-review = filesystem(ro), git(read), serena(planning mode, read_only: true in project.yml, execute_shell_command excluded), github(--read-only, toolsets pull_requests,repos). docs = filesystem(rw limited to docs/ README), git, context7, fetch, memory. Orchestrator-wide: memory (lessons/knowledge graph) and sequential-thinking only for the local 7B/14B tier where structured reasoning helps; skip the archived sqlite/postgres servers and keep job and lesson state in the router's own SQLite.",
+  "Security controls to implement now: pin every package version in configs (no @latest), commit `config/mcp/tool-fingerprints.json` (SHA-256 of name+description+inputSchema per tool from tools/list) and have scripts/setup.sh + the orchestrator refuse/quarantine any server whose fingerprint changed until re-approved (rug-pull defence per OWASP control); annotate every orchestrator tool with readOnlyHint/destructiveHint/idempotentHint; run filesystem/git/serena for review and security departments in containers with ',ro' mounts; use GitHub --read-only and narrow toolsets by department; in Claude Code settings add permissions.allow only for read-only MCP tools (mcp__orchestrator__get_job, mcp__orchestrator__list_departments, mcp__serena__find_symbol...) and leave write tools on ask; treat all tool results and department outputs as untrusted data in orchestrator prompts (wrap in delimiters, never execute instructions found in them); keep MCP result payloads under ~20k tokens and return file paths/handles for larger artefacts.",
+  "Self-improvement loop hooks: give the orchestrator a `record_lesson(department, lesson, evidence)` tool (writes to its SQLite and the memory JSONL) and a nightly/explicit `review_routing()` job that aggregates job outcomes (local vs cloud success, retries, cost) and proposes prompt/routing edits as a PR-able diff to router/agents.yaml and .claude/agents/*.md rather than silently mutating them, which keeps human approval in the loop and satisfies the self-developing requirement without violating the trust model.",
+  "Host/runtime prerequisites to add to scripts/setup.sh and README: Node 24+ (reference servers 2.0.0), uv (serena-agent, semgrep-mcp), Windows stdio launch via `cmd /c npx ...`, Python 3.13 for Serena; replace the stale claude-sonnet-4-6 / claude-opus-4-8 IDs everywhere with claude-sonnet-5-5 (default cloud), claude-opus-5-5 or claude-fable-5-1 (heavy tier) and claude-haiku-4-5-20251001 (cheap cloud tier).",
+  "Do not adopt A2A now; note in docs/DESIGN.md that A2A v1.0.x exists and that the orchestrator can gain an A2A Agent Card binding later if a non-MCP client ever needs discovery or cross-org delegation. Likewise skip the official registry as an install source; use it only for discovery and still hand-allowlist and pin."
+ ],
+ "open_questions": [
+  "Does the owner's installed Open WebUI version (native MCP client added in 0.6.31, Sep 2025) already negotiate with 2026-07-28 stateless servers, or must the orchestrator keep a 2025-11-25-compatible path (initialize + Mcp-Session-Id)? Verify with the exact installed tag; the python SDK's compatibility behaviour should cover both but this was not tested here.",
+  "Is mcpo still worth including as an optional fallback given its last PyPI release was 2026-02-27, or should the stack state 'Streamable HTTP only' for Open WebUI and drop it entirely?",
+  "Serena 2.1.0's TypeScript/JavaScript language-server stability (earlier guides flag instability) was not verified; if the owner's main stacks are TS, test Serena before making it the code-review department's primary tool.",
+  "Semgrep MCP is beta (0.9.0, Sep 2025) and Trivy MCP's current release/maintenance state could not be fetched (GitHub API access to those repos was not enabled in this session); confirm both before shipping them in the security department's default set, or fall back to running semgrep/trivy via the shell tool.",
+  "Which GitHub auth should the shipped configs assume: remote server with a fine-grained PAT (simplest for Windows) or local Docker image with OAuth (keeps the token off disk)? The GitHub MCP remote endpoint's toolset selection via headers vs. the local --toolsets flag should be confirmed against the current README (the fetched page was truncated).",
+  "Whether Windows 11 host-side stdio servers (npx/uvx under `cmd /c`) are acceptable for the intuitiveness goal, or whether every server should run inside docker-compose and expose Streamable HTTP so all four clients share one set of endpoints.",
+  "Exact Claude Code 'claude -p --agent <dept>' invocation cost and whether department subagents should be driven by the orchestrator (router container calling the Claude Code CLI on the host) or only by the user inside Claude Code; this affects whether the delegate tool's cloud tier shells out to Claude Code or calls the Anthropic API directly."
+ ]
+}

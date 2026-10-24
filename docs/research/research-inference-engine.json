@@ -1,0 +1,234 @@
+{
+ "topic": "Inference engine and settings for one RTX 3060 12GB on Windows 11 (October 2026): Ollama vs llama-server vs vLLM/LM Studio/Jan/TabbyAPI/SGLang, KV-cache budgets, concurrency behaviour, recommended env vars and model residency",
+ "summary": "Recommendation: keep Ollama as the single local front door, but run it as the NATIVE Windows app (not the ollama container in infrastructure/docker-compose.yml), because (a) as of v0.40.11 (released 2026-10-24) Ollama serves every GGUF model by spawning the upstream llama.cpp `llama-server` binary, so there is no raw-speed reason to replace it with llama-server for dense models; (b) it already exposes OpenAI-compatible /v1/chat/completions AND an Anthropic-compatible /v1/messages endpoint (Claude Code can be pointed at it with ANTHROPIC_BASE_URL), tool calling, JSON-schema structured output, Modelfile `DRAFT` speculative decoding, and optional Ollama Cloud models; (c) Docker Desktop GPU access on Windows goes through WSL2 passthrough, which adds a VM RAM partition, slower model loads from the Windows filesystem, and the well-known 'GPU disappears after driver update / wsl --shutdown' class of flakiness, with no upside for a single-GPU desktop. The one case where direct llama-server wins is a MoE coder (Qwen3-Coder-30B-A3B, 18.6 GB at Q4_K_M, cannot fit in 12 GB): llama-server's `--n-cpu-moe` keeps attention on the GPU and only expert tensors on the CPU (community reports 17-45 tok/s on 12 GB cards), whereas Ollama only exposes whole-layer offload and no MoE-offload flag. Critical settings on a 12 GB card: Ollama's VRAM-tiered default context is 4096 tokens (<23 GiB VRAM), which is unusable for coding agents and must be raised (OLLAMA_CONTEXT_LENGTH=16384 for a 14B dense model, higher for A3B MoE); set OLLAMA_FLASH_ATTENTION=1 and OLLAMA_KV_CACHE_TYPE=q8_0 (halves KV memory; FA is already 'auto' on supported GPUs but q8_0 requires FA). KV-cache math (q8_0): Qwen3-14B 80 KiB/token -> 1.25 GiB @16k, 2.5 GiB @32k; Qwen3-Coder-30B-A3B 48 KiB/token -> 0.75 GiB @16k, 1.5 GiB @32k, 3 GiB @64k; gpt-oss-20b ~12 KiB/token with SWA-aware cache -> ~0.4 GiB @32k. Fit verdicts for 12 GB (~10.5-11 GiB usable under Windows WDDM): Qwen3-14B Q4_K_M (8.4-9.0 GB) + 16k q8_0 KV fits (about 10.3 GiB total); 32k does not fit without q4_0 KV or a smaller quant. Qwen3-Coder-30B-A3B needs expert CPU offload (needs >=32 GB system RAM) but then 32-64k context is cheap. gpt-oss-20b (MXFP4 ~12-13 GB) spills ~1-2 GB to CPU under Ollama; estimated mid-teens tok/s. Concurrency: with OLLAMA_NUM_PARALLEL=1 (the default) two agents hitting the SAME model are serialized by an in-process semaphore (second waits, no error) and the queue is bounded by OLLAMA_MAX_QUEUE (default 512, then HTTP 503); two agents hitting DIFFERENT 14B-class models cause evict/reload thrash because the scheduler evicts the least-recently-expiring idle runner whenever the predicted footprint exceeds 80% of free VRAM. Therefore on 12 GB only one large model can be resident: pin it with keep_alive=-1, set OLLAMA_MAX_LOADED_MODELS=2 (primary + a <1 GiB embedding or 1.7B helper), and let the router serialize per-model. Important for the current repo: Ollama keys loaded runners by GGUF blob path, so six Modelfile-derived agent models from one FROM share ONE runner (no extra VRAM) as long as their PARAMETERs are identical; an API-time system message overrides the Modelfile SYSTEM, so the duplicated prompts in config/ollama/Modelfile.* and router/agents.yaml can be collapsed to one source of truth (agents.yaml) with a single base model. vLLM and SGLang are poor fits (Linux/WSL2 only, pre-allocated KV pool, partial GGUF support, designed for batch throughput on 24-80 GB cards). TabbyAPI/exllamav3 is VRAM-efficient but has no CPU offload (kills the MoE option) and was slower than llama.cpp on an actual 3060 in the one comparable report. LM Studio 0.4.x (llmster headless daemon, OpenAI API on :1234, CUDA on Windows) and Jan (OpenAI API on :1337, llama.cpp) are viable GUI-first alternatives but add nothing the Ollama + llama-server pair does not already provide.",
+ "findings": [
+  {
+   "claim": "The latest Ollama release is v0.40.11, published 24 Oct 2026; the 0.40.x line (Oct 2026) adds Flint, Nemotron 3.5, decision models, Responses API fixes, Anthropic streaming failure reporting, background model upgrades, and 'full context length for Claude launch'. The repo's reference to older model IDs and to an 'Ollama new engine' as a future item is stale.",
+   "evidence": "GitHub releases page lists v0.40.2 (8 Oct) through v0.40.11 (24 Oct) with those notes; v0.40.9 'added failure reporting for streamed Anthropic Messages requests'; v0.40.2 'made Claude launch use the model's full context'.",
+   "source_url": "https://github.com/ollama/ollama/releases",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Ollama now serves every GGUF model by spawning the upstream llama.cpp `llama-server` binary as a subprocess (its own Go runner is no longer used for GGUF). Consequently Ollama inherits llama-server's auto layer fitting, flash-attention 'auto', KV-cache quantization and speculative decoding, and there is no raw-throughput reason to replace Ollama with a hand-run llama-server for dense models.",
+   "evidence": "llm/server.go: `// NewLlamaServer creates a new llama-server runner for the given model. // All GGUF models are served via the upstream llama-server subprocess.` and `slog.Info(\"using llama-server for model\", ...)`; sched.go comment: `llama-server auto-detects layers based on available VRAM, so if we predict it won't fit, evict before spawning.`",
+   "source_url": "https://raw.githubusercontent.com/ollama/ollama/main/llm/server.go",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "If Ollama still used a separate, slower engine, the architecture should put llama-server (or LM Studio) in front for performance; because it is llama-server underneath, Ollama can remain the single front door and llama-server is only needed for MoE expert offload.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "On a 12 GB card Ollama's default context window is 4096 tokens: the server picks 4096 when total VRAM < 23 GiB, 32768 for 23-47 GiB, 262144 for >=47 GiB, unless OLLAMA_CONTEXT_LENGTH or a per-request/Modelfile num_ctx overrides it. Ollama's own docs say agentic/coding workloads should use at least 64k. Leaving the default means tool-call histories get truncated silently.",
+   "evidence": "server/routes.go: `case totalVRAM >= 47*format.GibiByte: s.defaultNumCtx = 262144; case totalVRAM >= 23*format.GibiByte: s.defaultNumCtx = 32768; default: s.defaultNumCtx = 4096` and envconfig help text `Context length to use unless otherwise specified (default: 4k/32k/256k based on VRAM)`; docs.ollama.com/context-length (via search): 'Tasks which require large context like web search, agents, and coding tools should be set to at least 64000 tokens'.",
+   "source_url": "https://raw.githubusercontent.com/ollama/ollama/main/server/routes.go",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Every agent prompt in this stack must set num_ctx (or the daemon must set OLLAMA_CONTEXT_LENGTH); the current docker-compose sets neither, so agents would run at 4k on this hardware.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Ollama env-var defaults (source of truth, main branch Oct 2026): OLLAMA_NUM_PARALLEL=1, OLLAMA_MAX_LOADED_MODELS=0 (auto -> 3 per GPU), OLLAMA_MAX_QUEUE=512, OLLAMA_KEEP_ALIVE=5m (negative = infinite, 0 = unload immediately), OLLAMA_KV_CACHE_TYPE=f16, OLLAMA_FLASH_ATTENTION unset (tri-state: unset -> 'auto'), OLLAMA_CONTEXT_LENGTH=0 (VRAM-tiered), OLLAMA_GPU_OVERHEAD=0 bytes, OLLAMA_NO_CLOUD disables cloud features, OLLAMA_REMOTES default 'ollama.com'.",
+   "evidence": "envconfig/config.go: `NumParallel = Uint(\"OLLAMA_NUM_PARALLEL\", 1)`, `MaxRunners = Uint(\"OLLAMA_MAX_LOADED_MODELS\", 0)`, `MaxQueue = Uint(\"OLLAMA_MAX_QUEUE\", 512)`, `keepAlive = 5 * time.Minute`, help text `Quantization type for the K/V cache (default: f16)`, `GpuOverhead = Uint64(\"OLLAMA_GPU_OVERHEAD\", 0)`; sched.go `var defaultModelsPerGPU = 3`.",
+   "source_url": "https://raw.githubusercontent.com/ollama/ollama/main/envconfig/config.go",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "The recommended env block is derived directly from these defaults; the repo's compose currently sets OLLAMA_MAX_LOADED_MODELS=3 which permits thrash on 12 GB.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Flash attention: when OLLAMA_FLASH_ATTENTION is unset Ollama passes `--flash-attn auto` to llama-server on supported GPUs (so it is effectively on for Qwen3/gpt-oss/Gemma on an RTX 3060); OLLAMA_FLASH_ATTENTION=1 forces `--flash-attn on`, =0 forces off. KV-cache quantization (OLLAMA_KV_CACHE_TYPE=q8_0/q4_0) is passed as `--cache-type-k/--cache-type-v`, applies globally to all models, and per Ollama's FAQ only takes effect with flash attention; q8_0 ~ half of f16 with negligible quality loss, q4_0 ~ quarter with small-to-medium loss that grows with context and with high-GQA models.",
+   "evidence": "llm/llama_server.go: `func LlamaServerFlashAttention ... if !ml.FlashAttentionSupported(gpus) { return ml.FlashAttentionDisabled } return ml.FlashAttentionAuto` and `params = append(params, \"--cache-type-k\", launch.kvCacheType, \"--cache-type-v\", launch.kvCacheType)`; docs/faq.mdx: 'q8_0: about half the memory of f16 ... Recommended if you don't use f16', 'only helps when Flash Attention is enabled'.",
+   "source_url": "https://github.com/ollama/ollama/blob/main/docs/faq.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "The 16k-context fit for a 14B dense model on 12 GB depends on q8_0 KV; without it the same context costs 2.5 GiB and spills.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Same-model concurrency: Ollama launches llama-server with `-c num_ctx*num_parallel -np num_parallel` and wraps it in an in-process weighted semaphore of size num_parallel. With the default NUM_PARALLEL=1, a second simultaneous request to the same model blocks on the semaphore until the first completes (no error, honours client cancellation); setting NUM_PARALLEL=2 doubles the KV allocation (each slot gets a full num_ctx) in exchange for batched decoding. Overflow beyond OLLAMA_MAX_QUEUE pending requests returns HTTP 503 'server busy, please try again. maximum pending requests exceeded'.",
+   "evidence": "llm/llama_server.go: `\"-c\", strconv.Itoa(launch.opts.NumCtx * launch.numParallel)`, `params = append(params, \"-np\", strconv.Itoa(launch.numParallel))`, `sem: semaphore.NewWeighted(int64(numParallel))`, `if err := s.sem.Acquire(ctx, 1)`; sched.go: `var ErrMaxQueue = errors.New(\"server busy, please try again.  maximum pending requests exceeded\")`; sched.go `effectiveLlamaServerContext ... effectiveModelContext(numCtx, f) * max(numParallel, 1)`.",
+   "source_url": "https://raw.githubusercontent.com/ollama/ollama/main/llm/llama_server.go",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "This answers 'what happens when two agents hit Ollama at once': the router does NOT need its own mutex for the same model (Ollama serializes safely), but it must avoid firing many requests at once or they pile up to 512 deep with no backpressure signal.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Different-model concurrency: when a request arrives for a model that is not loaded, the scheduler predicts its VRAM (weights + KV for num_ctx*num_parallel + batch buffers); if the prediction exceeds 80% of currently free memory it evicts another runner, choosing an idle one (refCount==0) sorted by soonest expiry/name, and if none is idle it waits for the in-flight request to finish and then unloads. On a 12 GB card this means two agents using two different ~9 GB models alternately will reload each switch (seconds each) rather than run together; only pairs whose combined footprint fits (e.g., a 14B Q4 + a <1 GiB embedding model) are co-resident.",
+   "evidence": "sched.go: `// Use 80% of free memory as threshold to leave headroom. if predictedForLoad > freeMemory*80/100 { slog.Info(\"llama-server model predicted to exceed available memory, evicting\" ...`; `findRunnerToUnload ... sort.Sort(ByDurationAndName(runnerList)) // First try to find a runner that's already idle`; `slog.Debug(\"waiting for pending requests to complete and unload to occur\")`; faq.mdx: 'On GPUs, a new model must fully fit in VRAM' and 'Idle models are unloaded to make room'.",
+   "source_url": "https://raw.githubusercontent.com/ollama/ollama/main/server/sched.go",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Forces a single-resident-primary-model design: department agents must share one base model (differing only by system prompt) rather than each pulling its own 7-14B model.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Ollama keys loaded runners by the GGUF blob path (ModelPath), not by model name. Six Modelfile-derived agent models (`FROM qwen3:14b` + SYSTEM) therefore share one loaded runner and cost no extra VRAM, PROVIDED their PARAMETER values (num_ctx, num_batch, etc.) are identical; a differing num_ctx triggers `needsReload` and a full reload on every agent switch. A `system` message supplied in the API request is rendered into the template for that request and takes precedence over the Modelfile SYSTEM.",
+   "evidence": "sched.go: `func schedulerModelKey(m *Model) string { ... if m.ModelPath != \"\" { ... return m.ModelPath }`; `needsReload` compares `runner.Options.Runner` vs `req.opts.Runner` (NumCtx, NumBatch, UseMMap, NumGPU) and context-shift and returns true on mismatch. Modelfile docs: 'SYSTEM: the system message used in the template'; precedence of API system over Modelfile is well-established Ollama behaviour but not spelled out on the fetched page.",
+   "source_url": "https://raw.githubusercontent.com/ollama/ollama/main/server/sched.go",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Decides whether to keep config/ollama/Modelfile.* at all: baking prompts into six models is safe only if PARAMETERs match; sending system prompts from router/agents.yaml at request time is simpler, avoids prompt drift between the two copies, and enables self-improving prompts without `ollama create`.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Ollama exposes an Anthropic Messages-compatible endpoint at http://localhost:11434/v1/messages (streaming, system prompts, multi-turn, tools + tool results, thinking, base64 vision; NOT tool_choice, count_tokens, Batches, prompt caching, citations, PDF blocks). Claude Code can be pointed at a local model with ANTHROPIC_BASE_URL=http://localhost:11434 and ANTHROPIC_AUTH_TOKEN=ollama. llama-server also has its own /v1/messages endpoint (requires --jinja for tools).",
+   "evidence": "server/routes.go: `// Inference (Anthropic compatibility) r.POST(\"/v1/messages\", ... middleware.AnthropicMessagesMiddleware(lookupThinking), s.ChatHandler)`; docs/api/anthropic-compatibility.mdx: 'Set ANTHROPIC_BASE_URL=http://localhost:11434, ANTHROPIC_AUTH_TOKEN=ollama'; llama.cpp tools/server/README.md documents `/v1/messages` with `tools (which requires --jinja)`.",
+   "source_url": "https://github.com/ollama/ollama/blob/main/docs/api/anthropic-compatibility.mdx",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Ollama supports speculative decoding: a Modelfile `DRAFT` instruction attaches a draft model (passed to llama-server as `--spec-type draft-simple|draft-eagle3|draft-mtp --spec-draft-model <path> --spec-draft-n-max N`), models with embedded MTP tensors (e.g. qwen35/qwen35moe families) get MTP drafting automatically, and the `draft_num_predict` PARAMETER (default 4 for separate drafts; 0 disables) controls it. DRAFT is not supported for remote/cloud models.",
+   "evidence": "parser/parser.go: command list `\"from\", \"license\", \"template\", \"system\", \"adapter\", \"draft\", \"renderer\", \"parser\", \"parameter\", \"message\", \"requires\", or \"capability\"`; llm/llama_server.go `appendDraftArgs ... params = append(params, \"--spec-type\", draftType) ... \"--spec-draft-n-max\" ... \"--spec-draft-model\", draftModelPath`, `draftTypeMTP = \"draft-mtp\"`, `draftTypeEagle3 = \"draft-eagle3\"`; server/create.go `errRemoteDraftUnsupported = errors.New(\"DRAFT cannot be used with remote models\")`; modelfile.mdx `draft_num_predict | 4 for separate draft models`.",
+   "source_url": "https://raw.githubusercontent.com/ollama/ollama/main/parser/parser.go",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Ollama does NOT pass a MoE expert-offload flag (`--n-cpu-moe` / `--cpu-moe` / `-ot`) to llama-server; its only load-mode controls are `--load-mode none|dio` (mmap) and whatever `-ngl` auto-fit llama-server does itself. For an MoE model larger than VRAM (Qwen3-Coder-30B-A3B, 18.6 GB Q4_K_M) Ollama therefore offloads whole layers (attention included) to CPU, which is markedly slower than llama-server's expert-only offload.",
+   "evidence": "grep of llm/llama_server.go for `moe|override-tensor|n-cpu-moe|\"-ot\"` returned no launch argument; `appendLoadModeArgs` only emits `--load-mode dio` (Linux iGPU) or `--load-mode none`; the builder comment says `Build CLI flags — minimal set, let llama-server auto-detect the rest`. Community: 'raising llama.cpp's --n-cpu-moe parameter from 8 to 30 doubled token generation from 17 to 34 tok/s for Qwen3-35B-A3B on a 12GB card'; calculator page sample `-ngl all -ncmoe 22 -c 8192` for Qwen3-30B-A3B on 12 GB.",
+   "source_url": "https://aiweekly.co/alerts/qwen3-moe-cpu-expert-offload-doubles-decode-speed-on-12gb-vram",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "This is the single reason to run a direct llama-server (or llama-server router preset) alongside Ollama: if Ollama gained --n-cpu-moe passthrough, the stack could stay Ollama-only even for the MoE coder.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "llama.cpp llama-server (latest tag b11869, 24 Oct 2026; Windows builds `llama-b11869-bin-win-cuda-12.4-x64.zip` and `-cuda-13.4-x64.zip`, each needing the matching `cudart-llama-bin-win-cuda-*.zip` DLLs) has: `--fit on` by default with `-ngl auto` (adjusts unset args to fit device memory, `--fit-target` 1024 MiB margin, `--fit-ctx` 4096 minimum); router/multi-model mode (start with no -m, `--models-preset presets.ini` or `--models-dir`, `--models-max` default 4, autoload on, `POST /models/load|unload`, `--sleep-idle-seconds`); speculative decoding (`--spec-type draft-simple|ngram-mod`, `--spec-draft-model`, `-ngld`, `--spec-draft-n-max` default 3; the old --draft-max/--draft-min were removed); `-np -1` auto slots, `--kv-unified-per-slot`; `--cache-type-k/-v` (f16 default), `--flash-attn auto`; OpenAI /v1/chat/completions, /v1/responses, /v1/embeddings, `response_format json_schema`, `--jinja` on by default for tool calling.",
+   "evidence": "tools/server/README.md: `-fit, --fit [on|off]: whether to adjust unset arguments to fit in device memory ('on' or 'off', default: 'on')`; `-ngl ... 'auto', or 'all' (default: auto)`; `--models-max N: for router server, maximum number of models to load simultaneously (default: 4, 0 = unlimited)`; `--spec-draft-n-max N: number of tokens to draft (default: 3)`; `--draft-max ... the argument has been removed`; releases page lists b11869 assets.",
+   "source_url": "https://raw.githubusercontent.com/ggml-org/llama.cpp/master/tools/server/README.md",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Draft-model speculative decoding is NOT a guaranteed win on Ampere: a llama.cpp PR test with Qwen2.5-Coder-32B + 0.5B draft on an RTX 3090 went from 34 to 31 tok/s (slower), while Eagle3/MTP heads and high-acceptance code completion report 2-3x. On a 12 GB card the draft model also costs VRAM (0.6B Q4 ~0.5 GB + its KV). Treat speculative decoding as an opt-in benchmark, not a default.",
+   "evidence": "Search summary of llama.cpp PR #10455: 'the 3090 went from 34 tps eval to 31 tps with the draft model'; blog: 'Qwen3-14B at Q4_K_M: ~13 tok/s rose to about 35 tok/s with an Eagle3 draft'.",
+   "source_url": "https://github.com/ggerganov/llama.cpp/pull/10455",
+   "confidence": "medium",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": ""
+  },
+  {
+   "claim": "Windows: the official Ollama Windows install is a native app (no admin, user-profile install, API on localhost:11434, NVIDIA driver >= 551.61, env vars set as USER environment variables then quit tray app and relaunch; models in %HOMEPATH%\\.ollama, relocatable via OLLAMA_MODELS; logs in %LOCALAPPDATA%\\Ollama\\server.log). The Ollama Docker image supports GPU on Windows only via Docker Desktop's WSL2 backend plus nvidia-container-toolkit; Ollama's docker/gpu docs give no Windows-specific guidance. Community guides consistently recommend native Windows for a single-GPU desktop and report WSL2/Docker-specific failure modes (GPU vanishing after driver updates, need for `wsl --shutdown`, WSL VM restart loops when a GPU model loads at boot, port 11434 conflicts when both are installed).",
+   "evidence": "docs/windows.mdx: 'NVIDIA: driver version 551.61 or newer', 'quit the tray app and relaunch it from the Start menu'; docs/faq.mdx: 'The Ollama Docker container can be configured with GPU acceleration in Linux or Windows (with WSL2)'; guides: 'Do not install a Linux NVIDIA driver inside WSL2 ... sends you straight to CPU', 'Ollama systemd service with Restart=always can trigger repeated WSL2 VM terminations when it loads a GPU model at boot', 'running both can produce conflicts (address already in use)'.",
+   "source_url": "https://github.com/ollama/ollama/blob/main/docs/windows.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "The current infrastructure/docker-compose.yml runs Ollama inside a container; the recommendation is to remove that service, run Ollama natively, and point router/Open WebUI at host.docker.internal:11434 (with OLLAMA_HOST=0.0.0.0 only if needed).",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Ollama Cloud: cloud models are addressed by name through the local daemon (or directly at https://ollama.com with OLLAMA_API_KEY as a Bearer token), work with both the OpenAI- and Anthropic-compatible clients, are 'in preview', and Ollama states prompts are not used to train models. Plans (third-party summary, unverified because ollama.com/pricing is unreachable from this session): Free $0, Pro $20/mo, Max $100/mo, metered by GPU time with 5-hour session and 7-day weekly limits. Set OLLAMA_NO_CLOUD=1 to guarantee local-only operation.",
+   "evidence": "docs/cloud.mdx: 'Create a key at ollama.com/settings/keys and set it as OLLAMA_API_KEY', 'We do not use them to train models'; envconfig: `\"OLLAMA_NO_CLOUD\": Disable Ollama cloud features (remote inference and web search)`; serverman.co.uk summary of plans.",
+   "source_url": "https://github.com/ollama/ollama/blob/main/docs/cloud.mdx",
+   "confidence": "medium",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "KV-cache cost per token (K+V, all layers) derived from architecture: Qwen3-14B (40 layers, 8 KV heads, head_dim 128) = 160 KiB f16 / 80 KiB q8_0 / 40 KiB q4_0 -> 16k ctx: 2.5 / 1.25 / 0.63 GiB; 32k: 5.0 / 2.5 / 1.25 GiB. Qwen3-Coder-30B-A3B (48 layers, 4 KV heads, head_dim 128) = 96 KiB f16 / 48 KiB q8_0 -> 16k: 1.5 / 0.75 GiB; 32k: 3.0 / 1.5 GiB; 64k: 6.0 / 3.0 GiB. gpt-oss-20b (24 layers, 8 KV heads, head_dim 64, alternating 128-token sliding-window and full layers) = 48 KiB f16 if every layer kept full context, but with llama.cpp's SWA-aware cache only the 12 full layers scale, ~24 KiB f16 / 12 KiB q8_0 -> 32k: ~0.75 / ~0.4 GiB (1.5 GiB f16 if --swa-full). Formula: 2 * layers * kv_heads * head_dim * bytes.",
+   "evidence": "gpt-oss reference config (gpt_oss/torch/model.py): `head_dim: int = 64, num_attention_heads: int = 64, num_key_value_heads: int = 8, sliding_window: int = 128`; NVIDIA NeMo docs: GPT-OSS 20B has 24 decoder layers, '64 query heads, 8 key-value groups (GQA), KV channels: 64', 'window size of 128 tokens with alternating full/windowed attention'. Qwen3-14B 40L/8KV/128 and Qwen3-30B-A3B 48L/4KV/128 are the published Qwen3 tech-report values (HF config.json and arXiv unreachable from this sandbox; a sibling Qwen3-8B config seen in search confirms head_dim 128 / 8 KV heads for the dense family).",
+   "source_url": "https://raw.githubusercontent.com/openai/gpt-oss/main/gpt_oss/torch/model.py",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "These budgets determine the num_ctx per model and whether a second small model can be co-resident; if the Qwen3 layer/KV-head counts were different by 2x the 16k vs 32k verdicts for the 14B would flip.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Weight footprints: Qwen3-14B Q4_K_M = 8.38-9.00 GB depending on quantizer; Qwen3-Coder-30B-A3B-Instruct Q4_K_M = 18.6 GB; gpt-oss-20b MXFP4 is '21B parameters with 3.6B active', 'runs within 16GB of memory', GGUF roughly 12-13 GB (exact size unverified). On an RTX 3060 12 GB with Windows WDDM holding ~0.5-1 GiB, usable VRAM is roughly 10.5-11 GiB, so: Qwen3-14B Q4_K_M + 16k q8_0 KV + ~0.5 GiB compute buffers ~= 10.3 GiB FITS (tight; use OLLAMA_GPU_OVERHEAD or a Q4_K_S quant for margin); 32k does NOT fit without q4_0 KV; Qwen3-Coder-30B-A3B cannot fit its weights at any useful quant and must use expert CPU offload (requires system RAM >= ~20 GB free, i.e. a 32-64 GB machine); gpt-oss-20b spills ~1-2 GB to CPU under Ollama with estimated low-to-mid-teens tok/s.",
+   "evidence": "HF listings via search: Qwen3-14B GGUF Q4_K_M '9.00GB' (6block) / '8.38 GB' (bartowski-derived comparison); 'size of remote file: 18.6 GB' for qwen3-coder-30b-a3b-instruct-q4_k_m.gguf; gpt-oss README: 'gpt-oss-20b ... 21B parameters with 3.6B active parameters', 'within 16GB of memory'; willitrunai estimate for 3060 12GB '~15.2 tok/s with heavy offload'; Lemmy user with 3060/64 GB: 'partially offloads and is reasonably fast'.",
+   "source_url": "https://raw.githubusercontent.com/openai/gpt-oss/main/README.md",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "Selects the primary resident model: a dense 14B at 16k (Ollama-only, simplest) versus the MoE coder at 32-64k via llama-server expert offload (faster and more context but needs RAM and a second engine).",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Real-world 12 GB MoE throughput with llama-server expert offload: Qwen3.6-35B-A3B Q4_K_M on an RTX 3060 12GB reported 47 tok/s short-prompt and 45 tok/s at 12k context using expert offload; another report 17 -> 34 tok/s by moving more experts to CPU (--n-cpu-moe 8 -> 30). Dense models that spill layers to CPU typically drop to 5-15 tok/s. Numbers are anecdotal and depend on DDR bandwidth; must be benchmarked on the owner's machine with llama-bench.",
+   "evidence": "evezone/aiindigo summaries: '47 tokens/s on a short question, 45 with 12,000 tokens of context, using llama.cpp's expert-offload option'; aiweekly: '--n-cpu-moe ... from 8 to 30 doubled token generation from 17 to 34 tok/s ... on a 12GB card'; bestllmfor guide: offloading 'significantly reduces throughput to 5-15 tokens per second'.",
+   "source_url": "https://evezone.evetech.co.za/performance-pulse/rtx-3060-for-large-language-model-inference-professional-benchmark-2026",
+   "confidence": "low",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026"
+  },
+  {
+   "claim": "Newer Qwen3.5/3.6 hybrid-attention (Gated DeltaNet + full attention) models have much smaller KV caches and embedded MTP draft heads, but Ollama forces num_parallel=1 for the qwen35/qwen35moe/qwen3next (and qwen3vl, lfm2, nemotron_h) families because parallel slots are unsafe for those architectures. qwen3.5:9b (~5.3 GiB at 4-bit) is widely cited as the best general 12 GB fit in 2026; for coding, sources still split between qwen2.5-coder:14b, qwen3-coder:30b (MoE, offload) and qwen3.6:35b-a3b.",
+   "evidence": "sched.go: `if slices.Contains([]string{\"mllama\", \"qwen3vl\", \"qwen3vlmoe\", \"qwen35\", \"qwen35moe\", \"qwen3next\", \"lfm2\", ...}, req.model.Config.ModelFamily) && numParallel != 1 { numParallel = 1; slog.Warn(\"model architecture does not currently support parallel requests\"...`; llm/llama_server.go `hasLegacyQwenMTPDraft ... case \"qwen35\", \"qwen35moe\"`; localaimaster (Jul 2026): 'qwen3.5:9b ... 4-bit build is about 5.3 GiB'.",
+   "source_url": "https://raw.githubusercontent.com/ollama/ollama/main/server/sched.go",
+   "confidence": "medium",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "vLLM is a poor fit for a single 12 GB consumer GPU: Linux/WSL2 only (Docker Model Runner's Windows path also goes through WSL2 and needs compute capability >= 8.0), it pre-allocates a fixed `--gpu-memory-utilization` fraction (default 0.9+, fails to start when other processes hold VRAM), GGUF support is only partial (AWQ/GPTQ/FP8 preferred), and its PagedAttention/continuous-batching advantages only pay off with many concurrent users and a large KV pool. SGLang is similar: Linux-only CUDA kernels (sgl-kernel/flashinfer), NVIDIA containers target H100/A100, no Windows support.",
+   "evidence": "Guide: 'vLLM offers little to a solo user on an 8 to 12 GB GPU, since there isn't enough memory for a shared cache'; WSL2 user with small card 'hit a startup error because free memory was below the default 0.92 utilization target'; Docker blog: vLLM on Windows 'requires compute capability 8.0 or higher'; mini-sglang docs: 'Windows and macOS are not supported due to dependencies on Linux-specific CUDA kernels'.",
+   "source_url": "https://www.docker.com/blog/docker-model-runner-vllm-windows",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026"
+  },
+  {
+   "claim": "TabbyAPI/exllamav3 (EXL3) is slightly more VRAM-efficient than llama.cpp when a model fits entirely in VRAM, but has no CPU offload (so no MoE-over-VRAM option), is optimized for Ada/Blackwell more than Ampere, and in the only directly comparable RTX 3060 12GB report llama.cpp generated faster (36 vs 23 tok/s on a Gemma 12B quant at 11k context, with EXL3 using ~6.9-7.2 GB vs 7.5 GB).",
+   "evidence": "HF discussion by a 3060 12GB user: 'EXL3 used about 6.9-7.2GB of VRAM at 11k context. llama.cpp used about 7.5GB', 'about 36 tokens/s versus 23 for EXL3'; community: 'lacks CPU offloading, which matters for MoE models'.",
+   "source_url": "https://huggingface.co/turboderp/gemma-4-12B-it-exl3/discussions/1",
+   "confidence": "medium",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026"
+  },
+  {
+   "claim": "LM Studio 0.4.x (0.4.0 Jan 2026 introduced `llmster`, a headless daemon; sources cite 0.4.26 as current on 13 Oct 2026) serves an OpenAI-compatible API on localhost:1234 with CUDA/Vulkan/CPU backends on Windows and JIT model loading; Jan serves an OpenAI-compatible API on 127.0.0.1:1337 backed by llama.cpp with NVIDIA/AMD/Intel GPU support on Windows. Both are GUI-first, both are another llama.cpp wrapper, neither adds an Anthropic endpoint or a scheduler beyond what Ollama + llama-server provide; LM Studio is proprietary.",
+   "evidence": "LM Studio docs: 'The 0.4.0 release in January 2026 introduced llmster, a headless daemon', endpoint 'http://localhost:1234/v1', backends 'CPU, CUDA, Vulkan'; Jan README: '**OpenAI-Compatible API**: Local server at `localhost:1337`', '**Windows**: 10+ with GPU support for NVIDIA/AMD/Intel Arc', built on llama.cpp.",
+   "source_url": "https://raw.githubusercontent.com/janhq/jan/dev/README.md",
+   "confidence": "medium",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10"
+  },
+  {
+   "claim": "Ollama's scheduler has a one-shot OOM recovery path: if llama-server crashes at load with an out-of-memory error, Ollama first retries once with a reduced automatic num_ctx/num_batch, then evicts all other models and retries once more, then fails the request. Automatic batch size scales 256-2048 with headroom. This means an oversized OLLAMA_CONTEXT_LENGTH degrades gracefully only when num_ctx was automatic; an explicit num_ctx that does not fit will fail or spill to CPU.",
+   "evidence": "sched.go: `slog.Warn(\"llama-server load failed; reducing automatic context and retrying once\"...)`, `slog.Warn(\"llama-server load failed; evicting all other models and retrying once\")`; constants `llamaServerGenerationBatchConstrained = 256 ... Large = 2048`.",
+   "source_url": "https://raw.githubusercontent.com/ollama/ollama/main/server/sched.go",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-24"
+  }
+ ],
+ "recommendations": [
+  "ENGINE: Run Ollama (>= v0.40.11) as the NATIVE Windows app, not in Docker. Remove the `ollama` service from infrastructure/docker-compose.yml; have `router` and `open-webui` reach it at http://host.docker.internal:11434 (Docker Desktop resolves this by default; only set OLLAMA_HOST=0.0.0.0:11434 if host.docker.internal fails, and then firewall port 11434). Keep llama-server (Windows build b11869, cuda-12.4 or cuda-13.4 zip + matching cudart zip) as an OPTIONAL second backend used only for the MoE coder with expert offload; expose it as a second OpenAI-compatible upstream in router/main.py.",
+  "OLLAMA ENV VARS (Windows user environment variables, then quit tray app and relaunch): OLLAMA_FLASH_ATTENTION=1; OLLAMA_KV_CACHE_TYPE=q8_0; OLLAMA_NUM_PARALLEL=1; OLLAMA_MAX_LOADED_MODELS=2 (primary + embedding/helper; use 1 if thrash is observed); OLLAMA_MAX_QUEUE=32 (fail fast with 503 so the router can fall back to cloud instead of queueing 512 deep); OLLAMA_CONTEXT_LENGTH=16384 (overrides the 4096 VRAM-tier default; raise per-model via `num_ctx` in the router for MoE models); OLLAMA_KEEP_ALIVE=30m (router sends keep_alive=-1 on the primary model so it never unloads during a session); OLLAMA_GPU_OVERHEAD=536870912 (reserve 0.5 GiB for the Windows desktop/WDDM so auto-fit does not spill); OLLAMA_NO_CLOUD=1 unless Ollama Cloud is an intended cloud tier. Do not set OLLAMA_NUM_PARALLEL>1 on 12 GB: each extra slot multiplies KV memory by num_ctx.",
+  "MODEL RESIDENCY PLAN (12 GB, single large model resident at a time): Tier A 'primary coder' pinned with keep_alive=-1 — Option 1 (simplest, Ollama-only): qwen3:14b Q4_K_M at num_ctx=16384 (~10.3 GiB total; 32k requires OLLAMA_KV_CACHE_TYPE=q4_0 or a Q4_K_S quant). Option 2 (better quality/speed for code, needs >=32 GB RAM): Qwen3-Coder-30B-A3B Q4_K_M via llama-server `-ngl all --n-cpu-moe 28..36 -c 32768..65536 -fa on -ctk q8_0 -ctv q8_0 --jinja`, tuning --n-cpu-moe down until VRAM is ~1 GiB from full; KV is only 48 KiB/token at q8_0 so 64k is affordable. Tier B 'always-on helpers' that co-reside with either option: an embedding model (nomic-embed-text / qwen3-embedding:0.6b, <1 GiB) for RAG, and optionally a 1.7B-4B instruct model for classification/routing/commit messages (set keep_alive=-1 as well). Everything else (gpt-oss:20b, 32B dense, Qwen3.6-27B) is on-demand only and should be routed to cloud or Ollama Cloud rather than evicting the primary.",
+  "CONCURRENCY POLICY IN THE ROUTER: Treat the local GPU as one serialized lane per model. Send all six department agents to the SAME primary model (differentiated by system prompt) so Ollama's internal semaphore serializes them without reloads; never let two agents target two different >5 GB local models in the same session (each switch costs a full reload). Implement a router-side asyncio.Semaphore(1) per local upstream plus a timeout: if the lane is busy for >N seconds or Ollama returns 503 (max queue), escalate that request to the cloud tier. Keep parallelism for the cloud tier, where it is free.",
+  "SYSTEM PROMPTS: Collapse the duplicated prompts in config/ollama/Modelfile.* and router/agents.yaml into one source of truth (agents.yaml), sent as the API `system` message at request time. If Modelfile-derived models are kept for Open WebUI convenience, give them IDENTICAL PARAMETER values (num_ctx etc.) so they share one loaded runner (Ollama keys runners by GGUF blob path); any PARAMETER difference forces a reload on each agent switch. Request-time prompts are also what makes the 'self-developing' requirement feasible: the router can rewrite prompts without `ollama create`.",
+  "CONTEXT AND MEMORY SAFETY: Always pass `options.num_ctx` explicitly from the router (16384 for the 14B dense primary; 32768-65536 for an A3B MoE on llama-server) and `keep_alive`. Monitor `ollama ps` (shows the CPU/GPU split) and %LOCALAPPDATA%\\Ollama\\server.log for 'predicted to exceed available memory, evicting' and 'reducing automatic context' lines, which indicate thrash or spill.",
+  "SPECULATIVE DECODING: Benchmark before adopting. For the 14B dense primary try `DRAFT qwen3:0.6b` in a Modelfile with `PARAMETER draft_num_predict 4` and compare tok/s with llama-bench; drop it if there is no >20% gain (an Ampere test with a 0.5B draft was slower). Prefer models with embedded MTP heads (Qwen3.5/3.6 families) where Ollama enables drafting automatically, remembering those families are forced to num_parallel=1.",
+  "CLAUDE CODE / ANTHROPIC-COMPAT: For cheap local experiments with Claude Code, point it at Ollama with ANTHROPIC_BASE_URL=http://localhost:11434 and ANTHROPIC_AUTH_TOKEN=ollama (tools, streaming, thinking supported; prompt caching and tool_choice are not), or at the router if it implements /v1/messages passthrough. For the production tiering, keep real Anthropic models (claude-haiku-4-5-20251001 for cheap cloud, claude-sonnet-5-5 / claude-opus-5-5 for heavy work) behind the router and replace the stale claude-sonnet-4-6 / claude-opus-4-8 IDs.",
+  "DO NOT ADOPT: vLLM, SGLang, TabbyAPI/exllamav3 on this hardware (Linux-only or no CPU offload, pre-allocated KV pools, tuned for 24-80 GB cards). LM Studio and Jan are acceptable personal GUIs but add a second llama.cpp daemon competing for the same 12 GB; if used, give them a distinct port and never run them concurrently with the Ollama primary model.",
+  "VERIFY ON THE OWNER'S MACHINE (fast, <30 min): (1) `nvidia-smi` idle VRAM to learn the true WDDM overhead; (2) load qwen3:14b with num_ctx 16384 and confirm `ollama ps` shows 100% GPU; (3) llama-bench Qwen3-Coder-30B-A3B Q4_K_M with --n-cpu-moe 24/30/36 at -c 32768 to pick the offload split; (4) fire two concurrent requests from two agents and observe serialization latency; (5) record system RAM size since Option 2 depends on it."
+ ],
+ "open_questions": [
+  "Exact config.json values for Qwen3-14B (40 layers / 8 KV heads / head_dim 128) and Qwen3-Coder-30B-A3B (48 / 4 / 128) could not be fetched (huggingface.co, hf-mirror, modelscope and arxiv are blocked by the sandbox proxy); the KV numbers assume the published Qwen3 tech-report values and should be confirmed with `ollama show <model>` (prints block count, KV heads, head dim) on the owner's machine.",
+  "Exact GGUF size of gpt-oss-20b MXFP4 (believed ~12-13 GB) and its real tok/s on a 3060 with partial offload are unverified; only estimates (~15 tok/s) were found.",
+  "Whether Ollama passes `num_gpu` through to llama-server `-ngl` (and whether the owner can therefore force partial offload) was not verified in llm/llama_server.go; no `--n-cpu-moe` passthrough was found, but a future release could add it, which would remove the need for a direct llama-server.",
+  "Ollama Cloud plan pricing and rate limits (Free / Pro $20 / Max $100, GPU-time metering) come from a third-party summary; ollama.com/pricing was unreachable.",
+  "How much system RAM the owner actually has (32 vs 64 GB) and its speed (DDR4 vs DDR5) determine whether the Qwen3-Coder-30B-A3B expert-offload option is viable and how fast it decodes.",
+  "Whether llama.cpp's SWA-aware KV cache (which makes gpt-oss-20b's sliding-window layers cheap) is enabled in Ollama's launch (no `--swa-full` seen, so presumably yes) was not directly confirmed.",
+  "Windows TDR/driver-reset behaviour during long sessions (the DESIGN.md 'thermal gating' concern) was not researched here; the recommendation to run natively removes the WSL2 layer but does not address GPU driver resets."
+ ]
+}
