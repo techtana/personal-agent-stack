@@ -37,11 +37,12 @@ def build_config(profile: dict) -> str:
     if m.get("small"):
         add("local-small", _ollama(m["small"], base, num_ctx=m["small_num_ctx"], keep_alive="30m"),
             {**LOCAL_INFO, "max_input_tokens": m["small_num_ctx"], "max_output_tokens": 8192})
+    primary_opts = m.get("primary_options") or {}
     if m.get("primary"):
-        add("local-primary", _ollama(m["primary"], base, num_ctx=m["primary_num_ctx"], keep_alive=-1),
+        add("local-primary", _ollama(m["primary"], base, num_ctx=m["primary_num_ctx"], keep_alive=-1, **primary_opts),
             {**LOCAL_INFO, "max_input_tokens": m["primary_num_ctx"], "max_output_tokens": 8192})
     if m.get("reviewer"):
-        add("local-reviewer", _ollama(m["reviewer"], base, num_ctx=m["primary_num_ctx"], keep_alive="10m"),
+        add("local-reviewer", _ollama(m["reviewer"], base, num_ctx=m["primary_num_ctx"], keep_alive="10m", **(m.get("reviewer_options") or {})),
             {**LOCAL_INFO, "max_input_tokens": m["primary_num_ctx"], "max_output_tokens": 8192})
     if cloud:
         for tier, model in cm.items():
@@ -59,7 +60,8 @@ def build_config(profile: dict) -> str:
         aid = a["id"]
         r = a.get("routing") or {}
         if m.get("primary"):
-            add(f"{aid}-local", _ollama(m["primary"], base, num_ctx=m["primary_num_ctx"], keep_alive=-1, **(a.get("local") or {})),
+            # Same model and load options as local-primary so Ollama reuses one runner instead of reloading per department.
+            add(f"{aid}-local", _ollama(m["primary"], base, num_ctx=m["primary_num_ctx"], keep_alive=-1, **primary_opts, **(a.get("local") or {})),
                 {**LOCAL_INFO, "max_input_tokens": m["primary_num_ctx"], "max_output_tokens": 8192})
         if cloud:
             target = r.get("complex", "cloud-default")

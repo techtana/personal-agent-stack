@@ -30,6 +30,10 @@ hardware_classes:
     primary_num_ctx: 32768
     small_num_ctx: 16384
     max_loaded_models: 2
+    # Ollama turns mmap off by default on Windows+CUDA, which copies the ~12.6 GB of CPU-side expert weights into
+    # anonymous memory. With desktop apps open that forces paging and the load times out. Keep them file-backed.
+    primary_options: {use_mmap: true}
+    reviewer_options: {use_mmap: true}
   - name: dense-12gb-16ram
     when: {vram_mib_min: 10000}
     models: {fim: qwen2.5-coder:1.5b-base, embed: nomic-embed-text, small: qwen3.5:9b, primary: qwen3.5:9b, reviewer: null}
@@ -66,6 +70,7 @@ ollama_env:
   OLLAMA_CONTEXT_LENGTH: "{auto}"
   OLLAMA_KEEP_ALIVE: "30m"
   OLLAMA_GPU_OVERHEAD: "536870912"
+  OLLAMA_LOAD_TIMEOUT: "15m"   # default 5m is too short for a 22 GB MoE read from a USB SSD under memory pressure
   # LLAMA_ARG_N_CPU_MOE: "24"   # optional manual expert-offload override passed through to llama-server (see bench)
 
 ports:

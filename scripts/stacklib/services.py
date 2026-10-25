@@ -105,17 +105,47 @@ def _pid_file(profile: dict, svc: str) -> Path:
     return run_dir(profile) / "pids" / f"{svc}.pid"
 
 
-def _alive(pid: int) -> bool:
+# Image names a service's recorded pid may have. Pids are reused, so a pid file is trusted (and killed)
+# only when the live process still has one of these names. The recorded pid is the launcher (uv tool shim or
+# `uv run`), never a bare python, so unrelated Python processes can never match.
+EXPECTED_IMAGES = {
+    "phoenix": ("phoenix",),
+    "litellm": ("litellm",),
+    "orchestrator": ("uv",),
+    "open_webui": ("open-webui",),
+}
+# Lets a started service outlive the shell that launched it when that shell runs inside a job object
+# (for example an agent's tool shell). Windows refuses it when the job forbids breakaway; start() then retries without.
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+
+
+def _proc_name(pid: int) -> str | None:
+    """Lower-case executable name of a live process, or None when no such process exists."""
     if not pid:
-        return False
+        return None
     if IS_WINDOWS:
-        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
-        return str(pid) in out
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], capture_output=True, text=True).stdout.strip()
+        if not out.startswith('"'):
+            return None  # "INFO: No tasks are running which match the specified criteria."
+        return out.split('","', 1)[0].strip('"').lower().removesuffix(".exe")
     try:
-        os.kill(pid, 0)
-        return True
+        return Path(f"/proc/{pid}/comm").read_text().strip().lower()
     except OSError:
-        return False
+        out = subprocess.run(["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True).stdout.strip()
+        return Path(out).name.lower() if out else None
+
+
+def _owned(pid: int, svc: str) -> bool:
+    """True only when pid is alive AND still looks like this service's process."""
+    name = _proc_name(pid)
+    return bool(name) and any(name.startswith(img) for img in EXPECTED_IMAGES.get(svc, ()))
+
+
+def _read_pid(pf: Path) -> int:
+    try:
+        return int(pf.read_text().strip() or 0)
+    except (OSError, ValueError):
+        return 0
 
 
 def start(profile: dict, services: list[str] | None = None) -> None:
@@ -125,9 +155,12 @@ def start(profile: dict, services: list[str] | None = None) -> None:
             warn(f"{svc}: not configured on this profile")
             continue
         pf = _pid_file(profile, svc)
-        if pf.exists() and _alive(int(pf.read_text() or 0)):
-            info(f"{svc}: already running (pid {pf.read_text().strip()})")
-            continue
+        if pf.exists():
+            pid = _read_pid(pf)
+            if _owned(pid, svc):
+                info(f"{svc}: already running (pid {pid})")
+                continue
+            pf.unlink(missing_ok=True)  # stale: the process is gone or the pid now belongs to something else
         if _http_ok(health_url(profile, svc)):
             info(f"{svc}: something already answers on its port; not starting a second copy")
             continue
@@ -135,11 +168,19 @@ def start(profile: dict, services: list[str] | None = None) -> None:
         log = open(run_dir(profile) / "logs" / f"{svc}.log", "ab")
         kwargs: dict = {"cwd": c["cwd"], "env": c["env"], "stdout": log, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL}
         if IS_WINDOWS:
-            kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB
         else:
             kwargs["start_new_session"] = True
         try:
-            proc = subprocess.Popen(c["cmd"], **kwargs)
+            try:
+                proc = subprocess.Popen(c["cmd"], **kwargs)
+            except PermissionError:
+                if not IS_WINDOWS:
+                    raise
+                # The launching shell's job forbids breakaway; the service will stop when that shell's job closes.
+                kwargs["creationflags"] &= ~CREATE_BREAKAWAY_FROM_JOB
+                proc = subprocess.Popen(c["cmd"], **kwargs)
+                warn(f"{svc}: could not leave the launching shell's job; it stops when that shell exits")
         except FileNotFoundError:
             warn(f"{svc}: executable not found ({c['cmd'][0]}); run `uv run scripts/stack.py setup` to install tools")
             continue
@@ -165,8 +206,13 @@ def stop(profile: dict, services: list[str] | None = None) -> None:
         pf = _pid_file(profile, svc)
         if not pf.exists():
             continue
-        pid = int(pf.read_text() or 0)
-        if pid and _alive(pid):
+        pid = _read_pid(pf)
+        if pid and not _owned(pid, svc):
+            if _proc_name(pid):
+                warn(f"{svc}: pid {pid} now belongs to '{_proc_name(pid)}', not this service; leaving it alone")
+            pf.unlink(missing_ok=True)
+            continue
+        if pid:
             if IS_WINDOWS:
                 subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
             else:
@@ -182,11 +228,11 @@ def status(profile: dict) -> list[dict]:
     rows = []
     for svc in ["ollama", *SERVICE_ORDER]:
         pf = _pid_file(profile, svc)
-        pid = int(pf.read_text() or 0) if pf.exists() else None
+        pid = _read_pid(pf) if pf.exists() else 0
         rows.append(
             {
                 "service": svc,
-                "pid": pid if pid and _alive(pid) else None,
+                "pid": pid if pid and _owned(pid, svc) else None,
                 "healthy": _http_ok(health_url(profile, svc)),
                 "url": health_url(profile, svc) if svc == "ollama" else health_url(profile, svc).rsplit("/", 1)[0],
             }

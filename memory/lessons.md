@@ -11,3 +11,7 @@
 - [2026-10-24] The handoff assumed Ollama, Docker and Open WebUI were installed; none were. Always run `stack.py doctor` before trusting a handoff's environment claims.
 - [2026-10-24] Claude Code reads AGENTS.md natively only when no CLAUDE.md exists; a CLAUDE.md that `@AGENTS.md`-imports it keeps both tools and the memory files in context.
 - [2026-10-24] In `.mcp.json`, env var names that look like credentials (`*_API_KEY`, `*_TOKEN`) read as empty; name the orchestrator bearer `ORCHESTRATOR_BEARER`.
+- [2026-10-25] Ollama 0.40 disables mmap by default on Windows+CUDA ("windows_cuda" in server/sched.go), copying CPU-side MoE experts into anonymous RAM. With desktop apps holding ~20 GB, the 35B load paged and hit the 5-minute `OLLAMA_LOAD_TIMEOUT` (HTTP 500). Send `use_mmap: true` per request (LiteLLM forwards it into Ollama `options`) and raise the timeout.
+- [2026-10-25] On this box the MoE primary decodes at ~25 tok/s versus ~52 for the dense 9B, and leaves ~1 GB of RAM available instead of ~18 GB. Benchmark both before choosing; RAM pressure, not VRAM, is the binding constraint.
+- [2026-10-25] Processes started from an agent's tool shell die when that session ends (job object). Launch services with CREATE_BREAKAWAY_FROM_JOB and the Ollama tray app through explorer.exe.
+- [2026-10-25] Windows reuses pids: never kill or trust a pid file without checking the process image name.

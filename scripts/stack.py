@@ -151,12 +151,17 @@ def cmd_status(a):
 def cmd_bench(a):
     p = prof.resolve_profile()
     base = f"http://127.0.0.1:{p['ports']['ollama']}"
-    for model in a.model or [p["models"].get("primary")]:
+    m = p["models"]
+    for model in a.model or [m.get("primary")]:
         if not model:
             die("no primary model in profile; pass --model")
-        ctx = a.num_ctx or p["models"]["primary_num_ctx"] or 16384
-        info(f"bench: {model} num_ctx={ctx} (loading may take a minute)")
-        print(json.dumps(ollama.bench(base, model, ctx, num_predict=a.tokens, runs=a.runs), indent=2))
+        ctx = a.num_ctx or m["primary_num_ctx"] or 16384
+        # Benchmark with the same load options the gateway uses for this model, unless overridden.
+        opts = dict(m.get("primary_options") or {}) if model == m.get("primary") else dict(m.get("reviewer_options") or {}) if model == m.get("reviewer") else {}
+        if a.use_mmap != "profile":
+            opts["use_mmap"] = a.use_mmap == "true"
+        info(f"bench: {model} num_ctx={ctx} options={opts} (loading may take minutes)")
+        print(json.dumps(ollama.bench(base, model, ctx, num_predict=a.tokens, runs=a.runs, options=opts), indent=2))
 
 
 def cmd_smoke(a):
@@ -192,7 +197,7 @@ def main(argv=None):
     s = sub.add_parser("up"); s.add_argument("services", nargs="*"); s.add_argument("--wait", type=float, default=150); s.set_defaults(f=cmd_up)
     s = sub.add_parser("down"); s.add_argument("services", nargs="*"); s.set_defaults(f=cmd_down)
     s = sub.add_parser("status"); s.set_defaults(f=cmd_status)
-    s = sub.add_parser("bench"); s.add_argument("--model", action="append"); s.add_argument("--num-ctx", type=int); s.add_argument("--tokens", type=int, default=256); s.add_argument("--runs", type=int, default=1); s.set_defaults(f=cmd_bench)
+    s = sub.add_parser("bench"); s.add_argument("--model", action="append"); s.add_argument("--num-ctx", type=int); s.add_argument("--tokens", type=int, default=256); s.add_argument("--runs", type=int, default=1); s.add_argument("--use-mmap", choices=["profile", "true", "false"], default="profile"); s.set_defaults(f=cmd_bench)
     s = sub.add_parser("smoke"); s.add_argument("--dept", default="docs"); s.add_argument("--skip-mcp", action="store_true"); s.set_defaults(f=cmd_smoke)
     s = sub.add_parser("claude-env"); s.add_argument("--shell", choices=["powershell", "bash"], default="bash"); s.set_defaults(f=cmd_claude_env)
     s = sub.add_parser("why-routed"); s.add_argument("--last", type=int, default=10); s.add_argument("--days", type=int, default=7); s.set_defaults(f=cmd_why_routed)

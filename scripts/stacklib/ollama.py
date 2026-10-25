@@ -65,7 +65,9 @@ def restart(base: str) -> None:
         time.sleep(1.5)
         app = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama app.exe"
         if app.exists():
-            subprocess.Popen([str(app)], creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP, close_fds=True)
+            # Launch through Explorer so the tray app becomes a normal desktop process. Started directly, it would
+            # stay inside the launching shell's job and die with it (seen when an agent's tool shell exits).
+            subprocess.run(["explorer.exe", str(app)], check=False)
         else:
             warn(f"Ollama app not found at {app}; start it from the Start menu")
     else:
@@ -110,9 +112,11 @@ BENCH_PROMPT = (
 )
 
 
-def bench(base: str, model: str, num_ctx: int, num_predict: int = 256, runs: int = 1) -> dict:
-    """Load a model, generate, and report tok/s plus the GPU/CPU split reported by /api/ps."""
+def bench(base: str, model: str, num_ctx: int, num_predict: int = 256, runs: int = 1, options: dict | None = None) -> dict:
+    """Load a model, generate, and report tok/s plus the GPU/CPU split reported by /api/ps.
+    `options` are extra Ollama request options (e.g. use_mmap) applied on top of num_ctx/num_predict."""
     results = []
+    opts = {"num_ctx": num_ctx, "num_predict": num_predict, "temperature": 0.2, **(options or {})}
     for i in range(runs):
         t0 = time.time()
         r = api(
@@ -122,7 +126,7 @@ def bench(base: str, model: str, num_ctx: int, num_predict: int = 256, runs: int
                 "model": model,
                 "stream": False,
                 "messages": [{"role": "user", "content": BENCH_PROMPT}],
-                "options": {"num_ctx": num_ctx, "num_predict": num_predict, "temperature": 0.2},
+                "options": opts,
                 "keep_alive": "10m",
             },
             timeout=1800,
@@ -146,6 +150,7 @@ def bench(base: str, model: str, num_ctx: int, num_predict: int = 256, runs: int
     return {
         "model": model,
         "num_ctx": num_ctx,
+        "options": {k: v for k, v in opts.items() if k not in ("num_ctx", "num_predict", "temperature")},
         "runs": results,
         "resident_gb": round(size / 1e9, 1) if size else None,
         "resident_vram_gb": round(vram / 1e9, 1) if vram else None,

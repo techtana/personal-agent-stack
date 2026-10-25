@@ -134,6 +134,9 @@ def resolve_profile(name: str | None = None) -> dict:
     models = dict(cls["models"])
     models["primary_num_ctx"] = cls["primary_num_ctx"]
     models["small_num_ctx"] = cls["small_num_ctx"]
+    # Extra Ollama request options per role (e.g. use_mmap), forwarded by LiteLLM into Ollama's `options`.
+    models["primary_options"] = dict(cls.get("primary_options") or {})
+    models["reviewer_options"] = dict(cls.get("reviewer_options") or {})
     models.update({k: v for k, v in (m.get("models") or {}).items() if v is not None})
     dotenv = load_dotenv()
     cloud_cfg = {**(defaults.get("cloud") or {}), **(m.get("cloud") or {})}

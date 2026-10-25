@@ -94,8 +94,12 @@ local by default. `claude-fable-5-1` is never auto-routed.
 
 Ollama environment (user variables, set by `setup`): `OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=q8_0`,
 `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_MAX_LOADED_MODELS=2`, `OLLAMA_MAX_QUEUE=32`, `OLLAMA_CONTEXT_LENGTH=32768`,
-`OLLAMA_KEEP_ALIVE=30m`, `OLLAMA_GPU_OVERHEAD=536870912`, `OLLAMA_MODELS=D:\ollama\models`.
-Measured throughput: see `memory/state.md` (section Benchmarks); re-run with `uv run scripts/stack.py bench`.
+`OLLAMA_KEEP_ALIVE=30m`, `OLLAMA_GPU_OVERHEAD=536870912`, `OLLAMA_LOAD_TIMEOUT=15m`, `OLLAMA_MODELS=D:\ollama\models`.
+The MoE class also sends `use_mmap: true` for the primary and reviewer (`primary_options` / `reviewer_options`):
+Ollama disables mmap by default on Windows+CUDA, which turns the CPU-side experts into anonymous memory and made
+the first load time out under normal desktop memory pressure.
+Measured throughput (2026-10-25): MoE primary ~25 tok/s decode with ~1 GB RAM left available; dense 9B ~52 tok/s
+with ~18 GB available. Details in `memory/state.md` (section Benchmarks); re-run with `uv run scripts/stack.py bench`.
 
 ## 7. Routing (LiteLLM complexity router, per department)
 
