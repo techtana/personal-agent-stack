@@ -1,0 +1,125 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "litellm": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "LiteLLM gateway (local + cloud)",
+      "options": {
+        "baseURL": "http://127.0.0.1:4000/v1",
+        "apiKey": "{env:LITELLM_MASTER_KEY}"
+      },
+      "models": {
+        "app-dev": {
+          "name": "App Developer (router)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "code-review": {
+          "name": "Code Reviewer (router)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "devops": {
+          "name": "DevOps Engineer (router)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "docs": {
+          "name": "Documentation Writer (router)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "security": {
+          "name": "Security Reviewer (router)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "testing": {
+          "name": "Test Engineer (router)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "app-dev-local": {
+          "name": "App Developer (local only)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "code-review-local": {
+          "name": "Code Reviewer (local only)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "devops-local": {
+          "name": "DevOps Engineer (local only)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "docs-local": {
+          "name": "Documentation Writer (local only)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "security-local": {
+          "name": "Security Reviewer (local only)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "testing-local": {
+          "name": "Test Engineer (local only)",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "local-primary": {
+          "name": "local primary: qwen3.6:35b-a3b-coding",
+          "limit": {
+            "context": 32768,
+            "output": 8192
+          }
+        },
+        "local-small": {
+          "name": "local small: qwen3.5:9b",
+          "limit": {
+            "context": 16384,
+            "output": 8192
+          }
+        }
+      }
+    }
+  },
+  "model": "litellm/app-dev",
+  "small_model": "litellm/local-small",
+  "mcp": {
+    "orchestrator": {
+      "type": "remote",
+      "url": "http://127.0.0.1:8765/mcp",
+      "headers": {
+        "Authorization": "Bearer {env:ORCHESTRATOR_BEARER}"
+      },
+      "timeout": 120000
+    }
+  }
+}

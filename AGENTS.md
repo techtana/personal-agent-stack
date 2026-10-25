@@ -1,47 +1,46 @@
-# AGENTS.md — Deep-Architect Session State
-## [Meta]
-session_id: handoff-20261024
-phase: redesign-research-complete
-model_local: (not configured — see docs/HANDOFF-2026-10-24.md §4.3)
-model_cloud: claude-sonnet-5-5 (default) / claude-opus-5-5 (heavy) / claude-haiku-5-5 (cheap, confirm ID)
-circuit_breaker_trips: 0
-auto_escalate: false
-require_phase_approval: true
+# AGENTS.md - personal-agent-stack
 
-## [Current State]
-- The Deep-Architect plan in docs/DESIGN.md is SUPERSEDED. Read docs/HANDOFF-2026-10-24.md before doing anything.
-- Research + critique phase is complete; outputs live in docs/research/ (index: docs/research/README.md).
-- Adversarial verification of load-bearing claims was stopped early (3/24 checked). Treat unchecked claims as unverified.
-- Nothing from the new architecture is implemented yet. router/, config/ollama/, config/vscode/ are slated for removal.
-- Branch: claude/local-coding-agents-setup-U45yO, PR #1 open.
+Local-first coding-agent stack for one developer: Ollama on the GPU, a LiteLLM gateway that routes each
+department between local and cloud tiers, Claude Code as the primary agent surface, and a human-gated
+retrospective that improves prompts and routing from traces. Stable instructions live here; mutable state
+is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `docs/ORCHESTRATOR-DESIGN.md`.
 
-## [Lessons Learned]
-- [2026-10-24] Do not rebuild the agent harness: Claude Code / OpenCode / Cline already ship loops, tools, subagents, hooks, MCP, AGENTS.md.
-- [2026-10-24] A hand-rolled OpenAI-compatible proxy breaks tool-using clients; use LiteLLM (ollama_chat/ for tools, /v1/messages for Claude Code).
-- [2026-10-24] Run Ollama natively on Windows, not in Docker; reach it at host.docker.internal:11434. One large local model resident at a time on 12 GB.
-- [2026-10-24] Haiku 5.5 at $0.10/$0.50 per MTok changes the local-vs-cloud break-even; local pays off for privacy, autocomplete, and the big MoE tier.
-- [2026-10-24] Since 2026-10-21 temperature/top_p/top_k return HTTP 400 on every Claude model; cost lever is output_config.effort.
-- [2026-10-24] Keep one source of truth for department prompts and generate per-tool files; duplicated prompts drifted within one session.
-- [2026-10-24] Self-development = human-gated nightly PR loop with an eval gate, never auto-merge.
+## Departments
 
-## [Next Steps]
-1. Step 0 of the handoff: 30-minute empirical verification on the owner's Windows machine (RAM, Ollama version/tags, Claude Code version, /v1/models, LiteLLM tag).
-2. Ask the owner the 6 open questions in docs/HANDOFF-2026-10-24.md §5 (RAM, billing mode, privacy, editor, primary surface, licences).
-3. Write docs/ORCHESTRATOR-DESIGN.md (judge panel or direct from HANDOFF §4).
-4. Implement per HANDOFF §6 Step 2; delete superseded files; rewrite README; restructure this file into short stable instructions and move state to memory/state.md.
-5. Verify, review, commit, push to the branch.
+`app-dev`, `testing`, `security`, `devops`, `code-review`, `docs`. Each is defined once in
+`agents/<id>.yaml` and generated into every surface by `uv run scripts/stack.py build`:
 
-## [Counterpoints Log]
-- Approach A: bespoke VS Code extension with 4-phase FSM (docs/DESIGN.md)
-  - Counterpoint: reinvents ~80% of Claude Code/OpenCode; 9-hour autonomous local sessions unrealistic on a 14B Q4 model.
-  - Resolution: thin orchestration over existing harnesses; bounded 15-60 min tasks with checkpoints.
-- Approach B: custom FastAPI router with keyword+length routing (router/main.py)
-  - Counterpoint: no tools passthrough, no fallback, no usage log; routing signals are guesses.
-  - Resolution: LiteLLM proxy with per-department complexity_router; decisions logged for the retro loop.
-- Approach C: Langfuse for observability
-  - Counterpoint: 6 containers / ~16 GiB next to Ollama on a 32 GB box.
-  - Resolution: LiteLLM spend logs + Phoenix (1 container) + Prometheus/Grafana; Langfuse is the upgrade path.
+- Claude Code: `.claude/agents/<id>.md` (mention `@<id>`, let Claude delegate, or `claude --agent <id>`).
+- Gateway: model `<id>` (complexity router: local for simple/medium, cloud for complex/reasoning when an
+  API key exists), `<id>-local`, `<id>-cloud`.
+- OpenCode: `.opencode/agents/<id>.md`; Open WebUI: import `config/openwebui/<id>.json`.
+- Orchestrator MCP (`.mcp.json`): `delegate(department, task, tier)` returns a job handle; `get_job`, `record_lesson`.
 
-## [Escalation Log]
-- [2026-10-24] Reason: cloud sandbox could not reach ollama.com / huggingface.co / docs.litellm.ai; many model/tag/size claims are medium confidence.
-  Resolution: handed to on-prem agent for empirical verification (HANDOFF §6 Step 0).
+## Rules for agents working in this repo
+
+1. Never edit generated files (`.claude/agents/*.md`, `.opencode/agents/*.md`, `config/openwebui/*.json`,
+   `evals/*/promptfooconfig.yaml`, `evals/*/prompt.json`, `infrastructure/litellm/config.yaml`). Edit
+   `agents/*.yaml`, `machines/*.yaml` or `agents/_common.md`, then run `uv run scripts/stack.py build`.
+2. Hardware-dependent values (models, context sizes, Ollama env, ports) come from `machines/<HOST>.yaml`
+   plus `machines/_defaults.yaml`. Adding a machine = `uv run scripts/stack.py doctor --write-profile` on it.
+3. Never pass `temperature`, `top_p` or `top_k` to Anthropic models (HTTP 400 since 2026-10-21). Local
+   deployments may set them under `local:` in the agent YAML.
+4. Secrets live only in `.env` (gitignored) and `.claude/settings.local.json`; `.mcp.json` reads
+   `${ORCHESTRATOR_BEARER}` (a name Claude Code does not blank).
+5. Work in bounded tasks with human checkpoints. Say `ESCALATE: <reason>` when stuck twice.
+6. Append lessons as dated bullets to `memory/lessons.md` (or via the orchestrator `record_lesson` tool);
+   never rewrite earlier bullets. Record measurements and open items in `memory/state.md`.
+7. Python code runs through `uv run` (see `pyproject.toml`); gateway, Phoenix and Open WebUI are `uv tool`
+   installs, not project dependencies. Keep scripts cross-platform (PowerShell + bash wrappers call Python).
+8. Commit messages: conventional prefix (`feat:`, `fix:`, `docs:`, `retro:`), imperative, one topic.
+
+## Everyday commands
+
+```
+uv run scripts/stack.py status | up | down        # native services (phoenix, litellm, orchestrator, open_webui)
+uv run scripts/stack.py smoke                     # gateway + MCP end-to-end checks
+uv run scripts/stack.py bench                     # tok/s and GPU/CPU split of the primary local model
+uv run scripts/stack.py why-routed --last 20      # routing decisions from traces
+uv run scripts/stack.py retro --days 7            # retrospective report (then /retro in Claude Code)
+scripts/claude-local.ps1 | .sh                    # Claude Code on the local gateway (profile B)
+```

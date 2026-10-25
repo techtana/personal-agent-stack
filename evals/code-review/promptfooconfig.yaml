@@ -1,0 +1,28 @@
+# GENERATED from agents/code-review.yaml by `uv run scripts/stack.py build`. Edit the YAML, not this file.
+description: Code Reviewer regression gate (local tier via LiteLLM)
+prompts:
+- file://prompt.json
+providers:
+- id: openai:chat:code-review-local
+  label: local
+  config:
+    apiBaseUrl: http://127.0.0.1:4000/v1
+    apiKeyEnvar: LITELLM_MASTER_KEY
+    max_tokens: 1500
+tests:
+- description: finds-n-plus-one
+  vars:
+    prompt: "Review this Python:\nfor user in users:\n    orders = db.query(Order).filter_by(user_id=user.id).all()"
+  assert:
+  - type: regex
+    value: (?i:N\+1|n plus one|batch|join)
+  - type: regex
+    value: MUST FIX|SHOULD FIX
+  - type: icontains
+    value: SUMMARY
+- description: includes-praise
+  vars:
+    prompt: "Review this tiny function:\ndef add(a: int, b: int) -> int:\n    return a + b"
+  assert:
+  - type: icontains
+    value: PRAISE

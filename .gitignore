@@ -1,30 +1,34 @@
-# Build outputs
-out/
-dist/
-*.vsix
+# Secrets and per-machine local settings
+.env
+.env.*
+!.env.example
+infrastructure/.env
+.claude/settings.local.json
 
-# Dependencies
-node_modules/
+# Runtime state (pids, logs, Phoenix/Open WebUI data, orchestrator job store)
+.run/
+orchestrator/data/
+
+# Raw traces are machine-local; only retro/reports/*.md summaries are committed
+traces/*
+!traces/.gitkeep
 
 # Python
 __pycache__/
 *.py[cod]
 .venv/
-venv/
 *.egg-info/
 
-# Runtime artifacts (generated per-session, not committed)
-.deep-architect/
+# Node (promptfoo cache when run via npx)
+node_modules/
+.promptfoo/
 
-# Environment
-.env
-.env.local
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Editor
+# Editors / OS
 .vscode/settings.json
 .vscode/launch.json
+.DS_Store
+Thumbs.db
 *.swp
+
+# Legacy
+.deep-architect/

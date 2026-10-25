@@ -1,329 +1,124 @@
-# Personal Agent Stack
+# personal-agent-stack
 
-A local-first multi-agent coding infrastructure with automatic cloud fallback.
-Six specialized agents handle distinct phases of software development, running on local models for speed and cost, escalating to Claude API only when complexity demands it.
-
-## Architecture
+A local-first coding-agent stack for one developer on one GPU workstation, composed from open-source
+tools rather than a custom harness. Six department agents (app-dev, testing, security, devops,
+code-review, docs) are defined once and generated into Claude Code, OpenCode, Open WebUI and a LiteLLM
+gateway that routes each request to the cheapest tier that can do the job: a small always-resident
+model for autocomplete, a mixture-of-experts coder on the local GPU for routine work, and Claude
+Haiku/Sonnet/Opus 5.5 through the gateway only when complexity, context size or a stall demands it.
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  VS Code (Continue ext)     Open WebUI                  │
-│         │                        │                      │
-└─────────┼────────────────────────┼──────────────────────┘
-          │ OpenAI-compatible API  │
-          ▼                        ▼
-┌──────────────────────────────────────────────────────────┐
-│                   Agent Router :8000                     │
-│                                                          │
-│  ┌─────────────┐   ┌──────────────────────────────────┐ │
-│  │ Complexity  │   │  System Prompt Injector          │ │
-│  │ Classifier  │   │  (bakes agent persona per model) │ │
-│  └──────┬──────┘   └──────────────────────────────────┘ │
-│         │                                               │
-│    local │ cloud                                        │
-│         ▼         ▼                                     │
-└─────────┼─────────┼────────────────────────────────────┘
-          │         │
-          ▼         ▼
-   ┌─────────┐  ┌──────────────┐
-   │  Ollama │  │  Anthropic   │
-   │  :11434 │  │  Claude API  │
-   └─────────┘  └──────────────┘
+ Claude Code (terminal / VS Code / desktop)   OpenCode   Open WebUI (chat, thumbs)   promptfoo (evals)
+            │ Anthropic /v1/messages              │ OpenAI /v1       │                     │
+            └──────────────┬──────────────────────┴──────────────────┴─────────────────────┘
+                           ▼
+            LiteLLM gateway :4000  (one model alias per department = complexity router)
+              local-fim · local-small · local-primary · [cloud-cheap · cloud-default · cloud-heavy]
+              JSONL traces → traces/litellm/     OTLP → Phoenix :6006
+                 │                                              │
+      Ollama (native, GPU) :11434                   Anthropic API (only with ANTHROPIC_API_KEY)
+      qwen2.5-coder:1.5b-base · qwen3.5:9b · qwen3.6:35b-a3b-coding (MoE, experts in RAM)
+
+ Orchestrator MCP :8765  delegate/get_job/record_lesson   ·   hooks → traces/claude/   ·   nightly retro → PR
 ```
 
-**Routing logic:**
-- Token count < 800 AND no complexity keywords → **local Ollama model**
-- Token count ≥ 800 OR complexity keyword matched → **cloud Claude model**
-- Force local: prefix model name with `ollama/`
-- Force cloud: prefix model name with `cloud/`
-
----
-
-## Agents
-
-| Agent | Purpose | Local Model | Cloud Model | Escalates When |
-|-------|---------|-------------|-------------|----------------|
-| `app-developer` | Full-stack coding, TDD, clean architecture | qwen2.5-coder:14b | claude-sonnet-4-6 | System design, migrations, perf bottlenecks |
-| `testing` | Test generation, coverage, test doubles | qwen2.5-coder:7b | claude-sonnet-4-6 | E2E strategy, load tests, chaos engineering |
-| `security` | OWASP Top 10, threat modeling, CVE analysis | qwen2.5-coder:14b | claude-opus-4-8 | Pen test plans, compliance, crypto architecture |
-| `devops` | Docker, CI/CD, K8s, monitoring, Terraform | qwen2.5-coder:7b | claude-sonnet-4-6 | Multi-region, disaster recovery, service mesh |
-| `code-review` | Correctness, design, perf, security, maintainability | deepseek-r1:14b | claude-sonnet-4-6 | Full codebase audits, architectural reviews |
-| `docs` | READMEs, API docs, ADRs, runbooks, changelogs | qwen2.5-coder:7b | claude-sonnet-4-6 | Full onboarding guides, architecture docs |
-
----
+Design, decisions and measurements: [docs/ORCHESTRATOR-DESIGN.md](docs/ORCHESTRATOR-DESIGN.md).
+Stable rules for agents: [AGENTS.md](AGENTS.md). State and lessons: [memory/](memory/).
 
 ## Prerequisites
 
-| Tool | Version | Install |
-|------|---------|---------|
-| Docker + Compose v2 | 24+ | https://docs.docker.com/get-docker/ |
-| Ollama | 0.3+ | https://ollama.com/download |
-| VRAM (GPU) | 8 GB min, 16 GB recommended | — |
-| RAM | 16 GB min | — |
+| Tool | Version | Notes |
+|---|---|---|
+| NVIDIA GPU | 12 GB VRAM for the default lineup; 8 GB works with the `small-gpu` class | 32 GB system RAM enables the MoE primary; 16 GB falls back to a dense 9B |
+| [uv](https://docs.astral.sh/uv/) | 0.12+ | the only hard requirement; it fetches Python 3.11/3.12 and the tools |
+| [Ollama](https://ollama.com/download) | 0.40+ | native install (Windows: `winget install --id Ollama.Ollama`); not in Docker |
+| Claude Code | 2.1.293+ | `winget install --id Anthropic.ClaudeCode` or the VS Code extension / desktop app |
+| Node | 24+ | only for `npx promptfoo` evals |
 
-**Without a GPU:** All models work on CPU but are 5-20x slower. Remove the `deploy.resources` block from `docker-compose.yml` for CPU-only operation.
+Docker is optional (`infrastructure/docker-compose.yml`); the reference machine runs everything natively.
 
----
+## Quick start
 
-## Quick Start
+```powershell
+# Windows (PowerShell)
+.\scripts\setup.ps1          # detect hardware -> machines/<HOST>.yaml, write .env secrets, set Ollama env,
+                             # install litellm/phoenix/open-webui as uv tools, generate configs, pull models
+uv run scripts/stack.py up   # start phoenix, litellm, orchestrator, open_webui
+uv run scripts/stack.py smoke
+```
 
 ```bash
-# 1. Clone and enter the repo
-git clone <this-repo> personal-agent-stack
-cd personal-agent-stack
-
-# 2. Run setup (creates .env, pulls models, starts stack)
-./scripts/setup.sh
-
-# 3. First run: edit the generated .env file with your API key
-nano infrastructure/.env
-# Set ANTHROPIC_API_KEY=sk-ant-...
-# Then re-run setup
-./scripts/setup.sh
+# Linux / macOS / WSL / Git Bash
+./scripts/setup.sh && uv run scripts/stack.py up && uv run scripts/stack.py smoke
 ```
 
-That's it. Access:
-- **Open WebUI**: http://localhost:3000
-- **Router API**: http://localhost:8000
-- **Router docs**: http://localhost:8000/docs
+Then:
 
----
+- **Claude Code on your subscription (default):** open this repo in Claude Code. The departments appear as
+  subagents (`@security review src/auth.py`), `/retro`, `/harden`, `/brainstorm`, `/why-routed` as skills,
+  and the orchestrator as an MCP server (approve it once). Heavy work stays on your plan.
+- **Claude Code on the local gateway:** `.\scripts\claude-local.ps1` (or `.sh`). A separate config dir
+  (`~/.claude-local`) points at LiteLLM, so local models serve `sonnet`/`haiku` aliases and plan quota is untouched.
+- **Open WebUI:** http://127.0.0.1:3000 -> create the admin user -> Workspace -> Models -> Import each
+  `config/openwebui/<dept>.json`; Admin -> Integrations -> External Tool Servers -> MCP (Streamable HTTP)
+  `http://127.0.0.1:8765/mcp` with the bearer from `.env`.
+- **OpenCode:** `opencode.json` registers the gateway as provider `litellm`; agents are in `.opencode/agents/`.
+- **Autocomplete in VS Code:** `config/continue/config.yaml` (Continue, autocomplete role only).
 
-## Detailed Setup
+## Configuration
 
-### Step 1 — Install Ollama
+| Where | What |
+|---|---|
+| `machines/_defaults.yaml` | hardware classes -> model lineup, Ollama env, ports, service modes, cloud model IDs |
+| `machines/<HOST>.yaml` | detected hardware + your overrides (`models.primary`, `model_store`, `cloud.enabled`) |
+| `agents/<id>.yaml` | one department: prompt, tools, Claude Code model alias, routing tiers, evals |
+| `agents/_common.md` | working agreements appended to every department prompt |
+| `.env` | `LITELLM_MASTER_KEY`, `ORCHESTRATOR_BEARER`, `WEBUI_SECRET_KEY`, optional `ANTHROPIC_API_KEY` |
+| `.claude/settings.json` | hooks (trace capture), permissions, gateway hint headers |
+| `.claude/settings.local.json` | per-machine: MCP bearer env, `autoMemoryDirectory` -> `memory/claude/` |
 
-```bash
-# macOS / Linux
-curl -fsSL https://ollama.com/install.sh | sh
+After any change: `uv run scripts/stack.py build` (and `up`/`down` to restart the gateway).
 
-# Windows: download from https://ollama.com/download
-# Verify:
-ollama --version
-```
+## Cost model
 
-### Step 2 — Configure environment
+- Autocomplete, embeddings, titles/summaries and the simple/medium tiers are local: $0.
+- With no API key, every tier is local. Adding `ANTHROPIC_API_KEY` turns on `cloud-cheap`
+  (Haiku 5.5, $0.10/$0.50 per MTok), `cloud-default` (Sonnet 5.5, $2/$10) and `cloud-heavy`
+  (Opus 5.5, $4/$20) for the complex/reasoning tiers, stalls and over-long contexts.
+- Interactive Claude Code on the subscription costs no API dollars; a credential variable (profile B or
+  an API key in the gateway) bills per token. Traces record cost per request; `retro` reports cost per department.
 
-```bash
-cp infrastructure/.env.example infrastructure/.env
-```
-
-Edit `infrastructure/.env`:
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | Yes (for cloud routing) | Get at console.anthropic.com |
-| `WEBUI_SECRET_KEY` | Yes | Random string for session signing |
-| `LOCAL_MODEL_PRIMARY` | No | Default: `qwen2.5-coder:14b` |
-| `LOCAL_MODEL_FAST` | No | Default: `qwen2.5-coder:7b` |
-| `LOCAL_MODEL_REASONING` | No | Default: `deepseek-r1:14b` |
-| `COMPLEXITY_TOKEN_THRESHOLD` | No | Default: `800`. Raise to keep more work local |
-
-### Step 3 — Pull models
-
-Model sizes and estimated download times on 100 Mbps:
-
-| Model | Size | VRAM needed | Download time |
-|-------|------|-------------|---------------|
-| qwen2.5-coder:7b | ~4.7 GB | ~5 GB | ~6 min |
-| qwen2.5-coder:14b | ~9.0 GB | ~10 GB | ~12 min |
-| deepseek-r1:14b | ~9.0 GB | ~10 GB | ~12 min |
-
-```bash
-./scripts/pull-models.sh
-```
-
-If you have less than 10 GB VRAM, swap `qwen2.5-coder:14b` for `qwen2.5-coder:7b` in `.env`.
-
-### Step 4 — Start the stack
-
-```bash
-cd infrastructure
-docker compose up -d
-
-# Check all services are healthy
-docker compose ps
-```
-
-### Step 5 — Create agent models in Ollama
-
-```bash
-./scripts/create-agents.sh
-
-# Verify
-ollama list | grep agent-
-```
-
----
-
-## VS Code Integration (Continue Extension)
-
-1. Install the **Continue** extension from the VS Code marketplace.
-
-2. Copy the config:
-   ```bash
-   cp config/vscode/continue.config.json ~/.continue/config.json
-   ```
-
-3. Set your Anthropic API key in the environment or directly in the config:
-   ```bash
-   export ANTHROPIC_API_KEY=sk-ant-...
-   ```
-
-4. Open VS Code and click the Continue sidebar icon. You'll see all 6 agents plus direct Ollama and Claude access.
-
-**Usage:**
-- Select code → `Cmd+Shift+L` → choose agent → ask question
-- `Cmd+I` for inline edits (uses App Developer agent by default)
-- Tab autocomplete uses `qwen2.5-coder:7b` locally (always fast, no cloud)
-- Switch agents from the model dropdown per conversation
-
----
-
-## Open WebUI Integration
-
-1. Open http://localhost:3000 and create an admin account.
-
-2. The router is already connected as an OpenAI provider (`http://router:8000/v1`). All 6 agents appear as models automatically.
-
-3. Create Workspaces for each agent:
-   - Go to **Workspace** → **Models** → select e.g. `app-developer`
-   - Set as default for a dedicated chat
-
-4. The router also exposes Ollama models directly. Both appear in the model picker.
-
----
-
-## Model Routing Logic
-
-The router classifies each request before sending it:
+## Commands
 
 ```
-1. Is the model name prefixed with "ollama/"?  → force local
-2. Is the model name prefixed with "cloud/"?   → force cloud
-3. Does the last user message contain any of
-   the agent's complexity_keywords?            → cloud
-4. Is len(last_message) // 4 > threshold?      → cloud
-5. Otherwise                                   → local
+uv run scripts/stack.py doctor [--write-profile [--refresh]]   hardware, tools, ports, chosen class
+uv run scripts/stack.py profile | build | setup | pull [--all]
+uv run scripts/stack.py up [svc...] | down [svc...] | status
+uv run scripts/stack.py bench [--model m] [--num-ctx n] [--tokens n] [--runs n]
+uv run scripts/stack.py smoke [--dept id] [--skip-mcp]
+uv run scripts/stack.py why-routed [--last n] [--days n]
+uv run scripts/stack.py retro -- --days 7 [--reflect cloud-cheap] [--pr]
+npx promptfoo@0.125.0 eval -c evals/<dept>/promptfooconfig.yaml --repeat 3
 ```
-
-### Tuning the threshold
-
-- Raise `COMPLEXITY_TOKEN_THRESHOLD` (default 800) to keep more work local.
-- Lower it to bias toward cloud for better quality.
-- Set it to `99999` to always route local (useful when API key not set).
-
-### Adding keywords
-
-Edit `router/agents.yaml` → add strings to an agent's `complexity_keywords` list → restart the router:
-```bash
-docker compose -f infrastructure/docker-compose.yml restart router
-```
-
----
-
-## Adding a Custom Agent
-
-1. Add a new entry to `router/agents.yaml`:
-   ```yaml
-   - id: my-agent
-     name: My Agent
-     description: Does X
-     local_model: qwen2.5-coder:7b
-     cloud_model: claude-sonnet-4-6
-     complexity_keywords:
-       - "complex thing"
-     system_prompt: |
-       You are...
-   ```
-
-2. Create a Modelfile at `config/ollama/Modelfile.my-agent` (copy an existing one as template).
-
-3. Restart the router and create the Ollama model:
-   ```bash
-   docker compose -f infrastructure/docker-compose.yml restart router
-   ollama create agent-my-agent -f config/ollama/Modelfile.my-agent
-   ```
-
-The new agent appears immediately in Open WebUI and the Continue model picker.
-
----
 
 ## Troubleshooting
 
-**GPU not detected by Docker**
-```bash
-# Verify NVIDIA Container Toolkit is installed
-nvidia-smi
-docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi
-# If that fails: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html
-```
+- `ollama ps` shows `PROCESSOR` with a large CPU share or `stack.py bench` is slow: the MoE experts live
+  in RAM by design; if decode is far below the benchmark in `memory/state.md`, try `LLAMA_ARG_N_CPU_MOE=<n>`
+  in `machines/<HOST>.yaml:ollama_env` (passed through to llama-server) and rerun `setup`.
+- Gateway 401: clients must send the `LITELLM_MASTER_KEY` from `.env` as a Bearer token.
+- Cloud tier never used: `ANTHROPIC_API_KEY` is empty, so the build rewrote cloud tiers to local; add the key and rebuild.
+- Claude Code does not show the orchestrator: approve the project `.mcp.json` server when prompted, or set
+  `enabledMcpjsonServers` (setup writes it to `.claude/settings.local.json`).
+- Logs: `.run/logs/<service>.log`; Ollama: `%LOCALAPPDATA%\Ollama\server.log`.
 
-**Model runs out of memory (OOM)**
-```bash
-# Use smaller models
-# In infrastructure/.env:
-LOCAL_MODEL_PRIMARY=qwen2.5-coder:7b
-LOCAL_MODEL_REASONING=deepseek-r1:8b
-# Restart router
-docker compose -f infrastructure/docker-compose.yml restart router
-```
-
-**Router returns 500 for cloud requests**
-- Verify `ANTHROPIC_API_KEY` is set in `infrastructure/.env`
-- Check router logs: `docker compose -f infrastructure/docker-compose.yml logs router`
-
-**Port conflict (3000 or 8000 already in use)**
-```bash
-# Edit infrastructure/docker-compose.yml and change the host port:
-# "3001:8080" instead of "3000:8080"
-```
-
-**Open WebUI can't reach the router**
-```bash
-# The router URL inside Docker is http://router:8000 (service name, not localhost)
-# This is pre-configured. If you changed the service name, update OPENAI_API_BASE_URL.
-docker compose -f infrastructure/docker-compose.yml logs open-webui
-```
-
----
-
-## Cost Management
-
-- Tab autocomplete is **always local** — zero cloud cost.
-- Simple chats in Open WebUI/Continue route local by default.
-- Monitor cloud usage at https://console.anthropic.com/usage
-- Set `COMPLEXITY_TOKEN_THRESHOLD=99999` in `.env` to fully disable cloud routing.
-- The security agent uses Claude Opus for complexity matches — the most expensive model. Increase its token threshold if cost is a concern.
-
----
-
-## Directory Structure
+## Repository layout
 
 ```
-personal-agent-stack/
-├── infrastructure/
-│   ├── docker-compose.yml      # Full stack: Ollama, Open WebUI, Router
-│   └── .env.example            # Environment template
-├── router/
-│   ├── main.py                 # FastAPI OpenAI-compatible proxy
-│   ├── agents.yaml             # Agent definitions + system prompts
-│   ├── requirements.txt
-│   └── Dockerfile
-├── config/
-│   ├── ollama/
-│   │   ├── Modelfile.app-dev   # Ollama custom model per agent
-│   │   ├── Modelfile.testing
-│   │   ├── Modelfile.security
-│   │   ├── Modelfile.devops
-│   │   ├── Modelfile.code-review
-│   │   └── Modelfile.docs
-│   └── vscode/
-│       └── continue.config.json  # Continue extension config
-├── scripts/
-│   ├── setup.sh                # One-shot setup script
-│   ├── pull-models.sh          # Pull Ollama models
-│   └── create-agents.sh        # Create Ollama agent models
-└── docs/
-    └── DESIGN.md               # Deep-Architect VS Code extension design
+agents/            department source of truth (+ _common.md)        machines/   hardware profiles
+scripts/           stack.py CLI, stacklib/, retro.py, hooks/        orchestrator/  FastMCP server + job store
+infrastructure/    litellm/config.yaml (generated), custom_callbacks.py, docker-compose.yml (optional)
+.claude/           settings, skills (retro, harden, brainstorm, why-routed), agents/ (generated)
+.opencode/ opencode.json  config/openwebui/ config/continue/   evals/ (generated gates)   memory/   traces/   retro/
+docs/              ORCHESTRATOR-DESIGN.md, HANDOFF-2026-10-24.md, research/, archive/DESIGN-2025.md, decisions/
 ```

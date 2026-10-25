@@ -1,0 +1,30 @@
+# GENERATED from agents/testing.yaml by `uv run scripts/stack.py build`. Edit the YAML, not this file.
+description: Test Engineer regression gate (local tier via LiteLLM)
+prompts:
+- file://prompt.json
+providers:
+- id: openai:chat:testing-local
+  label: local
+  config:
+    apiBaseUrl: http://127.0.0.1:4000/v1
+    apiKeyEnvar: LITELLM_MASTER_KEY
+    max_tokens: 1500
+tests:
+- description: pytest-edge-cases
+  vars:
+    prompt: Write pytest tests for `def clamp(x, lo, hi)` that clamps x into [lo, hi]. Include boundary and invalid-range
+      cases.
+  assert:
+  - type: icontains
+    value: def test_
+  - type: regex
+    value: parametrize|lo > hi|lo>hi|ValueError
+- description: names-missing-scenarios
+  vars:
+    prompt: A module has tests only for the happy path of `login(user, password)`. List the missing scenarios as a table with
+      columns file | tested | missing.
+  assert:
+  - type: icontains
+    value: '|'
+  - type: regex
+    value: (?i:wrong password|invalid|locked|empty)

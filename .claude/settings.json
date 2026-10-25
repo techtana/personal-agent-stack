@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --quiet --project \"$CLAUDE_PROJECT_DIR\" python \"$CLAUDE_PROJECT_DIR/scripts/hooks/log_turn.py\"",
+            "timeout": 30,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --quiet --project \"$CLAUDE_PROJECT_DIR\" python \"$CLAUDE_PROJECT_DIR/scripts/hooks/log_turn.py\"",
+            "timeout": 30,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --quiet --project \"$CLAUDE_PROJECT_DIR\" python \"$CLAUDE_PROJECT_DIR/scripts/hooks/log_turn.py\"",
+            "timeout": 20,
+            "async": true
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "mcp__orchestrator__list_departments",
+      "mcp__orchestrator__get_job",
+      "Bash(uv run scripts/stack.py status*)",
+      "Bash(uv run scripts/stack.py profile*)",
+      "Bash(uv run scripts/stack.py doctor*)",
+      "Bash(uv run scripts/stack.py build*)",
+      "Bash(uv run scripts/stack.py why-routed*)",
+      "Bash(uv run scripts/stack.py retro*)",
+      "Bash(uv run scripts/stack.py smoke*)"
+    ]
+  },
+  "env": {
+    "CLAUDE_CODE_GATEWAY_HINT_HEADERS": "1"
+  }
+}

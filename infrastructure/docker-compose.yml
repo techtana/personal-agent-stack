@@ -1,84 +1,103 @@
-version: "3.9"
-
-networks:
-  agent-net:
-    driver: bridge
-
-volumes:
-  ollama-data:
-  open-webui-data:
+# OPTIONAL containerised deployment (Linux server, or a Windows box that already runs Docker Desktop).
+# The reference machine (SEKAIHOME) runs everything natively via `uv run scripts/stack.py up` because
+# WSL2 would reserve RAM that the MoE expert-offload tier needs. This file has NOT been run there.
+#
+# Ollama stays NATIVE on the host (GPU, no port collision); containers reach it at host.docker.internal:11434.
+#   docker compose --env-file ../.env up -d
+#   docker compose --env-file ../.env --profile ui up -d        # adds Open WebUI
+name: personal-agent-stack
 
 services:
-  ollama:
-    image: ghcr.io/ollama/ollama:latest
-    container_name: ollama
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.106.3
+    container_name: litellm
     restart: unless-stopped
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-data:/root/.ollama
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--host", "0.0.0.0"]
+    ports: ["127.0.0.1:4000:4000"]
     environment:
-      - OLLAMA_KEEP_ALIVE=24h
-      - OLLAMA_MAX_LOADED_MODELS=3
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    networks:
-      - agent-net
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TRACES_DIR: /traces
+      OTEL_EXPORTER: otlp_http
+      OTEL_ENDPOINT: http://phoenix:6006/v1/traces
+      OTEL_SERVICE_NAME: litellm
+      OLLAMA_API_BASE: http://host.docker.internal:11434
+    volumes:
+      - ./litellm/config.docker.yaml:/app/config.yaml:ro   # run: uv run scripts/stack.py build --machine <docker-profile>; sed api_base to host.docker.internal
+      - ./litellm/custom_callbacks.py:/app/custom_callbacks.py:ro
+      - ../traces/litellm:/traces
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on: [phoenix]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=3).status==200 else 1)"]
       interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-
-  router:
-    build:
-      context: ../router
-      dockerfile: Dockerfile
-    container_name: router
-    restart: unless-stopped
-    ports:
-      - "8000:8000"
-    env_file:
-      - .env
-    environment:
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434}
-    depends_on:
-      ollama:
-        condition: service_healthy
-    volumes:
-      - ../router/agents.yaml:/app/agents.yaml:ro
-    networks:
-      - agent-net
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 40s
+    deploy:
+      resources:
+        limits: {memory: 2g}
+
+  phoenix:
+    image: arizephoenix/phoenix:version-20.26.0
+    container_name: phoenix
+    restart: unless-stopped
+    ports: ["127.0.0.1:6006:6006", "127.0.0.1:4317:4317"]
+    environment:
+      PHOENIX_WORKING_DIR: /data
+    volumes:
+      - phoenix-data:/data
+    deploy:
+      resources:
+        limits: {memory: 2g}
+
+  orchestrator:
+    build:
+      context: ..
+      dockerfile: orchestrator/Dockerfile
+    container_name: orchestrator
+    restart: unless-stopped
+    ports: ["127.0.0.1:8765:8765"]
+    environment:
+      ORCHESTRATOR_BEARER: ${ORCHESTRATOR_BEARER}
+      LITELLM_BASE_URL: http://litellm:4000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+    volumes:
+      - ../memory:/app/memory
+      - orchestrator-data:/app/orchestrator/data
+    depends_on:
+      litellm:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: {memory: 512m}
 
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main
+    image: ghcr.io/open-webui/open-webui:v0.12.3
     container_name: open-webui
+    profiles: ["ui"]
     restart: unless-stopped
-    ports:
-      - "3000:8080"
-    depends_on:
-      ollama:
-        condition: service_healthy
-      router:
-        condition: service_healthy
+    ports: ["127.0.0.1:3000:8080"]
     environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
-      - OPENAI_API_BASE_URL=http://router:8000/v1
-      - OPENAI_API_KEY=local
-      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY}
+      ENABLE_OPENAI_API: "true"
+      OPENAI_API_BASE_URL: http://litellm:4000/v1
+      OPENAI_API_KEY: ${LITELLM_MASTER_KEY}
+      ENABLE_OLLAMA_API: "false"
+      RAG_EMBEDDING_ENGINE: ollama
+      RAG_EMBEDDING_MODEL: nomic-embed-text
+      RAG_OLLAMA_BASE_URL: http://host.docker.internal:11434
     volumes:
       - open-webui-data:/app/backend/data
-    networks:
-      - agent-net
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on:
+      litellm:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits: {memory: 3g}
+
+volumes:
+  phoenix-data:
+  orchestrator-data:
+  open-webui-data:

@@ -1,0 +1,39 @@
+# GENERATED from agents/app-dev.yaml by `uv run scripts/stack.py build`. Edit the YAML, not this file.
+description: App Developer regression gate (local tier via LiteLLM)
+prompts:
+- file://prompt.json
+providers:
+- id: openai:chat:app-dev-local
+  label: local
+  config:
+    apiBaseUrl: http://127.0.0.1:4000/v1
+    apiKeyEnvar: LITELLM_MASTER_KEY
+    max_tokens: 1500
+tests:
+- description: fizzbuzz-with-test
+  vars:
+    prompt: Write a Python function fizzbuzz(n) returning a list of strings for 1..n, plus one pytest test.
+  assert:
+  - type: icontains
+    value: def fizzbuzz
+  - type: icontains
+    value: def test_
+  - type: not-icontains
+    value: TODO
+- description: explain-off-by-one
+  vars:
+    prompt: This loop `for i in range(1, len(xs))` is meant to visit every element of xs. What is wrong? Answer in two sentences,
+      then show the fix.
+  assert:
+  - type: icontains
+    value: range(len(xs))
+  - type: javascript
+    value: output.length < 1500
+- description: parse-duration
+  vars:
+    prompt: Implement parse_duration('1h30m') -> seconds in Python.
+  assert:
+  - type: icontains
+    value: def parse_duration
+  - type: regex
+    value: '5400'
