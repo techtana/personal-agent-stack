@@ -24,6 +24,11 @@ Haiku/Sonnet/Opus 5.5 through the gateway only when complexity, context size or 
 
 Design, decisions and measurements: [docs/ORCHESTRATOR-DESIGN.md](docs/ORCHESTRATOR-DESIGN.md).
 Stable rules for agents: [AGENTS.md](AGENTS.md). State and lessons: [memory/](memory/).
+Manuals: [installation](docs/manuals/installation.md) · [user guide](docs/manuals/user-guide.md) ·
+[troubleshooting](docs/manuals/troubleshooting.md).
+
+**When to use it:** you write code with AI agents on your own GPU workstation, and you want routine work to stay
+local and free while cloud models handle only the hard cases. It is not a team or hosted service.
 
 ## Prerequisites
 
@@ -115,14 +120,60 @@ npx promptfoo@0.125.0 eval -c evals/<dept>/promptfooconfig.yaml --repeat 3
 
 ## Troubleshooting
 
-- `ollama ps` shows `PROCESSOR` with a large CPU share or `stack.py bench` is slow: the MoE experts live
-  in RAM by design; if decode is far below the benchmark in `memory/state.md`, try `LLAMA_ARG_N_CPU_MOE=<n>`
-  in `machines/<HOST>.yaml:ollama_env` (passed through to llama-server) and rerun `setup`.
-- Gateway 401: clients must send the `LITELLM_MASTER_KEY` from `.env` as a Bearer token.
-- Cloud tier never used: `ANTHROPIC_API_KEY` is empty, so the build rewrote cloud tiers to local; add the key and rebuild.
-- Claude Code does not show the orchestrator: approve the project `.mcp.json` server when prompted, or set
-  `enabledMcpjsonServers` (setup writes it to `.claude/settings.local.json`).
-- Logs: `.run/logs/<service>.log`; Ollama: `%LOCALAPPDATA%\Ollama\server.log`.
+See [docs/manuals/troubleshooting.md](docs/manuals/troubleshooting.md): health checks, log locations and a
+symptom → cause → fix table. Logs are in `.run/logs/<service>.log`; Ollama's is `%LOCALAPPDATA%\Ollama\server.log`.
+
+## Assumptions and limitations
+
+- It is built for one developer on one workstation. Every service listens on 127.0.0.1 only, and nothing is multi-user.
+- It needs an NVIDIA GPU with at least 8 GB of VRAM. On 32 GB of RAM, the 35B MoE decodes at about 25 tok/s,
+  against about 52 for the dense 9B (SEKAIHOME, 2026-10-25).
+- Only Windows is verified (2026-10-26). Service management on Linux and macOS is written but untested, and so is the Docker compose path.
+- Cloud tiers have not been exercised yet, because no API key is on the reference machine. Claude Code profile B has
+  not been run as a live session yet.
+- Routing budgets and LiteLLM's adaptive router need Postgres, so they are not in use.
+
+## Known issues
+
+Tracker: https://github.com/techtana/personal-agent-stack/issues
+
+- [#4](https://github.com/techtana/personal-agent-stack/issues/4): improve the tray app's design and show CPU, RAM
+  and GPU use per process.
+- Smart App Control may also start blocking the uv tool environments' `python.exe` (see the open items in `memory/state.md`).
+- `local-reviewer` points at `flint:40b-a2b`, which is not pulled. No tier routes to it.
+
+## Path forward
+
+Running list. Add new items; don't rewrite old ones.
+
+- 2026-10-26: tray app design, plus CPU, RAM and GPU use per process (#4).
+- 2026-10-25: confirm that the tray and its services start on their own after a reboot.
+- 2026-10-25: Open WebUI first run (admin user, model import, MCP server).
+- 2026-10-25: add `ANTHROPIC_API_KEY` and verify the cloud tiers.
+- 2026-10-25: run `scripts/claude-local.ps1` end to end on the 9B at 32k.
+- 2026-10-25: try the 35B as primary again after a RAM upgrade; try tuning `LLAMA_ARG_N_CPU_MOE`.
+- 2026-10-25: first `/retro` after a week of real traces; wire up the Open WebUI thumbs export.
+- 2026-10-25: test service management on Linux and macOS.
+
+## Design decisions
+
+Running log. Never delete an entry; mark a reversed one as superseded. Details are in [docs/decisions/](docs/decisions/)
+and [memory/lessons.md](memory/lessons.md).
+
+- 2026-10-24: Compose existing tools (Claude Code, OpenCode, LiteLLM) instead of building a custom harness. A
+  hand-rolled proxy broke tool-using clients.
+- 2026-10-24: Run Ollama and every service natively, with no Docker or WSL2, which would reserve RAM the MoE needs.
+- 2026-10-24: Ollama is the only local inference engine, because it already runs llama-server with MoE-aware placement.
+- 2026-10-24: Define each department once in `agents/*.yaml` and generate every tool's files from it. Duplicated prompts drifted.
+- 2026-10-24: Self-improvement is a human-gated PR loop with an eval gate. Nothing merges automatically.
+- 2026-10-24: Name the orchestrator secret `ORCHESTRATOR_BEARER`, because Claude Code blanks `*_TOKEN` and `*_API_KEY` in `.mcp.json`.
+- 2026-10-25: Make SEKAIHOME's primary `qwen3.5:9b` at 32k instead of the 35B MoE: twice the decode speed and
+  about 17 GB of RAM left free.
+- 2026-10-25: Local tiers that share a model use the same `num_ctx` and load options, so Ollama never reloads between them.
+- 2026-10-25: Start uv tools through their environment's `python.exe`, because Smart App Control blocked the `~/.local/bin` launchers.
+- 2026-10-25: Identify a service by pid plus process start time, because Windows reuses pids.
+- 2026-10-25: Starting services with `CREATE_BREAKAWAY_FROM_JOB` from an agent shell (superseded the same day; it
+  was unreliable). The tray app launched through Explorer now owns the services.
 
 ## Repository layout
 
