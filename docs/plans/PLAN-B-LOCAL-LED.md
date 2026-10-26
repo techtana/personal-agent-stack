@@ -21,15 +21,15 @@ Edge VM (e2-micro, `edge` mode only): pure TCP relay (SNI passthrough) for auth.
       ▼
 SEKAIHOME (native runtime: stack.py up / tray, no Docker)
  ├─ Caddy (TLS for both domains)
- ├─ Authelia + LLDAP + invites (S7)                        (B-S0 confirms native Windows builds)
+ ├─ Keycloak (S7, native through Java)                     (B-S0 confirms it as a Windows service)
  ├─ Open WebUI + filter (S4)
- ├─ LiteLLM + privacy_hook (S3) ──▶ Ollama (GPU): every tier, media, titles
- ├─ privacy-gate (S1-S2, MCP S5), PostgreSQL               ┆ external (off by default; explicit,
+ ├─ LiteLLM + privacy guardrail (S3) ──▶ Ollama (GPU): every tier, media, titles
+ ├─ privacy-gate (S1-S2), PostgreSQL                       ┆ external (off by default; explicit,
  └─ trace hooks, retro                                      ┆ consented, non-sensitive only)
                                                             └┄▶ Anthropic · Vertex AI · Hugging Face · …
 ```
 
-If Authelia or LLDAP cannot run natively on Windows (B-S0), the identity stack moves to a Confidential VM at the edge
+If Keycloak cannot run as a native Windows service within the RAM budget (B-S0, V7), identity moves to a Confidential VM at the edge
 (n2d, ~$60 a month), which then terminates TLS for `auth.<domain>` only; chat stays end to end to SEKAIHOME.
 
 ### 1.1 Access modes
@@ -69,19 +69,19 @@ would need TLS at the edge, which this plan avoids.
 | # | Package | Size | Depends on |
 |---|---|---|---|
 | B0 | Decisions (section 6) | S | - |
-| B-S0 | Spike: Authelia and LLDAP as native Windows services (or alternatives that are); Caddy for Windows with TLS for two domains | S | - |
-| S1-S6, S8 | shared gate, hook, Open WebUI, MCP, build, evals | see shared file | - |
+| B-S0 | Spike: Keycloak as a native Windows service (RAM, device activity, invite plus admin enablement: V7); Caddy for Windows with TLS for two domains; `winget configure` with Smart App Control (V9) | S | - |
+| S1-S4, S6, S8 | shared gate, guardrail, Open WebUI, build, evals | see shared file | - |
 | B1 | Build: private-only department routers; local vision deployment; "(private)" models; external aliases only when enabled | S | S6 |
 | B2 | Native services: privacy-gate in `services.py` and the tray; PostgreSQL install and databases in setup; LiteLLM tool reinstalled `--with-editable packages/privacy-gate`; ffmpeg check. The native manager stays as is for `owner` mode | M | S2, S3 |
 | B2b | Supervision for `edge` mode: Task Scheduler "at startup" tasks with restart on failure (services run before sign-in); keep the launch helper (uv tool `python.exe` start, `.env`, logs) and `stack.py status`; drop pid files and the tray's supervisor role (tray stays as an optional status viewer). On Linux, generate systemd units instead of finishing the untested native code | M | B2 |
 | R | Remove redundant parts (shared file section 5) | S | B2 |
 | B3 | `stack.py install --mode local-led [--access owner|edge]`: `INSTALL.md` 2.1 and 3 with checks and prompts; ends with smoke and gate-eval | M | B1, B2 |
-| S7 | Identity on SEKAIHOME (or a confidential edge VM per B-S0) | L | B-S0 |
+| S7 | Identity: **Keycloak** on SEKAIHOME (or a confidential edge VM per B-S0) | M | B-S0 |
 | B4 | Edge relay (`edge` mode): Terraform `infrastructure/edge-gcp/` (e2-micro, static IP, firewall 80/443/tcp, 51820/udp), nginx stream SNI passthrough for both domains, WireGuard hub; SEKAIHOME WireGuard client (`stack.py wg-config`) and Windows Firewall rule limiting 443 to the tunnel | M | S7 |
 | B5 | Tests (section 4) | M | all |
 | B6 | User guide: the privacy boundary, alerts, external consent | S | B5 |
 
-Order: B0 -> S1, S1b, S8 -> S2, S3, S6, B1 -> B2 -> R -> S4, S5 (`owner` mode usable here) -> B3 -> B-S0 -> S7, B2b, B4 ->
+Order: B0 -> S1, S1b, S8 -> S2, S3, S6, B1 -> B2 -> R -> S4 (`owner` mode usable here) -> B3 -> B-S0 -> S7, B2b, B4 ->
 B5 -> B6.
 
 ## 4. Acceptance tests

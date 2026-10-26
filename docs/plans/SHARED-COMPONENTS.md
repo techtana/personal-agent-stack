@@ -3,7 +3,10 @@
 Revised 2026-10-26 (private-first): every request runs on private models by default. External model APIs are off at
 install. When enabled, they are a deliberate, last-resort user choice, and the privacy gate still applies with no
 override. No add-ons are offered for clients outside the privacy boundary. Harbor is an optional runtime; the
-orchestrator is removed. Dependencies and configuration steps: `INSTALL.md`.
+orchestrator and the planned MCP server are dropped. Where an established open-source tool already does a job
+(Presidio, detect-secrets, deface, mat2, LiteLLM access groups and logs, winget configure, Trustee, Authentik,
+Keycloak), the plans use it and write only the glue and the rules no tool provides; section 7 lists what remains to
+verify. Dependencies and configuration steps: `INSTALL.md`.
 
 Effort sizes: S = up to 1 day, M = 2-3 days, L = 4-6 days, for one developer working with the department agents.
 
@@ -55,13 +58,13 @@ confidential cloud host is available.
 | Default | `external.enabled: false` in `policy/privacy.yaml`; the build emits no external deployments while it is false |
 | Naming | external models exist only as explicit aliases, for example `external/anthropic/claude-sonnet-5-5`, shown in Open WebUI as "External · Anthropic · Claude Sonnet 5.5" with a warning badge |
 | Reachability | never referenced by a router tier, fallback, default, task model, embeddings, queue replay or "(private)" model; the build checks this and fails otherwise |
-| Who | groups an admin grants `external`; each user must also turn on "Allow external models" in their own settings |
+| Who | external aliases sit in a LiteLLM model access group `external`; only users an admin adds to the `external` group (mapped to a LiteLLM team) can call them, and each user must also turn on "Allow external models" in their own settings |
 | When | the first message of a conversation to an external model opens a confirmation dialog naming the provider and stating what will be sent; declining stops the request. The consent (user, chat, provider, time) is stored by privacy-gate; the hook refuses an external request without a matching consent |
 | What | the gate checks the whole request; sensitive -> refused with the categories named and a one-click resend to the private model (`external_on_sensitive: refuse`). Optional `generalize` (off by default, admin-enabled per category): the user sees a local rewrite without personal details and decides whether to send that |
 | Identity | one shared provider key; no user id, email, name, forwarded headers or `user` field reaches a provider; Open WebUI memories and user variables are part of the checked text |
 | Retention | provider options that limit retention and training are switched on where offered, recorded per provider at install |
 | Gate down | external aliases refuse every request |
-| Audit | every external request: user, provider, model, size, verdict (no content) |
+| Audit | every external request in LiteLLM's request log (PostgreSQL, prompts not stored): user, provider, model, tokens; verdict categories as request metadata |
 
 ## 3. What the gate protects against
 
@@ -83,31 +86,39 @@ from the park next to my flat" is.
 
 ## 4. Work packages
 
-### S1. `privacy-gate`: detectors (L)
+### S1. `privacy-gate`: detection built on existing tools (L)
 
-`packages/privacy-gate/` (own `pyproject.toml`, uv workspace member; also built as a container image).
+`packages/privacy-gate/` (own `pyproject.toml`, uv workspace member; also built as a container image). Its own code
+is the glue and the rules in the last three rows; everything else is configuration of existing tools.
 
-| Detector | Method |
+| Detector | Tool | Our part |
+|---|---|---|
+| identifiers (email, phone, cards with Luhn, IBAN, national IDs, IPs, URLs) | **Microsoft Presidio Analyzer** predefined recognizers | which recognizers and regions are on (G1); extra national-ID pattern recognizers in YAML |
+| names, places, organisations | Presidio NLP engine (spaCy or a transformers NER model; small multilingual model chosen in the S1 test) | model choice and languages |
+| org terms, customer list | Presidio deny-list and pattern recognizers, loaded from `policy/` | the lists |
+| secrets | **detect-secrets** plugins (keys, tokens, private keys, high-entropy strings); gitleaks rules as an alternative | which plugins are on |
+| disclosure | ours: first-person and identified-person cues on top of Presidio's entities | yes |
+| quasi-identifier combiner | ours: two or more quasi-identifiers linked to one person | yes |
+| special categories and profilable context | ours: multilingual ONNX sentence embeddings (`fastembed`) against exemplars in `policy/topics/*.yaml`; compared in the S1 test with LLM Guard's BanTopics (zero-shot, heavier) | yes |
+
+**S1b media (M), assembled from existing tools** (licences recorded in `packages/privacy-gate/MODELS.md`):
+
+| Input | Tools |
 |---|---|
-| secrets | regex set plus entropy checks |
-| identifiers | regex plus validators (`phonenumbers` per configured region, Luhn, IBAN mod-97, national-ID checksums) |
-| ner | small multilingual ONNX token-classification model |
-| disclosure | first-person and identified-person cues (lexicon plus NER) |
-| topics | multilingual ONNX sentence-embedding model (`fastembed`) against exemplars in `policy/topics/*.yaml`; max over 512-token chunks |
-| quasi-identifier combiner | two or more quasi-identifiers linked to one person |
-| org_terms | literal terms, regexes, customer list |
+| image | **mat2** (Linux) or ExifTool (Windows, V11) reports metadata (EXIF GPS, device, author); **deface** detects faces (CenterFace); **Presidio Image Redactor** finds personal text through OCR (ID cards, screenshots); a nudity classifier (NudeNet, licence to check, or a permissive alternative); a small permissive person detector |
+| video | `ffmpeg` samples 1 frame per second plus scene changes (max 120) for the image pipeline; **deface** also handles video directly; the audio track counts as voice |
+| audio | voice is biometric, so sensitive; optional local transcription (whisper.cpp) to scan the words |
+| documents | text extraction plus the image pipeline for embedded images; **mat2** for document metadata |
+| anything else | `unscannable`, so sensitive |
 
-**S1b media (M)**, ONNX on CPU, permissive licences recorded in `packages/privacy-gate/MODELS.md`: image (EXIF ->
-faces -> people -> nudity -> OCR text through the text detectors); video (`ffmpeg`, 1 frame per second plus scene
-changes, max 120 frames, audio counts as voice); audio (voice is biometric; optional local transcription); documents
-(text plus embedded images); anything else `unscannable` (sensitive).
-
-**S1c redaction (M):** masks text spans; blurs faces, people and OCR regions; strips metadata; re-scans the result.
-Used only by the optional admin-enabled `generalize` / `redact` steps before an intentional external send.
+**S1c redaction (S):** **Presidio Anonymizer** (text), **deface** (blur faces in images and video), **Presidio Image
+Redactor** (personal text in images), **mat2** (strip metadata); the result is scanned again. Used only by the
+optional admin-enabled `generalize` / `redact` steps before an intentional external send.
 
 Verdict (no matched text): `{"sensitive", "categories", "reasons", "score", "scanned", "cached_parts", "ms",
 "gate_version"}`. Targets: text p95 <= 50 ms for 4k new tokens, <= 400 ms for 32k; image p95 <= 300 ms; video <= 20 s
-per minute; resident memory <= 900 MB. Parts cached by SHA-256 (hashes only, LRU 10k, 24 h).
+per minute; resident memory <= 900 MB with the media models loaded on demand. Parts cached by SHA-256 (hashes only,
+LRU 10k, 24 h).
 
 ### S2. Gate service (M)
 
@@ -117,108 +128,104 @@ per minute; resident memory <= 900 MB. Parts cached by SHA-256 (hashes only, LRU
 |---|---|
 | `POST /v1/classify` | messages, text or file references -> verdict |
 | `POST /v1/redact`, `POST /v1/generalize` | S1c; `generalize` uses the private chat model |
-| `POST /v1/embeddings` | OpenAI-compatible, served by the same ONNX model (`private-embed`) |
+| `POST /v1/embeddings` | OpenAI-compatible, served by the topic model (`private-embed`) |
 | `POST /v1/consent`, `GET /v1/consent` | external-model consents (section 2) |
 | `GET /v1/private-status` | availability of each private host |
-| `/mcp` | MCP server for Open WebUI and gateway-routed open-source clients (S5) |
-| `GET /healthz` | liveness; LiteLLM disables external aliases when it fails |
+| `GET /healthz` | liveness; the LiteLLM guardrail refuses external requests when it fails |
 
 Plan A adds the deferred queue and the model-server start/stop controller to this service.
 
-### S3. LiteLLM enforcement hook (M)
+### S3. LiteLLM enforcement (S)
 
-`infrastructure/litellm/privacy_hook.py` (native: LiteLLM uv tool installed `--with-editable packages/privacy-gate`;
-containers: mounted). Three layers:
+Mostly LiteLLM's own features, plus one small custom guardrail:
 
-1. `async_pre_call_hook`: classify the full request (system prompt, messages, tool results, images and files,
-   embeddings `input`). For an external alias: require `external.enabled`, the user's group grant and opt-in, a
-   matching consent and a non-sensitive verdict; otherwise return a refusal as the assistant reply (LiteLLM
-   `RejectedRequestError`). Strip user identifiers before any external call. For private aliases: set
-   `disable_fallbacks: true` when the private host group is exhausted, and apply `on_private_unavailable`.
-2. `async_filter_deployments`: drop every `external` deployment unless the request passed layer 1 for that exact
-   external alias; with `special_categories_location: onprem`, drop `confidential-cloud` deployments for those
-   categories.
-3. `async_pre_call_deployment_hook`: final assertion before sending; raise `PrivacyViolation` and audit on any
-   mismatch. Plan A injects credentials for the confidential model server here.
+| Need | LiteLLM feature |
+|---|---|
+| only permitted users reach external models | model access group `external` on the external aliases; a team `external` holding the users an admin grants (forwarded Open WebUI user header -> LiteLLM end user / team) |
+| private-only routing | static config from the build (S6): department routers, fallbacks and defaults reference private deployments only |
+| request log, spend and routing view | LiteLLM's PostgreSQL request log and admin UI, with prompt and response storage turned off |
+| pass-through routes skip hooks | pass-through endpoints not configured; test that `/anthropic/*` and `/vertex_ai/*` return 404 |
 
-Cover `completion`, `anthropic_messages`, `responses`, `embeddings`, `text_completion`, `image_generation` and audio
-transcription. Disable pass-through routes (`/anthropic/*`, `/vertex_ai/*` and similar), which skip hooks. One audit
-row per request.
+Custom guardrail `infrastructure/litellm/privacy_guardrail.py` (a `CustomGuardrail` subclass, mode `pre_call`,
+`default_on: true`; native: the LiteLLM uv tool is installed `--with-editable packages/privacy-gate`):
+- if the routed model's `data_class` is `external`: require `external.enabled`, the user's opt-in, a matching consent
+  and a non-sensitive verdict from `/v1/classify`; otherwise return a refusal as the assistant reply; strip user
+  identifiers;
+- private models pass without a call to the gate (they are private by construction);
+- a final `async_pre_call_deployment_hook` check raises `PrivacyViolation` if a request is ever about to reach an
+  external deployment without a passing verdict (defence in depth against configuration mistakes).
+
+Plan A adds credential injection for the confidential model server to the same class.
 
 ### S4. Open WebUI integration (M)
 
-- **Filter function** `config/openwebui/functions/privacy_notice.py`:
-  - for external models: checks the user's opt-in, shows the consent dialog (`__event_call__` confirmation) on the
-    first message of a conversation, records the consent through `/v1/consent`, and shows the gate's verdict;
-  - for private models: shows status notices ("starting the private server", "queued", "image processed
-    privately").
-  It informs and collects consent; LiteLLM enforces.
-- **Models:** department models are private; external models only for granted groups, labelled "External · …".
-- **Settings** applied by the installer: one connection (LiteLLM); direct connections off; task model, RAG embeddings
-  and title generation on private aliases; web search and image generation off (each would send data to a third
-  party); community imports off; user-info headers forwarded to LiteLLM for attribution only (verify that Open WebUI
-  forwards the chat id; otherwise consent is per user and expires after 30 minutes).
+Built-in features do most of it:
+- **Groups and per-model access control** hide external models from everyone outside the `external` group.
+- **Settings** applied by the installer: one connection (LiteLLM); direct connections off; task model, RAG
+  embeddings and title generation on private aliases; web search and image generation off; community imports off;
+  user-info headers forwarded to LiteLLM for attribution (never to providers).
+- **Feedback** (thumbs, comments) stays in Open WebUI and feeds `retro`.
 
-### S5. MCP server (S)
+Ours: one filter function, `config/openwebui/functions/privacy_notice.py`. For external models it checks the user's
+opt-in, shows the consent dialog (`__event_call__` confirmation) on the first message of a conversation, records the
+consent through `/v1/consent` and shows the verdict. For private models it shows status notices ("starting the
+private server", "queued", "image processed privately"). Plan A's queue status reaches users through these notices and
+an email; there is no separate tool.
 
-Served by privacy-gate over Streamable HTTP, inside the network, for Open WebUI (registered by the installer) and
-gateway-routed open-source clients (OpenCode, Continue):
+### S5. MCP server: dropped
 
-| Tool | Does |
-|---|---|
-| `check_text`, `check_file`, `check_media` | verdict with plain-language reasons |
-| `redact`, `generalize` | only when the admin has enabled them |
-| `policy` | categories, actions and the privacy boundary in force |
-| `list_deferred`, `get_deferred`, `cancel_deferred` | Plan A queue |
-
-Not provided, by decision on 2026-10-26: skills, Claude Code hooks or `.mcp.json` entries for privacy, a stdio mode
-for desktop apps, or any Claude Desktop integration (principle 4).
+Every client inside the boundary already passes through the gateway and the guardrail, so check/redact tools added
+nothing for users, and the queue status moved to filter notices and email. No MCP server, skill, hook or `.mcp.json`
+entry is built for privacy (principle 4).
 
 ### S6. Build changes (M)
 
 `scripts/stacklib/litellm_build.py`, `agents_build.py`:
 - replace `cloud.enabled: auto` (today a configured `ANTHROPIC_API_KEY` sends complex tiers to Anthropic) with
-  `external.enabled: false` and explicit external aliases; department routers over private deployments only;
+  `external.enabled: false` and explicit external aliases in the `external` access group; department routers over
+  private deployments only;
 - provider-qualified external models (`anthropic/…`, `vertex_ai/…`, `huggingface/…`, `openai/…` with `api_base`); no
   temperature for Anthropic (AGENTS.md rule 3);
 - `data_class` and `location` on every deployment; static check that no router tier, fallback, default, task model or
   embedding alias references an external deployment;
-- Claude Code profile B: `opus_model` and the other aliases may point only at private aliases; the generated env sets
-  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, and the profile denies `WebFetch` and `WebSearch`;
-- load `privacy_hook`; write the gate config and Open WebUI assets; `native`: add privacy-gate to `services.py` and the
-  tray; `compose`: write `infrastructure/compose/<deployment>.yaml`.
+- `general_settings`: `database_url`, `user_header_name`, prompt storage off in request logs; the guardrail entry;
+- Claude Code profile B: aliases point only at private models; the generated env sets
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`; the profile denies `WebFetch` and `WebSearch`;
+- write the gate config, the Open WebUI assets, `winget/configuration.winget` (INSTALL.md) and, for `compose`,
+  `infrastructure/compose/<deployment>.yaml`.
 
-### S7. Identity (L)
+### S7. Identity on an existing identity provider (M)
 
-Caddy, Authelia (OIDC provider), LLDAP and a small invite service (`packages/identity-edge/`, own SQLite). Plan A runs
-it inside the confidential main VM. Plan B runs it on SEKAIHOME if native Windows builds work (spike B-S0), with the
-edge VM as a pure encrypted relay; otherwise on a confidential edge VM.
+No custom invite service. Both candidates provide TOTP, passkeys, OIDC for Open WebUI, invitations and an admin view
+of users:
 
-- **Second factor:** a TOTP authenticator app must be enrolled at first sign-in. Each device registers its own
-  passkey (WebAuthn); users list and delete their passkeys. Sessions are per browser: 12 h idle / 7 d absolute for
-  users, 1 h / 12 h for admins. A lost device: delete its passkey and reset the password (ends all sessions; Authelia
-  has no per-session list). Brute-force bans (Authelia regulation) and rate limits (Caddy).
-- **Admins:** passkey required, separate group, one break-glass account sealed offline (its use raises an alert).
-- **Invites with approval:** a member submits an email; admins approve (choosing a group) or reject; on approval the
-  service creates the LLDAP user and emails a one-time set-password link (72 h); first sign-in forces TOTP then a
-  passkey; Open WebUI also keeps new users `pending`. Invite rights are a group permission with a cap per inviter;
-  optional allow-list of email domains. Mail through an SMTP relay on port 587.
-- **Roles:** admin (approve invites, manage groups, models, hosts, external grants, budgets; read audit log), member
-  (allowed departments, own devices and data; invite if permitted; external models only if granted and opted in),
-  pending (nothing).
-- **Open WebUI:** OIDC client of Authelia; login form and signup off; groups claim mapped to Open WebUI groups.
+| | Plan A: **Authentik** (inside the confidential main VM, containers) | Plan B: **Keycloak** (native on Windows through Java, or Linux) |
+|---|---|---|
+| Authenticator app (TOTP) required at first sign-in | enrollment flow with a TOTP setup stage | required action "Configure OTP" |
+| Passkey per device | WebAuthn stage | passkeys (officially supported since 26.4) |
+| Per-device sessions and sign-out | user's session list | account console "Device activity" with per-session sign-out |
+| Invite -> admin approval | invitation stage in an enrollment flow; users created inactive until an admin activates them | admin-sent invitations (organizations) or registration with accounts disabled until an admin enables them |
+| Brute force | reputation policies | brute-force detection |
+| Runs on | Linux containers | JVM on Windows or Linux |
+
+Common rules, configured rather than coded: sessions 12 h idle / 7 d absolute for users and 1 h / 12 h for admins;
+admins passkey-only with one break-glass account sealed offline; invite rights are a group with a cap per inviter;
+optional allow-list of email domains; mail through an SMTP relay on port 587; Open WebUI uses the provider over OIDC
+with its login form and signup off and new users `pending`; groups claim mapped to Open WebUI groups. Roles: admin,
+member, pending, plus the `external` group from section 2.
 
 ### S8. Evaluation and release gate (M)
 
 `evals/privacy-gate/`, synthetic data only:
-- >= 40 positives per category in section 3 (per configured language), including profiling cases; >= 300 negatives
-  from ordinary coding, docs and devops work; a media set with and without faces, people, documents and GPS data (no
-  photos of real people without consent);
-- **leak canary:** a mock external provider records everything it receives. With `external.enabled: false` it must
-  receive nothing at all. With it enabled, it must receive no sensitive positive on any route, nothing without
-  consent, nothing from an unpermitted user, nothing while the gate is down, nothing through a fallback, and no user
-  identifiers;
-- static check from S6 (no external reference in routers, fallbacks, defaults, task or embedding aliases).
+- text positives and negatives generated with **presidio-evaluator** (fake personal data in templates) plus
+  hand-written cases for the profiling rules: >= 40 positives per category in section 3 per configured language,
+  >= 300 negatives from ordinary coding, docs and devops work; a media set with and without faces, people, documents
+  and GPS data (no photos of real people without consent); presidio-evaluator also reports per-entity recall;
+- **leak canary** (ours): a mock external provider records everything it receives. With `external.enabled: false` it
+  must receive nothing. With it enabled, it must receive no sensitive positive on any route, nothing without consent,
+  nothing from a user outside the `external` group, nothing while the gate is down, nothing through a fallback, and no
+  user identifiers;
+- static check from S6.
 
 Release gate (`stack.py gate-eval`, CI): recall >= 0.98 for secrets, identifiers and media; >= 0.90 for special
 categories and profilable context; false positives <= 10 %; latency and memory targets from S1; leak canary 0.
@@ -227,26 +234,44 @@ categories and profilable context; false positives <= 10 %; latency and memory t
 
 | Remove | Replaced by |
 |---|---|
-| `orchestrator/` (server, jobs store, Dockerfile), `ORCHESTRATOR_BEARER`, its entry in `services.py` and the tray, `.mcp.json` and `enabledMcpjsonServers`, smoke's orchestrator check | departments as LiteLLM aliases and Open WebUI models; privacy-gate (S2, S5) takes the orchestrator's place in the service list |
+| `orchestrator/` (server, jobs store, Dockerfile), `ORCHESTRATOR_BEARER`, its entry in `services.py` and the tray, `.mcp.json` and `enabledMcpjsonServers`, smoke's orchestrator check | departments as LiteLLM aliases and Open WebUI models; privacy-gate takes the orchestrator's place in the service list |
 | `record_lesson` tool | agents append to `memory/lessons.md` directly |
 | Automatic cloud tiers (`cloud.enabled: auto`, `default_fallbacks` and `context_window_fallbacks` to `cloud-*`) | private-only routers; explicit external aliases (S6) |
-| Phoenix (uv tool, service entry, OTel callback, tray link) | JSONL traces, which `retro` and `why-routed` read |
+| Phoenix (uv tool, service entry, OTel callback, tray link) | LiteLLM request log and admin UI |
+| `infrastructure/litellm/custom_callbacks.py` (JSONL traces with prompt text), `scripts/stacklib/traces.py`, `stack.py why-routed` and its skill | LiteLLM's PostgreSQL request log and admin UI (no prompt storage); `retro` reads the request log and Open WebUI feedback |
+| `scripts/hooks/log_turn.py` and its Claude Code hooks | Claude Code's built-in OpenTelemetry export to a local collector, if the owner wants development traces |
+| Dependency installs inside `stack.py setup` | `winget configure` on Windows, Terraform and cloud-init on Linux; `setup` keeps databases, model pulls and the build |
 | `infrastructure/docker-compose.yml` (untested) | generated `infrastructure/compose/<deployment>.yaml` |
-| The tray's LiteLLM admin link while there is no database | restored once PostgreSQL is configured |
 | README, AGENTS.md and `docs/ORCHESTRATOR-DESIGN.md` sections on the above | rewritten; `memory/lessons.md` keeps its history |
 
-Kept: the native runtime for `owner` mode (`services.py`, `startup.py`, `tray.py`, `stack.py up/down/status/tray/setup/pull`;
-shared or multi-user hosts move supervision to Task Scheduler or systemd, Plan B package B2b),
-`agents/*.yaml` and the build, `machines/*.yaml` and `doctor`, `bench`, `smoke` (retargeted), `why-routed`, `retro`,
-the trace hooks, evals.
+Kept: the native runtime for `owner` mode (`services.py`, `startup.py`, `tray.py`, `stack.py up/down/status/tray/pull`;
+shared or multi-user hosts move supervision to Task Scheduler or systemd, Plan B package B2b), `agents/*.yaml` and
+the build, `machines/*.yaml` and `doctor`, `bench`, `smoke` (retargeted), `retro`, evals.
 
 ## 6. Shared decisions (defaults used unless changed)
 
 | # | Decision | Default |
 |---|---|---|
-| G1 | Regions for identifier validators, languages for lexicons | US and English; add others before go-live |
-| G2 | Detector models | chosen in the S1 spike; permissive licences only |
+| G1 | Regions for identifier validators, languages for NER and topics | US and English; add others before go-live |
+| G2 | NER, topic, person and nudity models | chosen in the S1 test; permissive licences only |
 | G3 | External models | disabled |
 | G4 | `generalize` / `redact` before an intentional external send | disabled |
 | G5 | Special categories allowed on confidential cloud hosts | yes (`special_categories_location: any`); set `onprem` to keep them on owned hardware |
 | G6 | Users or admins may override a sensitive verdict per request | never |
+| G7 | Topic detector | our embedding exemplars, unless LLM Guard BanTopics scores better within the memory target |
+
+## 7. To verify before building on it
+
+| # | Item | Checked in |
+|---|---|---|
+| V1 | LiteLLM guardrails cannot be scoped per model in the docs found (global, per key, per request); the guardrail therefore checks the routed model's `data_class` itself. Confirm `async_pre_call_deployment_hook` sees the chosen deployment in LiteLLM 1.106.3 | S3 |
+| V2 | LiteLLM model access groups work with end users identified by Open WebUI's forwarded user header (not only with virtual keys) | S3 |
+| V3 | Open WebUI forwards the chat id to LiteLLM; otherwise consent is per user for 30 minutes | S4 |
+| V4 | Presidio NER model and languages fit the 900 MB memory target together with the topic model | S1 |
+| V5 | Licences: deface (and its CenterFace model), NudeNet, any person detector, Presidio Image Redactor's OCR engine (Tesseract) | S1b |
+| V6 | Authentik: enrollment flow with an invitation stage and users created inactive pending admin activation | S7 (Plan A) |
+| V7 | Keycloak: runs as a native Windows service on SEKAIHOME within the RAM budget; device activity with per-session sign-out; invitation plus admin enablement flow | S7 (Plan B, B-S0) |
+| V8 | Trustee (KBS + Attestation Service) on Google Cloud Confidential VMs (SEV-SNP, TDX) releasing a LUKS key at boot; the systemd disk-key integration is a 2026 proposal, not a shipped feature | Plan A, A-S0 |
+| V9 | `winget configure` installs every Windows dependency unattended, and Smart App Control allows each installed binary | INSTALL, B3 |
+| V10 | Task Scheduler start at boot and restart on failure for the native services | Plan B, B2b |
+| V11 | mat2 does not run natively on Windows; ExifTool covers metadata there. Confirm ExifTool reads and strips the formats Open WebUI accepts | S1b, Plan B |

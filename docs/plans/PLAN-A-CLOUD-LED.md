@@ -16,11 +16,11 @@ Prerequisites: `SHARED-COMPONENTS.md`, `INSTALL.md` section 2.2.
 | Layer | Protection | Who holds the key |
 |---|---|---|
 | Memory in use (main VM, model server) | AMD SEV-SNP or Intel TDX Confidential VMs; NVIDIA H100 confidential computing on the GPU option | the CPU or GPU, per VM; not readable by the hypervisor or Google operators |
-| Proof of the above | remote attestation report checked before any key is released | verified by our key broker |
-| Disks (data, model weights) | LUKS inside the VM | our key broker (OpenBao on owned hardware); released only to an attested VM, or entered by an admin |
-| Backups | restic, encrypted before upload to Cloud Storage | the same broker; a copy sealed offline by the admin |
+| Proof of the above | remote attestation report checked before any key is released | verified by **Trustee** (Attestation Service) on owned hardware |
+| Disks (data, model weights) | LUKS inside the VM | **Trustee** Key Broker Service on owned hardware; released only to an attested VM, or entered by an admin |
+| Backups | restic, encrypted before upload to Cloud Storage | stored as a Trustee resource; a copy sealed offline by the admin |
 | Traffic | TLS ends inside the confidential VM (no Google load balancer); WireGuard between our hosts | the VMs |
-| App secrets | on the encrypted disk or in the broker; not in Google Secret Manager | us |
+| App secrets | on the encrypted disk or as Trustee resources; not in Google Secret Manager | us |
 | Logs sent to Google | metadata only (no prompts, answers or file names); serial console off | - |
 
 What remains trusted, stated in the user guide: the CPU and GPU vendors' hardware roots of trust, the measured guest
@@ -31,8 +31,8 @@ firmware (checked by attestation), and protection against side-channel attacks. 
 
 ```
 Browser ─TLS ends inside the VM─▶ Main VM: Confidential VM (N2D, AMD SEV-SNP), Docker Compose
-                                    Caddy · Authelia + LLDAP + invites (S7) · Open WebUI + filter (S4)
-                                    LiteLLM + privacy_hook (S3) · privacy-gate (S1-S2, MCP S5, queue, controller)
+                                    Caddy · Authentik (S7) · Open WebUI + filter (S4)
+                                    LiteLLM + privacy guardrail (S3) · privacy-gate (S1-S2, queue, controller)
                                     PostgreSQL · WireGuard hub · LUKS data disk
           private, by priority      │
           ┌─────────────────────────┼──────────────────────────────┐
@@ -44,7 +44,8 @@ Browser ─TLS ends inside the VM─▶ Main VM: Confidential VM (N2D, AMD SEV-S
   stopped when idle
           ┆ external (off by default; explicit, consented, non-sensitive only)
           └┄▶ Anthropic API · Vertex AI · Hugging Face · OpenAI-compatible
-Key broker: OpenBao on owned hardware (SEKAIHOME or the admin's machine), reached over WireGuard.
+Key broker: Trustee (Key Broker Service + Attestation Service) on owned hardware (SEKAIHOME or the admin's machine),
+reached over WireGuard. Fallback if V8 fails: Clevis + Tang (network-bound unlock, no attestation) plus admin unlock.
 Backups: restic -> Cloud Storage, encrypted client-side.
 ```
 
@@ -94,7 +95,8 @@ Table `deferred_requests` in PostgreSQL on the encrypted disk: `id` (`Q-…`), `
    right now…".
 2. The worker replays FIFO per user when a private host is up (starting `confidential-cpu` if allowed), with header
    `x-privacy-replay: <id>`; the hook allows replays to private deployments only.
-3. Delivery: an email without content; MCP tools `list_deferred`, `get_deferred`, `cancel_deferred` in Open WebUI.
+3. Delivery: an email without content, and a notice from the Open WebUI filter in the original chat when the user
+   next opens it, with the answer; the user cancels by replying "cancel Q-1234" in that chat.
 4. Limits: 20 per user, 500 total, 25 MB per request; expiry 72 h; results deleted 7 days after delivery.
 
 ## 5. Work packages
@@ -103,20 +105,20 @@ Table `deferred_requests` in PostgreSQL on the encrypted disk: `id` (`Q-…`), `
 |---|---|---|---|
 | A0 | Decisions and accounts (section 8) | S | - |
 | A-S0 | Spike: Confidential VM types per region (N2D SEV-SNP, C3 TDX, A3 H100 CC); attestation tooling for each; 9B tokens/s on C3 TDX with llama.cpp; cold start (boot + attestation + unlock + model load) | S | A0 |
-| S1-S6, S8 | shared gate, hook, Open WebUI, MCP, build, evals | see shared file | - |
+| S1-S4, S6, S8 | shared gate, guardrail, Open WebUI, build, evals | see shared file | - |
 | A1 | Build target `deployment: cloud-led`: private host groups, `infrastructure/compose/cloud-led.yaml` (Caddy, identity, Open WebUI, LiteLLM, privacy-gate, PostgreSQL) | M | S6 |
 | A2 | Terraform `infrastructure/gcp/`: Confidential VMs (main and model server), firewall (443/tcp, 51820/udp), static IP, a service account limited to starting and stopping the model servers, billing budget alert, no Secret Manager for app secrets | M | A-S0 |
-| A3 | Key broker and encryption: OpenBao on owned hardware; attestation verification; LUKS unlock at boot over WireGuard; manual admin unlock as fallback; restic backups with off-Google keys; restore script | L | A2 |
+| A3 | Key release and encryption: **Trustee** (KBS + Attestation Service) on owned hardware with reference values for the VM images; LUKS unlock at boot through the KBS client over WireGuard; manual admin unlock as fallback (Clevis + Tang if V8 fails); restic backups with keys held as Trustee resources; restore script | M | A2 |
 | A4 | Confidential model server image: llama.cpp (CPU) or vLLM (GPU option), weights on the LUKS disk; controller in privacy-gate (start on demand, idle stop, health) | M | A2, A3 |
 | A5 | On-prem link: WireGuard hub; `stack.py wg-config` for SEKAIHOME; Ollama on the tunnel address only | M | A2 |
 | A6 | Deferred queue (section 4.1) | L | S2, S3 |
-| S7 | Identity inside the main VM | L | A1 |
+| S7 | Identity: **Authentik** inside the main VM (V6) | M | A1 |
 | A7 | Installer `scripts/gcp-install.sh`, run from the admin's own machine (gcloud + Terraform) so key material never passes through Google-hosted shells; `destroy`, `restore <date>` | M | A1-A6, S7 |
 | A8 | Tests on a staging project (section 6) | M | all |
 | R | Remove redundant parts (shared file section 5) | S | S2 |
 | A9 | User guide (privacy boundary, what alerts mean, queue, external consent) and admin runbook (unlock, keys, attestation failures) | S | A8 |
 
-Order: A0 -> A-S0 -> S1, S1b, S8 -> S2, S3, S6, A1 -> R -> S4, S5 -> A2 -> A3 -> A4, A5 -> A6 -> S7 -> A7 -> A8 -> A9.
+Order: A0 -> A-S0 (includes V8) -> S1, S1b, S8 -> S2, S3, S6, A1 -> R -> S4 -> A2 -> A3 -> A4, A5 -> A6 -> S7 -> A7 -> A8 -> A9.
 
 ## 6. Acceptance tests
 
@@ -154,7 +156,7 @@ confidential-capable machine types are larger than e2.
 |---|---|---|
 | A-D1 | Private host order | `confidential-cpu`, then `onprem` |
 | A-D2 | GPU confidential server | off |
-| A-D3 | Where the key broker runs | SEKAIHOME (owned hardware); manual unlock if it is offline at a reboot |
+| A-D3 | Where Trustee runs | SEKAIHOME (owned hardware); manual unlock if it is offline at a reboot |
 | A-D4 | External models | disabled; if enabled, which providers and which groups |
 | A-D5 | Special categories on confidential cloud hosts | allowed (`special_categories_location: any`) |
 | A-D6 | Region (must offer the chosen confidential machine types) | from A-S0 |
@@ -167,7 +169,8 @@ confidential-capable machine types are larger than e2.
 |---|---|
 | CPU inference too slow for daily use | A-S0 measures first; on-prem second in the order; GPU option for heavy windows |
 | Confidential VMs do not live-migrate; host maintenance reboots them and needs an unlock | broker unlocks automatically after attestation; manual unlock runbook; maintenance notifications |
-| Broker offline at reboot | admin unlock; second broker copy on the admin's machine |
+| Broker offline at reboot | admin unlock; second Trustee instance on the admin's machine |
+| Trustee not ready for Google Cloud Confidential VMs (V8) | Clevis + Tang for unlock, attestation checked by a script before the admin enters the key |
 | Hardware or firmware vulnerability in confidential computing | firmware and image updates; attestation pins measurements; special categories can be kept on-prem (A-D5) |
 | Gate false negatives once external is enabled | external stays off by default; consent per conversation; S8 recall gate; audit review |
 | Cost of confidential machines | idle stop for the model server; the main VM is the only always-on machine |

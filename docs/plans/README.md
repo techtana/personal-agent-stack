@@ -17,9 +17,11 @@ talk to their own cloud (Claude Code on a subscription, Claude Desktop), because
 | Biggest risk | CPU inference speed on the confidential server; trust in CPU vendors' confidential computing | weaker local answers for complex work |
 
 - [SHARED-COMPONENTS.md](SHARED-COMPONENTS.md): principles and the privacy boundary, data classes and private tiers,
-  the external access policy, the privacy gate (text, profiling, media), the LiteLLM enforcement hook, Open WebUI
-  integration, the MCP server, build changes, identity (TOTP, passkeys, invites with approval), evaluation with a leak
-  canary, and the redundant parts to remove.
-- [INSTALL.md](INSTALL.md): dependencies per platform and every configuration step; the optional Harbor runtime.
+  the external access policy, the privacy gate built on Presidio, detect-secrets, deface and mat2 (text, profiling,
+  media), LiteLLM access groups and one custom guardrail, Open WebUI integration, build changes, identity on Authentik
+  (Plan A) or Keycloak (Plan B), evaluation with presidio-evaluator and a leak canary, the redundant parts to remove,
+  and the items still to verify (V1-V11).
+- [INSTALL.md](INSTALL.md): dependencies per platform (a `winget configure` file on Windows, cloud-init on Linux) and
+  every configuration step; the optional Harbor runtime.
 
 Both plans start with the gate and its evaluation set. Plan B reaches a usable `owner` mode sooner.
