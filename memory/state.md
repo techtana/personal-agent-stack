@@ -43,7 +43,7 @@ MCP servers) is never stopped by mistake; verified by pointing the orchestrator 
 Since 2026-10-25 21:34 the services are owned by the tray app (`stack.py tray`, scripts/tray.py): a windowless
 `.venv\Scripts\pythonw.exe` launched through Explorer, so neither it nor its services belong to a terminal or Claude Code
 session. Its icon sits in the notification area's hidden icons; clicking it opens a status window with links to Open
-WebUI, Phoenix and the LiteLLM admin UI. Start at login is OFF (`stack.py tray --install-startup` or the tray's
+WebUI, Phoenix and the LiteLLM admin UI. Start at login is ON since 2026-10-25 (`stack.py tray --remove-startup` or the tray's
 checkbox adds a Startup-folder shortcut). Log: `.run/logs/tray.log`.
 
 Before the tray, services started from a Claude Code tool shell stopped once (15:00 to 19:34, no reboot) and survived
@@ -81,7 +81,7 @@ once across a session restart.
 ## Open items
 1. If Smart App Control ever blocks the environments' python.exe as well, the remaining options are turning it off
    (a Windows security decision for you) or running the tools under the signed `uv` (`uv tool run`).
-2. Decide whether the tray should start at login (`stack.py tray --install-startup`); after the next reboot confirm
+2. Start at login is on; after the next reboot or sign-in, confirm
    the tray and its services come up on their own.
 8. Linux/macOS service management (tool Python launch, start-time pid matching) is written but untested on those systems.
 3. Open WebUI first run at http://127.0.0.1:3000: create admin; Workspace > Models > Import each config/openwebui/*.json; Admin > Integrations > External Tool Servers > MCP (Streamable HTTP) http://127.0.0.1:8765/mcp with the bearer from .env.
