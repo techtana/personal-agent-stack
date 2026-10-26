@@ -13,6 +13,8 @@ Commands
   claude-env    print the env for Claude Code profile B (--shell powershell|bash)
   why-routed    show recent gateway routing decisions
   retro         run scripts/retro.py (arguments pass through)
+  tray          background tray app: runs the services, shows status, links to the UIs
+                (--foreground, --status, --stop, --install-startup, --remove-startup)
 """
 from __future__ import annotations
 
@@ -181,6 +183,28 @@ def cmd_why_routed(a):
     print(traces.format_routed(rows[-a.last :]))
 
 
+def cmd_tray(a):
+    from stacklib import startup
+
+    if a.install_startup:
+        info(f"tray: start at login enabled ({startup.install()})")
+    if a.remove_startup:
+        startup.remove()
+        info("tray: start at login disabled")
+    if a.stop:
+        startup.stop_tray()
+    elif a.status:
+        startup.report()
+    elif a.foreground:
+        raise SystemExit(subprocess.run([sys.executable, str(startup.TRAY_SCRIPT)], cwd=REPO).returncode)
+    elif not (a.install_startup or a.remove_startup):
+        if startup.running_pid():
+            info(f"tray: already running (pid {startup.running_pid()}); click its icon in the notification area")
+            return
+        startup.launch_detached()
+        info("tray: launched; its icon is in the notification area (Windows: under the ^ hidden icons arrow)")
+
+
 def cmd_retro(a):
     rest = [x for x in a.rest if x != "--"]
     raise SystemExit(subprocess.run([sys.executable, str(REPO / "scripts" / "retro.py"), *rest], cwd=REPO).returncode)
@@ -202,6 +226,9 @@ def main(argv=None):
     s = sub.add_parser("claude-env"); s.add_argument("--shell", choices=["powershell", "bash"], default="bash"); s.set_defaults(f=cmd_claude_env)
     s = sub.add_parser("why-routed"); s.add_argument("--last", type=int, default=10); s.add_argument("--days", type=int, default=7); s.set_defaults(f=cmd_why_routed)
     s = sub.add_parser("retro"); s.add_argument("rest", nargs=argparse.REMAINDER); s.set_defaults(f=cmd_retro)
+    s = sub.add_parser("tray", help="background tray app that runs the services and shows their status")
+    s.add_argument("--foreground", action="store_true"); s.add_argument("--status", action="store_true"); s.add_argument("--stop", action="store_true")
+    s.add_argument("--install-startup", action="store_true"); s.add_argument("--remove-startup", action="store_true"); s.set_defaults(f=cmd_tray)
     a = ap.parse_args(argv)
     a.f(a)
 

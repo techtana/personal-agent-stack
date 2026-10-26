@@ -52,6 +52,18 @@ uv run scripts/stack.py smoke
 ./scripts/setup.sh && uv run scripts/stack.py up && uv run scripts/stack.py smoke
 ```
 
+To keep the stack running in the background, use the tray app instead of `up`:
+
+```
+uv run scripts/stack.py tray                    # starts the services and a tray icon (Windows: under the ^ hidden icons)
+uv run scripts/stack.py tray --install-startup  # optional: start the tray at login
+```
+
+Clicking the icon opens a status window: each service's state, Open buttons for Open WebUI, Phoenix and the LiteLLM
+admin UI, and start/stop controls. The icon is green when everything is up, amber when something is down, red when the
+gateway or Ollama is down. The tray runs outside any terminal or Claude Code session, so its services keep running.
+"Quit (keep services running)" closes only the tray; "Stop services and quit" stops everything.
+
 Then:
 
 - **Claude Code on your subscription (default):** open this repo in Claude Code. The departments appear as
