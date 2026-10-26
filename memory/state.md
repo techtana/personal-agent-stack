@@ -85,7 +85,12 @@ once across a session restart.
    the tray and its services come up on their own.
 8. Linux/macOS service management (tool Python launch, start-time pid matching) is written but untested on those systems.
 3. Open WebUI first run at http://127.0.0.1:3000: create admin; Workspace > Models > Import each config/openwebui/*.json; Admin > Integrations > External Tool Servers > MCP (Streamable HTTP) http://127.0.0.1:8765/mcp with the bearer from .env.
-4. Add ANTHROPIC_API_KEY to .env to enable cloud tiers (Max plans include monthly API credits; confirm in Console), then `stack.py build` and restart litellm.
+4. Do not add ANTHROPIC_API_KEY to .env until build change S6 lands: today a key makes complex tiers route to Anthropic
+   automatically, which contradicts the private-first direction.
 5. Run `scripts/claude-local.ps1` once to verify Claude Code profile B end to end (Read/Edit tool round trip through LiteLLM) on the 9B at 32k.
 6. Revisit the 35B as primary after a RAM upgrade; the 9B fits entirely on the GPU and leaves ~17 GB of RAM available.
+9. Direction since 2026-10-26: private first (docs/plans/). Plan A runs on confidential VMs with a confidential model server
+   and on-prem fallback; Plan B runs every tier locally. External APIs are off by default and only an explicit, consented,
+   gated user choice. Not built yet. The earlier GCP draft is archived in docs/archive/GCP-DESIGN-DRAFT-2026-10-26.md.
+   The LiteLLM admin UI (`/ui`) fails locally with "Not connected to DB!" because it needs Postgres; the tray link still points there.
 7. First `/retro` after a week of real traces; wire Open WebUI thumbs export when chat use starts.

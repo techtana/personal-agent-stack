@@ -1,5 +1,10 @@
 # personal-agent-stack
 
+**Direction (2026-10-26): private first.** Every request is to be processed by private models, on owned hardware
+or confidential cloud VMs; external model APIs become an optional, explicit, gated user choice. The plans are in
+[docs/plans/](docs/plans/README.md). Until build change S6 lands, the current build still sends complex tiers to
+Anthropic when `ANTHROPIC_API_KEY` is set; SEKAIHOME has no key, so today everything runs locally.
+
 A local-first coding-agent stack for one developer on one GPU workstation, composed from open-source
 tools rather than a custom harness. Six department agents (app-dev, testing, security, devops,
 code-review, docs) are defined once and generated into Claude Code, OpenCode, Open WebUI and a LiteLLM
@@ -23,6 +28,8 @@ Haiku/Sonnet/Opus 5.5 through the gateway only when complexity, context size or 
 ```
 
 Design, decisions and measurements: [docs/ORCHESTRATOR-DESIGN.md](docs/ORCHESTRATOR-DESIGN.md).
+Private-first multi-user plans (cloud-led on confidential VMs, local-led), privacy gate and installation:
+[docs/plans/](docs/plans/README.md).
 Stable rules for agents: [AGENTS.md](AGENTS.md). State and lessons: [memory/](memory/).
 
 ## Prerequisites

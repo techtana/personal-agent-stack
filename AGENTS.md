@@ -1,8 +1,9 @@
 # AGENTS.md - personal-agent-stack
 
-Local-first coding-agent stack for one developer: Ollama on the GPU, a LiteLLM gateway that routes each
-department between local and cloud tiers, Claude Code as the primary agent surface, and a human-gated
-retrospective that improves prompts and routing from traces. Stable instructions live here; mutable state
+Private-first agent stack: Ollama on owned GPUs (or confidential cloud VMs), a LiteLLM gateway with a local privacy
+gate, Open WebUI as the user surface, Claude Code as the owner's development tool, and a human-gated retrospective
+that improves prompts and routing from traces. External model APIs are optional, explicit and gated
+(`docs/plans/`). Stable instructions live here; mutable state
 is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `docs/ORCHESTRATOR-DESIGN.md`.
 
 ## Departments
@@ -33,6 +34,10 @@ is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `
 7. Python code runs through `uv run` (see `pyproject.toml`); gateway, Phoenix and Open WebUI are `uv tool`
    installs, not project dependencies. Keep scripts cross-platform (PowerShell + bash wrappers call Python).
 8. Commit messages: conventional prefix (`feat:`, `fix:`, `docs:`, `retro:`), imperative, one topic.
+9. Private first: never put an external model in a router tier, fallback, default, task or embedding alias; external
+   models are explicit aliases behind the privacy gate (`docs/plans/SHARED-COMPONENTS.md` section 2). Do not build
+   privacy skills, hooks or MCP add-ons for clients outside the privacy boundary (Claude Code profile A, Claude
+   Desktop): they can only advise and would imply enforcement that does not exist.
 
 ## Everyday commands
 

@@ -1,26 +1,25 @@
-# Implementation plans (2026-10-26, revised)
+# Implementation plans (2026-10-26, private first)
 
-Two ways to run the stack for several people, with Open WebUI as the main front end and one local privacy gate.
-Harbor is an optional runtime; the native runtime (Windows) and a generated Compose file (Linux VM) are the defaults. Sensitive requests never reach an external model API: personal, special-category
-and profilable information, secrets, and images, video or audio showing people.
+The project is private first. Every request is processed by private models: on hardware we own, or on confidential
+cloud VMs that the cloud provider cannot read. External model APIs (Anthropic, Vertex AI, Hugging Face and others) are
+off at install; when an admin enables them they are a deliberate, last-resort user choice, and a local privacy gate
+refuses anything sensitive with no override. Open WebUI is the user surface. No add-ons are offered for clients that
+talk to their own cloud (Claude Code on a subscription, Claude Desktop), because there they could only advise.
 
 | | [Plan A: cloud-led](PLAN-A-CLOUD-LED.md) | [Plan B: local-led](PLAN-B-LOCAL-LED.md) |
 |---|---|---|
-| Main processor | small Google Cloud VM (Docker Compose) | SEKAIHOME (native services, no Docker) |
-| Non-sensitive work | external APIs at every tier | local for simple/medium, external API for complex/reasoning |
-| Sensitive work | private host: on-prem over WireGuard and/or a private Cloud Run GPU | local, at every tier |
-| No private host available | queued, answered later, user notified | not applicable |
-| Where chats are stored | the cloud VM (our project) | SEKAIHOME; the edge VM sees no chat content |
-| Works when SEKAIHOME is off | yes; sensitive requests queue unless the cloud GPU is configured | no (offline page) |
-| Idle cloud cost (rough) | ~$30 a month | $0-5 a month |
-| Biggest risk | gate false negatives send data to an API | weaker local answers for sensitive complex work |
+| Main processor | Confidential VM in our Google Cloud project (TLS, data and keys inside it) | SEKAIHOME (native services, no Docker) |
+| Private models | confidential model server (CPU, optional GPU) started on demand, then on-prem; queue when neither is up | local GPU, every tier |
+| Provider access to data | memory encrypted in use (SEV-SNP / TDX), checked by attestation; disks and backups encrypted with keys held outside Google | none; the edge relay sees only encrypted traffic |
+| External models | optional, off by default, explicit and consented, non-sensitive only | same |
+| Works when SEKAIHOME is off | yes (confidential model server; the key broker must be reachable at reboots or the admin unlocks) | no |
+| Idle cloud cost (rough) | ~$70-85 a month | $0-5 a month |
+| Biggest risk | CPU inference speed on the confidential server; trust in CPU vendors' confidential computing | weaker local answers for complex work |
 
-- [SHARED-COMPONENTS.md](SHARED-COMPONENTS.md): privacy gate (text and media), redaction, LiteLLM enforcement hook,
-  Open WebUI integration, MCP server and skill for other apps, build changes, identity edge, evaluation with a leak
-  canary, and the list of redundant parts to remove (orchestrator, Phoenix, the untested compose file).
-- [INSTALL.md](INSTALL.md): dependencies per platform and every configuration step, the manual path that
-  `stack.py install` automates, plus the optional Harbor runtime and what is still unverified about it.
-- Identity and security behaviour: [../GCP-DESIGN.md](../GCP-DESIGN.md) section 4 onwards.
+- [SHARED-COMPONENTS.md](SHARED-COMPONENTS.md): principles and the privacy boundary, data classes and private tiers,
+  the external access policy, the privacy gate (text, profiling, media), the LiteLLM enforcement hook, Open WebUI
+  integration, the MCP server, build changes, identity (TOTP, passkeys, invites with approval), evaluation with a leak
+  canary, and the redundant parts to remove.
+- [INSTALL.md](INSTALL.md): dependencies per platform and every configuration step; the optional Harbor runtime.
 
-Both plans start with the gate and its evaluation set. Plan B reaches a usable
-`owner` mode sooner; Plan A adds the cloud VM, the deferred queue and a private cloud GPU on the same shared work.
+Both plans start with the gate and its evaluation set. Plan B reaches a usable `owner` mode sooner.
