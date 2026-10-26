@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pystray  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
-from stacklib import REPO, metrics, profile as prof, services  # noqa: E402
+from stacklib import REPO, metrics, process_metrics, profile as prof, services  # noqa: E402
 from stacklib import startup  # noqa: E402
 
 POLL_SECONDS = 10
@@ -63,6 +63,8 @@ class TrayApp:
         self.rows: list[dict] = []
         self.metrics_period = "24 hours"
         self.metric_rows: list[dict] = []
+        self.process_sampler = process_metrics.ProcessSampler()
+        self.process_rows: list[dict] = []
         self.busy = ""
         self.checked_at = ""
         self.ui_queue: queue.Queue = queue.Queue()
@@ -83,6 +85,7 @@ class TrayApp:
         with self.refresh_lock:
             self.rows = services.status(self.profile)
             self.metric_rows = metrics.summarize(REPO / "traces" / "litellm", self.metrics_period)
+            self.process_rows = self.process_sampler.sample()
             self.checked_at = datetime.now().strftime("%H:%M:%S")
             up = {r["service"] for r in self.rows if r["healthy"]}
             wanted = ["ollama", *self.managed]
@@ -271,8 +274,36 @@ class TrayApp:
             text="Gateway calls only. Ollama phase times appear when reported; cloud exposes request duration only.",
         )
         self.metrics_note.grid(row=11, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        ttk.Separator(frame, orient="horizontal").grid(row=12, column=0, columnspan=4, sticky="we", pady=(12, 8))
+        ttk.Label(frame, text="Live process resources", font=("Segoe UI", 10, "bold")).grid(
+            row=13, column=0, columnspan=4, sticky="w"
+        )
+        process_frame = ttk.Frame(frame)
+        process_frame.grid(row=14, column=0, columnspan=4, sticky="nsew")
+        process_columns = ("name", "pid", "cpu", "memory", "gpu", "gpu_memory")
+        self.process_tree = ttk.Treeview(process_frame, columns=process_columns, show="headings", height=8)
+        process_headings = {
+            "name": ("Process", 260, "w"),
+            "pid": ("PID", 80, "e"),
+            "cpu": ("CPU %", 90, "e"),
+            "memory": ("RAM MB", 100, "e"),
+            "gpu": ("GPU engine %", 120, "e"),
+            "gpu_memory": ("GPU dedicated MB", 150, "e"),
+        }
+        for column, (title, width, anchor) in process_headings.items():
+            self.process_tree.heading(column, text=title)
+            self.process_tree.column(column, width=width, minwidth=60, anchor=anchor)
+        process_scroll = ttk.Scrollbar(process_frame, orient="vertical", command=self.process_tree.yview)
+        self.process_tree.configure(yscrollcommand=process_scroll.set)
+        self.process_tree.pack(side="left", fill="both", expand=True)
+        process_scroll.pack(side="right", fill="y")
+        self.process_note = ttk.Label(
+            frame,
+            text="CPU is since the previous refresh. GPU engine utilization and dedicated memory are driver-reported; unavailable values show as —.",
+        )
+        self.process_note.grid(row=15, column=0, columnspan=4, sticky="w", pady=(4, 0))
         bottom = ttk.Frame(frame)
-        bottom.grid(row=12, column=0, columnspan=4, sticky="we", pady=(12, 0))
+        bottom.grid(row=16, column=0, columnspan=4, sticky="we", pady=(12, 0))
         ttk.Button(bottom, text="Open chat", command=lambda: self.open_url("open_webui")).pack(side="left")
         ttk.Button(bottom, text="Start all", command=self.start_all).pack(side="left", padx=4)
         ttk.Button(bottom, text="Stop all", command=self.stop_all).pack(side="left")
@@ -321,12 +352,35 @@ class TrayApp:
             )
         if not self.metric_rows:
             self.metrics_tree.insert("", "end", values=("No recorded calls", "", "", "", "", "", "", "", "", "", "", ""))
+        for item in self.process_tree.get_children():
+            self.process_tree.delete(item)
+        for row in self.process_rows:
+            self.process_tree.insert(
+                "",
+                "end",
+                values=(
+                    row["name"],
+                    row["pid"],
+                    self._format_percent(row["cpu_percent"]),
+                    f"{row['memory_mb']:.1f}",
+                    self._format_percent(row["gpu_percent"]),
+                    self._format_memory(row["gpu_memory_mb"]),
+                ),
+            )
 
     @staticmethod
     def _format_ms(value: float | None) -> str:
         if value is None:
             return "-"
         return f"{value / 1000:.2f} s" if value >= 1000 else f"{value:.0f} ms"
+
+    @staticmethod
+    def _format_percent(value: float | None) -> str:
+        return f"{value:.1f}" if value is not None else "-"
+
+    @staticmethod
+    def _format_memory(value: float | None) -> str:
+        return f"{value:.1f}" if value is not None else "-"
 
     def _drain_ui_queue(self) -> None:
         try:

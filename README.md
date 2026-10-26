@@ -67,6 +67,8 @@ selectable period (1 hour, 24 hours, 7 days, 30 days, or all time). Metrics cove
 direct Claude subscription sessions bypass this telemetry. Ollama timings provide local model-load, prompt-evaluation,
 and generation phases when reported; cloud providers expose request duration only. Phoenix receives corresponding
 operation spans for inspection and aggregation. "Quit (keep services running)" closes only the tray; "Stop services and quit" stops everything.
+The window also lists live CPU and RAM usage and driver-reported GPU engine utilization and dedicated memory by process.
+Unavailable GPU readings show as `-`.
 
 Then:
 
