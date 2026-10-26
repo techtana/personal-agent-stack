@@ -44,9 +44,9 @@ winget configure --file winget\configuration.winget --accept-configuration-agree
 | 4 | PostgreSQL 17 | winget configuration (`PostgreSQL.PostgreSQL.17`) | `stack.py setup` creates databases `litellm` and `gate` with their own roles, writes `DATABASE_URL`, `GATE_DATABASE_URL`; `shared_buffers=128MB` |
 | 5 | ffmpeg | winget configuration (`Gyan.FFmpeg`) | on PATH for video frames |
 | 6 | Tesseract OCR | winget configuration (`UB-Mannheim.TesseractOCR`) | OCR engine for Presidio Image Redactor; language packs per G1 |
-| 7 | ExifTool | winget configuration (`OliverBetz.ExifTool`) | metadata reading and stripping on Windows, where mat2 does not run natively (V11) |
-| 8 | Java 21 (`edge` mode only) | winget configuration (`Microsoft.OpenJDK.21`) | for Keycloak |
-| 9 | Keycloak (`edge` mode only) | release archive from keycloak.org, checksum verified by `stack.py setup` | registered as a Task Scheduler service (B2b); realm imported from `infrastructure/identity/keycloak-realm.json` |
+| 7 | ExifTool, qpdf | winget configuration (`OliverBetz.ExifTool`, qpdf) | metadata stripping on Windows, where mat2 does not run natively: ExifTool for images, video and PDF, `qpdf --linearize` to drop old PDF revisions; Office and audio files are cleaned by the gate's own code or refused (V11) |
+| 8 | OpenJDK (`edge` mode only) | winget configuration (the version the pinned Keycloak release requires; OpenJDK 25 for 26.8) | for Keycloak |
+| 9 | Keycloak (`edge` mode only) | release archive from keycloak.org, checksum verified by `stack.py setup` | at least 26.7.3 (CVE-2026-16072); registered as a Windows service with `kc.bat tools windows-service install` (V7); realm imported from `infrastructure/identity/keycloak-realm.json` |
 | 10 | Python 3.11 / 3.12 | fetched by uv | - |
 | 11 | LiteLLM, Open WebUI | `uv tool install` by setup (pinned); LiteLLM `--with-editable packages/privacy-gate` | started through each environment's python.exe (Smart App Control) |
 | 12 | Presidio, detect-secrets, deface, fastembed | dependencies of `packages/privacy-gate`, installed by uv; models downloaded on first start into `.run/models/` | spaCy or transformers NER model per G1/G2 |

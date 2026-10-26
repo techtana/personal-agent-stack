@@ -58,7 +58,7 @@ confidential cloud host is available.
 | Default | `external.enabled: false` in `policy/privacy.yaml`; the build emits no external deployments while it is false |
 | Naming | external models exist only as explicit aliases, for example `external/anthropic/claude-sonnet-5-5`, shown in Open WebUI as "External · Anthropic · Claude Sonnet 5.5" with a warning badge |
 | Reachability | never referenced by a router tier, fallback, default, task model, embeddings, queue replay or "(private)" model; the build checks this and fails otherwise |
-| Who | external aliases sit in a LiteLLM model access group `external`; only users an admin adds to the `external` group (mapped to a LiteLLM team) can call them, and each user must also turn on "Allow external models" in their own settings |
+| Who | external aliases sit in a LiteLLM model access group `external`; only users an admin adds to the `external` group (mapped by a LiteLLM `custom_auth` function, V2) can call them, and each user must also turn on "Allow external models" in their own settings |
 | When | the first message of a conversation to an external model opens a confirmation dialog naming the provider and stating what will be sent; declining stops the request. The consent (user, chat, provider, time) is stored by privacy-gate; the hook refuses an external request without a matching consent |
 | What | the gate checks the whole request; sensitive -> refused with the categories named and a one-click resend to the private model (`external_on_sensitive: refuse`). Optional `generalize` (off by default, admin-enabled per category): the user sees a local rewrite without personal details and decides whether to send that |
 | Identity | one shared provider key; no user id, email, name, forwarded headers or `user` field reaches a provider; Open WebUI memories and user variables are part of the checked text |
@@ -94,7 +94,7 @@ is the glue and the rules in the last three rows; everything else is configurati
 | Detector | Tool | Our part |
 |---|---|---|
 | identifiers (email, phone, cards with Luhn, IBAN, national IDs, IPs, URLs) | **Microsoft Presidio Analyzer** predefined recognizers | which recognizers and regions are on (G1); extra national-ID pattern recognizers in YAML |
-| names, places, organisations | Presidio NLP engine (spaCy or a transformers NER model; small multilingual model chosen in the S1 test) | model choice and languages |
+| names, places, organisations | Presidio NLP engine (small spaCy models such as `en_core_web_sm` plus `xx_ent_wiki_sm`; not Presidio's default `en_core_web_lg`, which alone exceeds 900 MB: V4) | model choice and languages |
 | org terms, customer list | Presidio deny-list and pattern recognizers, loaded from `policy/` | the lists |
 | secrets | **detect-secrets** plugins (keys, tokens, private keys, high-entropy strings); gitleaks rules as an alternative | which plugins are on |
 | disclosure | ours: first-person and identified-person cues on top of Presidio's entities | yes |
@@ -105,7 +105,7 @@ is the glue and the rules in the last three rows; everything else is configurati
 
 | Input | Tools |
 |---|---|
-| image | **mat2** (Linux) or ExifTool (Windows, V11) reports metadata (EXIF GPS, device, author); **deface** detects faces (CenterFace); **Presidio Image Redactor** finds personal text through OCR (ID cards, screenshots); a nudity classifier (NudeNet, licence to check, or a permissive alternative); a small permissive person detector |
+| image | **mat2** (Linux) or ExifTool (Windows, V11) reports metadata (EXIF GPS, device, author); **deface** detects faces (CenterFace); **Presidio Image Redactor** finds personal text through OCR (ID cards, screenshots); a permissively licensed nudity classifier (not NudeNet, which is AGPL-3.0: V5); a small permissive person detector (RT-DETR, Apache-2.0) |
 | video | `ffmpeg` samples 1 frame per second plus scene changes (max 120) for the image pipeline; **deface** also handles video directly; the audio track counts as voice |
 | audio | voice is biometric, so sensitive; optional local transcription (whisper.cpp) to scan the words |
 | documents | text extraction plus the image pipeline for embedded images; **mat2** for document metadata |
@@ -141,7 +141,7 @@ Mostly LiteLLM's own features, plus one small custom guardrail:
 
 | Need | LiteLLM feature |
 |---|---|
-| only permitted users reach external models | model access group `external` on the external aliases; a team `external` holding the users an admin grants (forwarded Open WebUI user header -> LiteLLM end user / team) |
+| only permitted users reach external models | model access group `external` on the external aliases. A small `custom_auth` function checks Open WebUI's dedicated key, reads the forwarded `X-OpenWebUI-User-Email`, and returns that user's allowed groups (`private`, plus `external` for granted users) as `models`; `litellm_settings.enable_post_custom_auth_checks: true` makes LiteLLM enforce them. The plain `user_header_name` end-user mapping is not used: it fails open (V2) |
 | private-only routing | static config from the build (S6): department routers, fallbacks and defaults reference private deployments only |
 | request log, spend and routing view | LiteLLM's PostgreSQL request log and admin UI, with prompt and response storage turned off |
 | pass-through routes skip hooks | pass-through endpoints not configured; test that `/anthropic/*` and `/vertex_ai/*` return 404 |
@@ -153,7 +153,9 @@ Custom guardrail `infrastructure/litellm/privacy_guardrail.py` (a `CustomGuardra
   identifiers;
 - private models pass without a call to the gate (they are private by construction);
 - a final `async_pre_call_deployment_hook` check raises `PrivacyViolation` if a request is ever about to reach an
-  external deployment without a passing verdict (defence in depth against configuration mistakes).
+  external deployment without a passing verdict (defence in depth against configuration mistakes). It reads the
+  chosen deployment from `kwargs["model_info"]` and raises a non-retryable 4xx error, since a plain exception becomes
+  a 500 that the router retries (V1).
 
 Plan A adds credential injection for the confidential model server to the same class.
 
@@ -163,7 +165,10 @@ Built-in features do most of it:
 - **Groups and per-model access control** hide external models from everyone outside the `external` group.
 - **Settings** applied by the installer: one connection (LiteLLM); direct connections off; task model, RAG
   embeddings and title generation on private aliases; web search and image generation off; community imports off;
-  user-info headers forwarded to LiteLLM for attribution (never to providers).
+  user-info headers forwarded to LiteLLM for attribution and consent (never to providers):
+  `ENABLE_FORWARD_USER_INFO_HEADERS=true`, no `FORWARD_USER_INFO_HEADER_JWT_SECRET`, and a dedicated LiteLLM key that
+  only Open WebUI holds. Consent is keyed on `X-OpenWebUI-Chat-Id`; calls without one fall back to per user for 30
+  minutes (V3).
 - **Feedback** (thumbs, comments) stays in Open WebUI and feeds `retro`.
 
 Ours: one filter function, `config/openwebui/functions/privacy_notice.py`. For external models it checks the user's
@@ -262,16 +267,16 @@ the build, `machines/*.yaml` and `doctor`, `bench`, `smoke` (retargeted), `retro
 
 ## 7. To verify before building on it
 
-| # | Item | Checked in |
-|---|---|---|
-| V1 | LiteLLM guardrails cannot be scoped per model in the docs found (global, per key, per request); the guardrail therefore checks the routed model's `data_class` itself. Confirm `async_pre_call_deployment_hook` sees the chosen deployment in LiteLLM 1.106.3 | S3 |
-| V2 | LiteLLM model access groups work with end users identified by Open WebUI's forwarded user header (not only with virtual keys) | S3 |
-| V3 | Open WebUI forwards the chat id to LiteLLM; otherwise consent is per user for 30 minutes | S4 |
-| V4 | Presidio NER model and languages fit the 900 MB memory target together with the topic model | S1 |
-| V5 | Licences: deface (and its CenterFace model), NudeNet, any person detector, Presidio Image Redactor's OCR engine (Tesseract) | S1b |
-| V6 | Authentik: enrollment flow with an invitation stage and users created inactive pending admin activation | S7 (Plan A) |
-| V7 | Keycloak: runs as a native Windows service on SEKAIHOME within the RAM budget; device activity with per-session sign-out; invitation plus admin enablement flow | S7 (Plan B, B-S0) |
-| V8 | Trustee (KBS + Attestation Service) on Google Cloud Confidential VMs (SEV-SNP, TDX) releasing a LUKS key at boot; the systemd disk-key integration is a 2026 proposal, not a shipped feature | Plan A, A-S0 |
-| V9 | `winget configure` installs every Windows dependency unattended, and Smart App Control allows each installed binary | INSTALL, B3 |
-| V10 | Task Scheduler start at boot and restart on failure for the native services | Plan B, B2b |
-| V11 | mat2 does not run natively on Windows; ExifTool covers metadata there. Confirm ExifTool reads and strips the formats Open WebUI accepts | S1b, Plan B |
+| # | Item | Checked in | Result (2026-10-26) |
+|---|---|---|---|
+| V1 | LiteLLM guardrails cannot be scoped per model in the docs found (global, per key, per request); the guardrail therefore checks the routed model's `data_class` itself. Confirm `async_pre_call_deployment_hook` sees the chosen deployment in LiteLLM 1.106.3 | S3 | **Confirmed** (source and a test proxy). The hook runs after routing and fallback selection, before the provider call, on both `/v1/chat/completions` and `/v1/messages`; `kwargs["model_info"]` is the chosen deployment's. Raising blocks the call. A `guardrails:` list under a deployment's `litellm_params` also scopes a guardrail per model. Keep the global callback (a config typo cannot skip it) and raise a non-retryable 4xx: a plain exception returns 500 and the router retries it three times |
+| V2 | LiteLLM model access groups work with end users identified by Open WebUI's forwarded user header (not only with virtual keys) | S3 | **Refuted as stated.** `user_header_name` only sets `end_user_id`; without Postgres the end-user lookup fails and the request passes unrestricted (fails open, logged at debug only). With Postgres, customer model limits apply. Without a DB, a `custom_auth` function that maps the forwarded email to `models: [<access groups>]` plus `litellm_settings.enable_post_custom_auth_checks: true` enforces it (tested: 403 `key_model_access_denied`); without that flag only `/v1/models` is filtered. JWT auth is enterprise-only. The header is trusted only when Open WebUI holds a dedicated key that `custom_auth` checks |
+| V3 | Open WebUI forwards the chat id to LiteLLM; otherwise consent is per user for 30 minutes | S4 | **Confirmed with gaps** (Open WebUI 0.12.3 source). Needs `ENABLE_FORWARD_USER_INFO_HEADERS=true`; sends `X-OpenWebUI-Chat-Id` plus user id, email, name and role headers (names configurable). Title, tag and tool-selection task calls carry the chat id; temporary chats send `temporary:<session>`. Missing for API calls without `chat_id`; message id only through a connection header template (`{{MESSAGE_ID}}`). Setting `FORWARD_USER_INFO_HEADER_JWT_SECRET` replaces the plain user headers with one signed JWT. Keep the per-user 30-minute fallback for calls without a chat id |
+| V4 | Presidio NER model and languages fit the 900 MB memory target together with the topic model | S1 | **Confirmed for small models** (measured on SEKAIHOME; presidio-analyzer 2.2.365, spaCy 3.8, torch 2.14 CPU). Steady RSS: Presidio + `en_core_web_sm` 394-435 MB (7 ms per text); plus `xx_ent_wiki_sm` 680 MB; plus a zero-shot topic model 546-669 MB; sm + xx + DeBERTa-v3-xsmall zero-shot + detect-secrets 821 MB. Over target: Presidio's default `en_core_web_lg` alone 978 MB; transformers NER (`dslim/bert-base-NER`) + zero-shot 899 MB. Zero-shot topic models take 0.56-2.9 s per text with five labels, far over the 50 ms text target, so G7's embedding exemplars stay the default and BanTopics is only a comparison. detect-secrets adds no measurable memory but needs filters (191 raw hits on 20 texts). Install paths must stay short or enable Windows long paths: spaCy and the Hugging Face cache failed past 260 characters |
+| V5 | Licences: deface (and its CenterFace model), NudeNet, any person detector, Presidio Image Redactor's OCR engine (Tesseract) | S1b | **Partly.** deface and CenterFace: MIT. Tesseract and tessdata_fast: Apache-2.0. Presidio: MIT. **NudeNet v3: AGPL-3.0** (YOLOv8-based weights), so it is out under G2. Person detector: RT-DETR (`PekingU/rtdetr_r18vd`, Apache-2.0, via transformers); MediaPipe model files have no stated licence. Nudity classifier still to choose |
+| V6 | Authentik: enrollment flow with an invitation stage and users created inactive pending admin activation | S7 (Plan A) | **Confirmed** (docs 2026.8): Invitation stage (turn off "Continue flow without invitation") plus User Write stage "Create users as inactive", then admin activation. Admins and users can end single sessions; admins remove single MFA devices |
+| V7 | Keycloak: runs as a native Windows service on SEKAIHOME within the RAM budget; device activity with per-session sign-out; invitation plus admin enablement flow | S7 (Plan B, B-S0) | **Docs part mostly confirmed** (26.8.1, OpenJDK 25): official Windows service through `kc.bat tools windows-service install` (Apache Commons Daemon); account console device activity with per-device sign-out; organization invitations (use at least 26.7.3, CVE-2026-16072). Self-registered users cannot be created disabled without an extension. Memory: the sizing guide's baseline is about 1.25 GB; plan 1.3-1.5 GB. Runtime test on SEKAIHOME not run (B-S0) |
+| V8 | Trustee (KBS + Attestation Service) on Google Cloud Confidential VMs (SEV-SNP, TDX) releasing a LUKS key at boot; the systemd disk-key integration is a 2026 proposal, not a shipped feature | Plan A, A-S0 | **Partly.** Trustee has plain `snp` and `tdx` verifiers (the `az_*` vTPM ones are Azure-only); no documented GCP test. No shipped boot-time client: clevis-pin-trustee has no release and the systemd-cryptsetup token is still a proposal. A-S0 must budget a custom initramfs hook (attester plus KBS fetch); Clevis + Tang stays the fallback |
+| V9 | `winget configure` installs every Windows dependency unattended, and Smart App Control allows each installed binary | INSTALL, B3 | Not run (changes SEKAIHOME; B-S0) |
+| V10 | Task Scheduler start at boot and restart on failure for the native services | Plan B, B2b | Not run (changes SEKAIHOME; B2b) |
+| V11 | mat2 does not run natively on Windows; ExifTool covers metadata there. Confirm ExifTool reads and strips the formats Open WebUI accepts | S1b, Plan B | **Partly** (ExifTool 13.59). Writes JPEG, PNG, WebP, GIF, HEIC, MP4, MOV and PDF; **read-only for DOCX/XLSX/PPTX, MP3 and WAV**. PDF edits are incremental, so old data stays until `qpdf --linearize`. mat2 (LGPL-3.0) covers all of them but needs WSL or Linux. On Windows without WSL: ExifTool plus qpdf, with Office and audio metadata stripped by small Python code (zip `docProps`, mutagen) or those uploads blocked |

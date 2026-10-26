@@ -108,7 +108,7 @@ Table `deferred_requests` in PostgreSQL on the encrypted disk: `id` (`Q-…`), `
 | S1-S4, S6, S8 | shared gate, guardrail, Open WebUI, build, evals | see shared file | - |
 | A1 | Build target `deployment: cloud-led`: private host groups, `infrastructure/compose/cloud-led.yaml` (Caddy, identity, Open WebUI, LiteLLM, privacy-gate, PostgreSQL) | M | S6 |
 | A2 | Terraform `infrastructure/gcp/`: Confidential VMs (main and model server), firewall (443/tcp, 51820/udp), static IP, a service account limited to starting and stopping the model servers, billing budget alert, no Secret Manager for app secrets | M | A-S0 |
-| A3 | Key release and encryption: **Trustee** (KBS + Attestation Service) on owned hardware with reference values for the VM images; LUKS unlock at boot through the KBS client over WireGuard; manual admin unlock as fallback (Clevis + Tang if V8 fails); restic backups with keys held as Trustee resources; restore script | M | A2 |
+| A3 | Key release and encryption: **Trustee** (KBS + Attestation Service) on owned hardware with reference values for the VM images; LUKS unlock at boot through a custom initramfs hook (attester plus KBS fetch; no shipped Trustee unlock client yet, V8) over WireGuard; manual admin unlock as fallback (Clevis + Tang if V8 fails); restic backups with keys held as Trustee resources; restore script | M | A2 |
 | A4 | Confidential model server image: llama.cpp (CPU) or vLLM (GPU option), weights on the LUKS disk; controller in privacy-gate (start on demand, idle stop, health) | M | A2, A3 |
 | A5 | On-prem link: WireGuard hub; `stack.py wg-config` for SEKAIHOME; Ollama on the tunnel address only | M | A2 |
 | A6 | Deferred queue (section 4.1) | L | S2, S3 |

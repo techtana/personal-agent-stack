@@ -93,4 +93,6 @@ once across a session restart.
    and on-prem fallback; Plan B runs every tier locally. External APIs are off by default and only an explicit, consented,
    gated user choice. Not built yet. The earlier GCP draft is archived in docs/archive/GCP-DESIGN-DRAFT-2026-10-26.md.
    The LiteLLM admin UI (`/ui`) fails locally with "Not connected to DB!" because it needs Postgres; the tray link still points there.
+10. Plan checks V1-V8 and V11 evaluated 2026-10-26 (results in docs/plans/SHARED-COMPONENTS.md section 7). V9 (`winget configure`),
+   V10 (Task Scheduler) and the Keycloak runtime part of V7 change this machine and were not run; they belong to B-S0 and B2b.
 7. First `/retro` after a week of real traces; wire Open WebUI thumbs export when chat use starts.

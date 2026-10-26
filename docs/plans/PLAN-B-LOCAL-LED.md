@@ -29,7 +29,7 @@ SEKAIHOME (native runtime: stack.py up / tray, no Docker)
                                                             └┄▶ Anthropic · Vertex AI · Hugging Face · …
 ```
 
-If Keycloak cannot run as a native Windows service within the RAM budget (B-S0, V7), identity moves to a Confidential VM at the edge
+Keycloak ships an official Windows service install but needs about 1.3-1.5 GB of RAM (V7). If that does not fit the RAM budget in B-S0, identity moves to a Confidential VM at the edge
 (n2d, ~$60 a month), which then terminates TLS for `auth.<domain>` only; chat stays end to end to SEKAIHOME.
 
 ### 1.1 Access modes
