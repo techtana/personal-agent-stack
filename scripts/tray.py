@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pystray  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
-from stacklib import REPO, profile as prof, services  # noqa: E402
+from stacklib import REPO, metrics, profile as prof, services  # noqa: E402
 from stacklib import startup  # noqa: E402
 
 POLL_SECONDS = 10
@@ -61,6 +61,8 @@ class TrayApp:
         self.profile = prof.resolve_profile()
         self.managed = [s for s in services.SERVICE_ORDER if s in services.commands(self.profile)]
         self.rows: list[dict] = []
+        self.metrics_period = "24 hours"
+        self.metric_rows: list[dict] = []
         self.busy = ""
         self.checked_at = ""
         self.ui_queue: queue.Queue = queue.Queue()
@@ -80,6 +82,7 @@ class TrayApp:
         # handle on every swap, so two concurrent swaps fail with WinError 1402. Serialise, and swap only on change.
         with self.refresh_lock:
             self.rows = services.status(self.profile)
+            self.metric_rows = metrics.summarize(REPO / "traces" / "litellm", self.metrics_period)
             self.checked_at = datetime.now().strftime("%H:%M:%S")
             up = {r["service"] for r in self.rows if r["healthy"]}
             wanted = ["ollama", *self.managed]
@@ -187,6 +190,10 @@ class TrayApp:
         self.icon.update_menu()
         self.ui_queue.put(self._render_window)
 
+    def _metrics_period_changed(self, _event=None) -> None:
+        self.metrics_period = self.metrics_period_var.get()
+        self.refresh_soon()
+
     # ---------- status window ----------
     def show_window(self) -> None:
         if self.window is None or not self.window.winfo_exists():
@@ -199,7 +206,7 @@ class TrayApp:
     def _build_window(self) -> None:
         w = tk.Toplevel(self.root)
         w.title("Agent Stack")
-        w.resizable(False, False)
+        w.resizable(True, True)
         w.protocol("WM_DELETE_WINDOW", w.withdraw)  # closing hides it; the tray keeps running
         frame = ttk.Frame(w, padding=14)
         frame.grid()
@@ -223,8 +230,49 @@ class TrayApp:
                 toggle = ttk.Button(buttons, text="Stop", width=7, command=lambda s=svc: self.toggle(s))
                 toggle.pack(side="left", padx=2)
             self.row_widgets[svc] = (dot, state, toggle)
+
+        ttk.Separator(frame, orient="horizontal").grid(row=8, column=0, columnspan=4, sticky="we", pady=(12, 8))
+        metrics_header = ttk.Frame(frame)
+        metrics_header.grid(row=9, column=0, columnspan=4, sticky="we")
+        ttk.Label(metrics_header, text="Usage and operation averages", font=("Segoe UI", 10, "bold")).pack(side="left")
+        self.metrics_period_var = tk.StringVar(value=self.metrics_period)
+        period_box = ttk.Combobox(
+            metrics_header,
+            textvariable=self.metrics_period_var,
+            values=list(metrics.PERIODS),
+            state="readonly",
+            width=12,
+        )
+        period_box.pack(side="right")
+        period_box.bind("<<ComboboxSelected>>", self._metrics_period_changed)
+        columns = ("process", "model", "requests", "input_tokens", "output_tokens", "total_tokens",
+                   "load", "input", "inference", "model_total", "request", "cost")
+        self.metrics_tree = ttk.Treeview(frame, columns=columns, show="headings", height=7)
+        headings = {
+            "process": ("Process", 130),
+            "model": ("Model", 190),
+            "requests": ("Requests", 65),
+            "input_tokens": ("Input tokens", 85),
+            "output_tokens": ("Output tokens", 90),
+            "total_tokens": ("Total tokens", 85),
+            "load": ("Avg load", 75),
+            "input": ("Avg input", 75),
+            "inference": ("Avg inference", 95),
+            "model_total": ("Avg model total", 95),
+            "request": ("Avg request", 85),
+            "cost": ("Cost", 85),
+        }
+        for column, (title, width) in headings.items():
+            self.metrics_tree.heading(column, text=title)
+            self.metrics_tree.column(column, width=width, minwidth=55, anchor="w" if column in ("process", "model") else "e")
+        self.metrics_tree.grid(row=10, column=0, columnspan=4, sticky="we", pady=(6, 0))
+        self.metrics_note = ttk.Label(
+            frame,
+            text="Gateway calls only. Ollama phase times appear when reported; cloud exposes request duration only.",
+        )
+        self.metrics_note.grid(row=11, column=0, columnspan=4, sticky="w", pady=(4, 0))
         bottom = ttk.Frame(frame)
-        bottom.grid(row=20, column=0, columnspan=4, sticky="we", pady=(12, 0))
+        bottom.grid(row=12, column=0, columnspan=4, sticky="we", pady=(12, 0))
         ttk.Button(bottom, text="Open chat", command=lambda: self.open_url("open_webui")).pack(side="left")
         ttk.Button(bottom, text="Start all", command=self.start_all).pack(side="left", padx=4)
         ttk.Button(bottom, text="Stop all", command=self.stop_all).pack(side="left")
@@ -248,6 +296,37 @@ class TrayApp:
         busy = f"  {self.busy}..." if self.busy else ""
         self.summary.configure(text=f"{up}/{len(self.row_widgets)} running, checked {self.checked_at}{busy}")
         self.startup_var.set(startup.is_installed())
+        for item in self.metrics_tree.get_children():
+            self.metrics_tree.delete(item)
+        for row in self.metric_rows:
+            process = row["process"]
+            origin = "Local" if process == "ollama" else "Cloud"
+            self.metrics_tree.insert(
+                "",
+                "end",
+                values=(
+                    f"{origin} / {process}",
+                    row["model"],
+                    row["requests"],
+                    row["prompt_tokens"],
+                    row["completion_tokens"],
+                    row["prompt_tokens"] + row["completion_tokens"],
+                    self._format_ms(row["avg_model_load_ms"]),
+                    self._format_ms(row["avg_input_ms"]),
+                    self._format_ms(row["avg_inference_ms"]),
+                    self._format_ms(row["avg_model_total_ms"]),
+                    self._format_ms(row["avg_latency_ms"]),
+                    f"${row['cost_usd']:.4f}" if origin == "Cloud" else "-",
+                ),
+            )
+        if not self.metric_rows:
+            self.metrics_tree.insert("", "end", values=("No recorded calls", "", "", "", "", "", "", "", "", "", "", ""))
+
+    @staticmethod
+    def _format_ms(value: float | None) -> str:
+        if value is None:
+            return "-"
+        return f"{value / 1000:.2f} s" if value >= 1000 else f"{value:.0f} ms"
 
     def _drain_ui_queue(self) -> None:
         try:

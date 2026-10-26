@@ -24,29 +24,32 @@ def build_config(profile: dict) -> str:
     model_list: list[dict] = []
     available: set[str] = set()
 
-    def add(name: str, params: dict, info_: dict) -> None:
-        model_list.append({"model_name": name, "litellm_params": params, "model_info": info_})
+    def add(name: str, params: dict, info_: dict, location: str) -> None:
+        model_info = {**info_, "agent_stack_location": location}
+        model_list.append({"model_name": name, "litellm_params": params, "model_info": model_info})
         available.add(name)
 
     if m.get("fim"):
         add("local-fim", {"model": f"ollama/{m['fim']}", "api_base": base, "keep_alive": -1},
-            {"mode": "completion", "input_cost_per_token": 0, "output_cost_per_token": 0, "max_input_tokens": 4096})
+            {"mode": "completion", "input_cost_per_token": 0, "output_cost_per_token": 0, "max_input_tokens": 4096},
+            "local")
     if m.get("embed"):
         add("local-embed", {"model": f"ollama/{m['embed']}", "api_base": base},
-            {"mode": "embedding", "input_cost_per_token": 0, "output_cost_per_token": 0})
+            {"mode": "embedding", "input_cost_per_token": 0, "output_cost_per_token": 0},
+            "local")
     if m.get("small"):
         add("local-small", _ollama(m["small"], base, num_ctx=m["small_num_ctx"], keep_alive="30m"),
-            {**LOCAL_INFO, "max_input_tokens": m["small_num_ctx"], "max_output_tokens": 8192})
+            {**LOCAL_INFO, "max_input_tokens": m["small_num_ctx"], "max_output_tokens": 8192}, "local")
     primary_opts = m.get("primary_options") or {}
     if m.get("primary"):
         add("local-primary", _ollama(m["primary"], base, num_ctx=m["primary_num_ctx"], keep_alive=-1, **primary_opts),
-            {**LOCAL_INFO, "max_input_tokens": m["primary_num_ctx"], "max_output_tokens": 8192})
+            {**LOCAL_INFO, "max_input_tokens": m["primary_num_ctx"], "max_output_tokens": 8192}, "local")
     if m.get("reviewer"):
         add("local-reviewer", _ollama(m["reviewer"], base, num_ctx=m["primary_num_ctx"], keep_alive="10m", **(m.get("reviewer_options") or {})),
-            {**LOCAL_INFO, "max_input_tokens": m["primary_num_ctx"], "max_output_tokens": 8192})
+            {**LOCAL_INFO, "max_input_tokens": m["primary_num_ctx"], "max_output_tokens": 8192}, "local")
     if cloud:
         for tier, model in cm.items():
-            add(f"cloud-{tier}", {"model": f"anthropic/{model}", "api_key": key}, dict(CLOUD_INFO))
+            add(f"cloud-{tier}", {"model": f"anthropic/{model}", "api_key": key}, dict(CLOUD_INFO), "cloud")
 
     local_default = "local-primary" if "local-primary" in available else ("local-small" if "local-small" in available else None)
 
@@ -62,11 +65,11 @@ def build_config(profile: dict) -> str:
         if m.get("primary"):
             # Same model and load options as local-primary so Ollama reuses one runner instead of reloading per department.
             add(f"{aid}-local", _ollama(m["primary"], base, num_ctx=m["primary_num_ctx"], keep_alive=-1, **primary_opts, **(a.get("local") or {})),
-                {**LOCAL_INFO, "max_input_tokens": m["primary_num_ctx"], "max_output_tokens": 8192})
+                {**LOCAL_INFO, "max_input_tokens": m["primary_num_ctx"], "max_output_tokens": 8192}, "local")
         if cloud:
             target = r.get("complex", "cloud-default")
             cloud_model = cm.get(target.replace("cloud-", ""), cm["default"]) if target.startswith("cloud-") else cm["default"]
-            add(f"{aid}-cloud", {"model": f"anthropic/{cloud_model}", "api_key": key}, dict(CLOUD_INFO))
+            add(f"{aid}-cloud", {"model": f"anthropic/{cloud_model}", "api_key": key}, dict(CLOUD_INFO), "cloud")
         tiers = {}
         for low, up in TIERS.items():
             tgt = resolve(r.get(low, "local-primary"))

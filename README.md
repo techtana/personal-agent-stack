@@ -62,7 +62,11 @@ uv run scripts/stack.py tray --install-startup  # optional: start the tray at lo
 Clicking the icon opens a status window: each service's state, Open buttons for Open WebUI, Phoenix and the LiteLLM
 admin UI, and start/stop controls. The icon is green when everything is up, amber when something is down, red when the
 gateway or Ollama is down. The tray runs outside any terminal or Claude Code session, so its services keep running.
-"Quit (keep services running)" closes only the tray; "Stop services and quit" stops everything.
+The window also shows input/output token totals, average operation times per process and model, and cloud cost for a
+selectable period (1 hour, 24 hours, 7 days, 30 days, or all time). Metrics cover requests routed through LiteLLM;
+direct Claude subscription sessions bypass this telemetry. Ollama timings provide local model-load, prompt-evaluation,
+and generation phases when reported; cloud providers expose request duration only. Phoenix receives corresponding
+operation spans for inspection and aggregation. "Quit (keep services running)" closes only the tray; "Stop services and quit" stops everything.
 
 Then:
 

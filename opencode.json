@@ -106,6 +106,27 @@
             "context": 32768,
             "output": 8192
           }
+        },
+        "cloud-cheap": {
+          "name": "cloud cheap: claude-haiku-5-5",
+          "limit": {
+            "context": 200000,
+            "output": 32000
+          }
+        },
+        "cloud-default": {
+          "name": "cloud default: claude-sonnet-5-5",
+          "limit": {
+            "context": 200000,
+            "output": 32000
+          }
+        },
+        "cloud-heavy": {
+          "name": "cloud heavy: claude-opus-5-5",
+          "limit": {
+            "context": 200000,
+            "output": 32000
+          }
         }
       }
     }
