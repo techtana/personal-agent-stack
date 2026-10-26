@@ -44,7 +44,7 @@ Since 2026-10-25 21:34 the services are owned by the tray app (`stack.py tray`, 
 `.venv\Scripts\pythonw.exe` launched through Explorer, so neither it nor its services belong to a terminal or Claude Code
 session. Its icon sits in the notification area's hidden icons; clicking it opens a status window with links to Open
 WebUI, Phoenix and the LiteLLM admin UI. Start at login is ON since 2026-10-25 (`stack.py tray --remove-startup` or the tray's
-checkbox adds a Startup-folder shortcut). Log: `.run/logs/tray.log`.
+checkbox removes the Startup-folder shortcut "Agent Stack.lnk"). Log: `.run/logs/tray.log`.
 
 Before the tray, services started from a Claude Code tool shell stopped once (15:00 to 19:34, no reboot) and survived
 once across a session restart.
