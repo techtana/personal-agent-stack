@@ -1,6 +1,7 @@
 # Plan A: cloud-led mixture
 
-Revised 2026-10-26: Harbor runtime, broader privacy gate (profiling, media), orchestrator removed.
+Revised 2026-10-26: `compose` runtime on the VM (Harbor optional), broader privacy gate (profiling, media),
+orchestrator removed.
 
 A small cloud VM is the main processor and model work goes to pay-per-token APIs. A local privacy gate on the VM checks
 every request, including images, video and audio. Requests with personal or profilable information, secrets or media
@@ -15,10 +16,10 @@ Prerequisites: `SHARED-COMPONENTS.md` (S1-S8, R), `INSTALL.md` (section 2.2). Id
 
 ```
 Browser ─HTTPS─▶ Caddy ─┬─ auth.<domain>  Authelia + LLDAP + invites                      (S7)
-  (Google Cloud VM,     └─ chat.<domain>  Open WebUI [Harbor] + privacy_notice filter       (S4)
+  (Google Cloud VM,     └─ chat.<domain>  Open WebUI + privacy_notice filter                (S4)
    e2-medium, Docker)                       │ tools: privacy-gate MCP (S5)
                                             ▼
-                               LiteLLM [Harbor] + privacy_hook (S3) ──▶ privacy-gate (S1-S2):
+                               LiteLLM + privacy_hook (S3) ─────────▶ privacy-gate (S1-S2):
                                 │ not sensitive                         classify, redact, embeddings,
                                 ▼                                       private status, deferred queue
                     external APIs by complexity tier        │ sensitive
@@ -30,12 +31,13 @@ Browser ─HTTPS─▶ Caddy ─┬─ auth.<domain>  Authelia + LLDAP + invites
                                                         ▼
                                                  deferred queue (privacy-gate + Postgres, encrypted)
 
-Also on the VM: Postgres, WireGuard hub. Nightly backups to Cloud Storage.
+Also on the VM: Postgres, WireGuard hub. All services in one generated Docker Compose file (Harbor optional for
+Open WebUI and LiteLLM). Nightly backups to Cloud Storage.
 ```
 
 | Component | Where | Data class |
 |---|---|---|
-| Open WebUI, LiteLLM (Harbor); privacy-gate, Postgres, identity edge (our Compose) | VM in our project (trusted, encrypted disk) | private |
+| Open WebUI, LiteLLM, privacy-gate, Postgres, identity edge (generated Compose) | VM in our project (trusted, encrypted disk) | private |
 | RAG embeddings, all detection and redaction | privacy-gate on the VM | private |
 | Non-sensitive chat | external APIs, with user identifiers stripped | external |
 | Sensitive chat and media | private hosts only (a vision-capable private model for images and video) | private |
@@ -96,10 +98,9 @@ timestamps, `error`.
 | # | Package | Size | Depends on |
 |---|---|---|---|
 | A0 | Decisions and accounts (section 6) | S | - |
-| H0 | Harbor spike on a Linux VM: install, config keys, network, mounting our LiteLLM config and hook | S | - |
-| S1-S6, S8 | shared gate, hook, Open WebUI, MCP and skill, build, evals | see shared file | H0 |
-| A1 | Build target `deployment: cloud-led`: private host groups with `order`, vision deployments, `cloud-first` VM profile, `infrastructure/gate/compose.yaml` with the deferred worker and Postgres | M | S6 |
-| A2 | Terraform `infrastructure/gcp/`: APIs, VM with startup script (Docker, Harbor, uv, WireGuard per `INSTALL.md` 2.2), static IP, firewall (443/tcp, 51820/udp), service accounts, Secret Manager, backup bucket, billing budget alert | M | A0, H0 |
+| S1-S6, S8 | shared gate, hook, Open WebUI, MCP and skill, build, evals | see shared file | - |
+| A1 | Build target `deployment: cloud-led`: private host groups with `order`, vision deployments, `cloud-first` VM profile with `runtime: compose`, generated `infrastructure/compose/cloud-led.yaml` (Open WebUI, LiteLLM, privacy-gate with the deferred worker, Postgres, identity edge) | M | S6 |
+| A2 | Terraform `infrastructure/gcp/`: APIs, VM with startup script (Docker, uv, WireGuard per `INSTALL.md` 2.2), static IP, firewall (443/tcp, 51820/udp), service accounts, Secret Manager, backup bucket, billing budget alert | M | A0 |
 | A3 | On-prem private host: WireGuard hub; `stack.py wg-config` for SEKAIHOME; Ollama on the tunnel address only; firewall rule | M | A2 |
 | A4 | Cloud GPU private host: Cloud Run Ollama image with text and vision models baked in, L4, min 0, max 1, internal ingress, IAM; ID-token injection in S3 layer 3 | M | A2 |
 | A5 | Deferred queue in privacy-gate (section 2.2) | L | S2, S3 |
@@ -109,7 +110,7 @@ timestamps, `error`.
 | R | Remove redundant parts (shared file section 3) | S | A7 |
 | A8 | User guide and admin runbook | S | A7 |
 
-Order: A0, H0 -> S1, S1b, S8 (prove detection first) -> S2, S3, S6, A1 -> S4, S5 -> A5 -> A2 -> A3 or A4 -> S7 ->
+Order: A0 -> S1, S1b, S8 (prove detection first) -> S2, S3, S6, A1 -> S4, S5 -> A5 -> A2 -> A3 or A4 -> S7 ->
 A6 -> A7 -> R -> A8.
 
 Out of scope: agents that clone and change repositories on the server; OpenHands; high availability.
@@ -158,4 +159,4 @@ Out of scope: agents that clone and change repositories on the server; OpenHands
 | Too many false positives fill the queue | personal-disclosure rule; per-category thresholds tuned on S8; categories shown in alerts so users can report mistakes |
 | Profiling through many small non-sensitive requests | identifiers stripped; one shared key; memories keep requests local; optional `generalize` |
 | On-prem offline for days | `gcp-gpu` second; expiry notices |
-| Harbor changes how a service is configured | Harbor and service images pinned; H0 notes in `INSTALL.md`; S8 canary runs before any upgrade |
+| An image upgrade changes hook or settings behaviour | images pinned by digest; S8 canary runs before any upgrade |

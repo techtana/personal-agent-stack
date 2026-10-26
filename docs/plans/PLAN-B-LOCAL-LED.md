@@ -1,7 +1,7 @@
 # Plan B: local-led mixture
 
-Revised 2026-10-26: Harbor runtime in WSL2 with native Ollama, broader privacy gate (profiling, media), orchestrator
-removed, MCP server and skill for other apps.
+Revised 2026-10-26: native runtime (Harbor optional, not installed), broader privacy gate (profiling, media),
+orchestrator removed, MCP server and skill for other apps.
 
 The local server is the main processor: SEKAIHOME by default, or any machine with a `machines/<host>.yaml` profile.
 Simple and medium work runs on the local GPU. Complex and reasoning work may go to a cloud API, but only after the
@@ -20,13 +20,14 @@ Edge VM (e2-micro, `edge` mode only)                   │ OpenCode, Continue (L
  ├─ auth.<domain>: Caddy + Authelia + LLDAP + invites (S7)
  └─ chat.<domain>: nginx stream, SNI passthrough ──WireGuard (home dials out)──┐
                                                                                ▼
-SEKAIHOME
- ├─ Windows: Ollama (native, GPU)  ◀───────────────────────────────┐
- └─ WSL2 (6 GB cap), Docker Engine:                                │ private
-     Harbor: Open WebUI + filter (S4), LiteLLM + privacy_hook (S3) ─┤
-     our Compose: privacy-gate (S1-S2, MCP S5), Postgres            │ not sensitive and complex/reasoning
-     Caddy for chat.<domain> (`edge` mode)                          └─▶ external API, identifiers stripped
+SEKAIHOME (native runtime: stack.py up / tray, no Docker)
+ ├─ Ollama (GPU)  ◀──────────────────────────────────────────────┐ private
+ ├─ Open WebUI + filter (S4), LiteLLM + privacy_hook (S3) ───────┤
+ ├─ privacy-gate (S1-S2, MCP S5), PostgreSQL                     │ not sensitive and complex/reasoning
+ └─ Caddy for chat.<domain> (`edge` mode)                         └─▶ external API, identifiers stripped
 ```
+
+Harbor can replace the native runtime later (`INSTALL.md` section 4); nothing in this plan depends on it.
 
 ### 1.1 Access modes
 
@@ -81,18 +82,18 @@ User guide rule: sensitive work belongs in Open WebUI or Claude Code profile B.
 | # | Package | Size | Depends on |
 |---|---|---|---|
 | B0 | Decisions (section 6) | S | - |
-| H0 | Harbor spike on SEKAIHOME: WSL2 + Docker Engine + Harbor; native Ollama reachable from containers; LiteLLM config and hook mounting; network name; RAM with the 9B loaded | S | - |
-| S1-S6, S8 | shared gate, hook, Open WebUI, MCP and skill, build, evals | see shared file | H0 |
+| S1-S6, S8 | shared gate, hook, Open WebUI, MCP and skill, build, evals | see shared file | - |
 | B1 | Build: `sensitive_target`, `explicit_cloud_on_sensitive`, "(local only)" models, `data_class` on the existing `local-*`, `<dept>-local`, `cloud-*`, `<dept>-cloud` deployments, a local vision deployment | S | S6 |
-| B2 | `stack.py install --mode local-led [--access owner|edge]`: the `INSTALL.md` 2.1 and 3 steps with checks and prompts; Task Scheduler entry for start at sign-in; ends with smoke and gate-eval | M | H0, B1 |
+| B2 | Native services: privacy-gate in `services.py` and the tray; PostgreSQL install and databases in setup; LiteLLM tool reinstalled `--with-editable packages/privacy-gate`; ffmpeg check | M | S2, S3 |
+| B3a | `stack.py install --mode local-led [--access owner|edge]`: the `INSTALL.md` 2.1 and 3 steps with checks and prompts; ends with smoke and gate-eval | M | B1, B2 |
 | B3 | Edge VM (`edge` mode): Terraform `infrastructure/edge-gcp/` (e2-micro, static IP, firewall 80/443/tcp and 51820/udp), nginx SNI passthrough, Caddy for `auth.<domain>`, S7, WireGuard hub, offline page | M | S7 |
-| B4 | SEKAIHOME side of `edge`: WireGuard client (`stack.py wg-config`), Caddy for `chat.<domain>` in WSL, Open WebUI OIDC | M | B3 |
+| B4 | SEKAIHOME side of `edge`: WireGuard client (`stack.py wg-config`), Caddy for Windows serving `chat.<domain>`, Windows Firewall rule limiting 443 to the tunnel, Open WebUI OIDC | M | B3 |
 | B5 | Tests (section 4) | M | all |
 | R | Remove redundant parts (shared file section 3) | S | B5 |
 | B6 | User guide | S | B5 |
 
-Order: B0, H0 -> S1, S1b, S8 -> S2, S3, S6, B1 -> S4, S5 -> B2 (`owner` mode usable here) -> R -> S7, B3, B4 -> B5 ->
-B6. R comes early in this plan because `owner` mode replaces the native services as soon as B2 passes.
+Order: B0 -> S1, S1b, S8 -> S2, S3, S6, B1 -> B2 -> S4, S5 (`owner` mode usable here) -> R -> B3a -> S7, B3, B4 ->
+B5 -> B6. R can run as soon as the privacy-gate MCP server replaces the orchestrator.
 
 ## 4. Acceptance tests
 
@@ -104,7 +105,8 @@ B6. R comes early in this plan because `owner` mode replaces the native services
 5. A screenshot containing a face or an ID card stays local; a code screenshot with no people or personal text may go
    external.
 6. privacy-gate stopped: every request served locally (fail closed).
-7. Gate overhead p95 <= 50 ms for text on SEKAIHOME; WSL stays within its 6 GB cap with the 9B loaded in Ollama.
+7. Gate overhead p95 <= 50 ms for text on SEKAIHOME; privacy-gate plus PostgreSQL stay under 1.2 GB resident with
+   the 9B loaded in Ollama.
 8. Claude Code profile A: the hook blocks a prompt with a fake card number and points to profile B; the skill makes
    Claude call `check_text` before a `WebSearch` that contains personal details.
 9. `edge` mode: edge logs contain no prompt text (capture on the VM); invite -> approval -> TOTP -> passkey works;
@@ -130,7 +132,7 @@ B6. R comes early in this plan because `owner` mode replaces the native services
 | B-D4 | Local vision model | chosen in the S1 spike; must share 12 GB VRAM with the 9B or swap in on demand |
 | B-D5 | Explicit cloud requests that turn out sensitive | rewrite to local |
 | B-D6 | Domain, DNS provider, SMTP (`edge`) | required for `edge` |
-| B-D7 | Docker Engine in WSL vs Docker Desktop | Docker Engine in WSL |
+| B-D7 | Runtime | `native`; Harbor optional later (not installed) |
 
 ## 7. Risks
 
@@ -138,7 +140,7 @@ B6. R comes early in this plan because `owner` mode replaces the native services
 |---|---|
 | Gate misses something and it goes to the cloud | layered detectors, fail closed, S8 recall gate, "(local only)" models, audit review |
 | Weaker answers for sensitive complex work | notice says so; users split tasks; larger local model after a RAM upgrade |
-| WSL2 and Docker reintroduce RAM pressure (the reason they were avoided) | 6 GB cap; Ollama stays native; measured in test 7; revisit if the 35B primary returns |
+| New native services (gate, PostgreSQL) add RAM pressure | memory targets in S1 and test 7; PostgreSQL `shared_buffers=128MB`; revisit if the 35B primary returns |
 | SEKAIHOME is a single point of failure | offline page; start at sign-in; daily use already depends on it |
 | Claude Code profile A bypasses enforcement | skill, MCP and hooks warn; user guide; only the owner uses it |
-| Harbor changes service configuration | Harbor and images pinned; H0 notes; canary before upgrades |
+| A LiteLLM or Open WebUI upgrade changes hook or settings behaviour | versions pinned in setup; S8 canary before upgrades |

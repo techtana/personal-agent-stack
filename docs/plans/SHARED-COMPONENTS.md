@@ -1,6 +1,6 @@
 # Shared components for Plan A (cloud-led) and Plan B (local-led)
 
-Revised 2026-10-26: Harbor replaces the project's own installer and service manager; the privacy gate covers
+Revised 2026-10-26: Harbor is an optional runtime (the native runtime stays the default); the privacy gate covers
 profiling risks and media (faces, people, documents in images, video, audio); the orchestrator is removed and its MCP
 slot goes to a privacy-gate MCP server plus a skill. Dependencies and configuration steps: `INSTALL.md`.
 
@@ -12,12 +12,18 @@ Effort sizes: S = up to 1 day, M = 2-3 days, L = 4-6 days, for one developer wor
 
 ## 0. Conventions
 
-- **Runtime: Harbor.** Harbor (open-source CLI, Docker Compose underneath) installs and runs the off-the-shelf services:
-  Open WebUI and LiteLLM, plus Ollama where it runs in a container. Our own services (privacy gate, identity edge) are
-  one small Compose project attached to Harbor's Docker network. Ollama on Windows stays native (GPU, mmap tuning in
-  `memory/state.md`) and Harbor points at it with `ollama.internal_url`.
-- **This repo keeps only what Harbor does not do:** department definitions and their generated files, hardware-based
-  model choice, the privacy gate, policy, evals, retro. See section 3 for what is removed.
+- **Runtime: `native` by default, `harbor` optional.** One setting, `runtime:` in `machines/<host>.yaml`.
+  - `native` (default; what SEKAIHOME runs today): Ollama, LiteLLM and Open WebUI run as native processes managed by
+    `stack.py up/down/status` and the tray (uv tool environments, no Docker). The privacy gate and the
+    privacy-gate MCP server join them as native services; Postgres is a native install.
+  - `harbor` (optional): Harbor (open-source CLI on Docker Compose) runs Open WebUI and LiteLLM; our services
+    (privacy gate, Postgres) are a small Compose project on Harbor's network; Ollama can stay native and Harbor
+    points at it with `ollama.internal_url`. Useful on Linux servers that already run Docker. Not installed on
+    SEKAIHOME (decided 2026-10-26).
+  - The build generates the same LiteLLM config, hook, gate config and Open WebUI assets for both; only the start-up
+    differs. The Plan A VM uses a generated Docker Compose file by default and may use Harbor instead.
+- **This repo keeps** department definitions and their generated files, hardware-based model choice, the native
+  runtime, the privacy gate, policy, evals, retro. Section 3 lists what is removed.
 - **Data class on every model deployment.** `private` = hardware or VMs we run (local Ollama, the gate, a private
   Cloud Run GPU, the on-prem server). `external` = any third-party API, Vertex AI included. The build writes
   `model_info.data_class` on every deployment and fails if one is missing.
@@ -120,8 +126,9 @@ Plan A adds the deferred queue to this service (it already knows when private ho
 
 ### S3. LiteLLM enforcement hook (M)
 
-`infrastructure/litellm/privacy_hook.py`, mounted into Harbor's LiteLLM container with the generated config.
-Three layers:
+`infrastructure/litellm/privacy_hook.py`, loaded next to the generated config: in `native` runtime the LiteLLM uv
+tool is installed `--with-editable packages/privacy-gate` and reads the hook from `infrastructure/litellm/`; in
+container runtimes both are mounted into the LiteLLM container. Three layers:
 
 1. `async_pre_call_hook`: classify the full request (system prompt, messages, tool results, image and file parts,
    embeddings `input`). If sensitive: rewrite `<dept>`, `<dept>-cloud` and `cloud-*` to the private alias, embeddings
@@ -144,7 +151,8 @@ similar), which skip hooks. One audit row per request (user, categories, action,
   "queued", "starting the private server", "image contains 2 faces: processed locally"). It informs; LiteLLM
   enforces.
 - **Forced-private models**: "<Department> (private)" per department.
-- **Settings** (applied by the installer through Harbor's `harbor env webui ...` and the Open WebUI API):
+- **Settings** (applied by the installer: environment variables for the Open WebUI process or container, then the
+  Open WebUI API):
   one connection (LiteLLM); direct connections off; task model `webui-task`; RAG embeddings `private-embed`; web search
   and image generation off unless routed through the gate; community imports off; user-info headers on for LiteLLM
   attribution (never forwarded to providers); the privacy-gate MCP server registered as a tool server (S5).
@@ -191,7 +199,10 @@ to its own cloud model. Only apps pointed at the LiteLLM gateway get enforcement
   private deployment for media;
 - load `privacy_hook`; write the gate config, the "(private)" Open WebUI models, the skill copies, the `.mcp.json`
   entry and the Claude Code hooks;
-- write the LiteLLM config where Harbor's LiteLLM service reads it (path confirmed in the H0 spike, `INSTALL.md`).
+- `native`: add `privacy-gate` (and Postgres status) to `scripts/stacklib/services.py` and the tray, with the same
+  pid-plus-start-time handling as the other services;
+- container runtimes: write `infrastructure/compose/<deployment>.yaml`; with `harbor`, write the LiteLLM config
+  where Harbor's LiteLLM service reads it (confirmed in the optional H0 spike, `INSTALL.md` section 4).
 
 ### S7. Identity edge (L)
 
@@ -217,20 +228,20 @@ Release gate (`stack.py gate-eval`, CI): recall >= 0.98 for secrets, identifiers
 categories and profilable context; false positives <= 10 % on negatives; latency and memory targets from S1; leak
 canary 0.
 
-## 3. Removed (package R, after Harbor runs the stack on SEKAIHOME and smoke passes)
+## 3. Removed (package R, once the privacy-gate MCP server is running)
 
 | Remove | Replaced by |
 |---|---|
-| `orchestrator/` (server, jobs store, Dockerfile), `ORCHESTRATOR_BEARER`, the `orchestrator` entry in `.mcp.json`, smoke's MCP check | departments as LiteLLM aliases, Open WebUI models and Claude Code subagents; MCP slot -> privacy-gate (S5) |
+| `orchestrator/` (server, jobs store, Dockerfile), `ORCHESTRATOR_BEARER`, the `orchestrator` service in `services.py` and the tray, the `orchestrator` entry in `.mcp.json`, smoke's orchestrator check | departments as LiteLLM aliases, Open WebUI models and Claude Code subagents; MCP slot -> privacy-gate (S5), which takes the orchestrator's place in the service list |
 | `record_lesson` tool | agents append to `memory/lessons.md` directly (AGENTS.md rule 6 updated) |
-| `scripts/stacklib/services.py`, `scripts/stacklib/startup.py`, `scripts/tray.py`; `stack.py up`, `down`, `status`, `tray`, `setup`, `pull` | `harbor up`, `down`, `ps`, `logs`; Docker restart policies for start at boot; `ollama pull` / `harbor` for models; `stack.py install` (thin wrapper, `INSTALL.md`) |
-| uv tool installs of litellm, open-webui and arize-phoenix; the Smart App Control launcher workaround | Harbor containers |
-| Phoenix (and its OTel callback) | JSONL traces, which `retro` and `why-routed` already read; Harbor's Langfuse if a tracing UI is wanted later |
-| `infrastructure/docker-compose.yml` | Harbor's compose plus `infrastructure/gate/` and `infrastructure/edge/` |
+| Phoenix (uv tool, service entry, OTel callback, tray link) | JSONL traces, which `retro` and `why-routed` already read |
+| `infrastructure/docker-compose.yml` (untested) | generated `infrastructure/compose/<deployment>.yaml` for container runtimes |
+| The tray's "LiteLLM admin" link to `/ui` while there is no database | link restored once Postgres is configured (S6) |
 | README, AGENTS.md and `docs/ORCHESTRATOR-DESIGN.md` sections on the above | rewritten; `memory/lessons.md` keeps its history |
 
-Kept: `agents/*.yaml` and the build, `machines/*.yaml` and `doctor` (model choice per machine), `bench`, `smoke`
-(retargeted), `why-routed`, `retro`, the Claude Code hooks, evals.
+Kept: the native runtime (`services.py`, `startup.py`, `tray.py`, `stack.py up/down/status/tray/setup/pull`, the uv
+tool launch through each environment's python.exe), `agents/*.yaml` and the build, `machines/*.yaml` and `doctor`,
+`bench`, `smoke` (retargeted), `why-routed`, `retro`, the Claude Code hooks, evals.
 
 ## 4. Shared decisions (defaults used unless changed)
 
