@@ -1,7 +1,8 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-10-25 evening (default primary switched to qwen3.5:9b). Earlier the same day: benchmark and smoke
-test of the MoE primary. First written 2026-10-24, when the on-prem session executed docs/HANDOFF-2026-10-24.md.
+Updated: 2026-10-25 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
+same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
+the on-prem session executed docs/HANDOFF-2026-10-24.md.
 Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; design in docs/ORCHESTRATOR-DESIGN.md.
 
 ## Machine: SEKAIHOME (profile: machines/SEKAIHOME.yaml, class moe-12gb-32ram, primary overridden to qwen3.5:9b)
@@ -9,8 +10,10 @@ Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; des
 - D: is a USB SSD (Micron Crucial X8); C: is an NVMe SSD (Kingston SNV3S). Model loads from D: are USB-bound.
 - Typical desktop load (Chrome, Claude apps, VS Code, Notion, Spotify, Logseq) leaves ~11-12 GB of the 32 GB RAM free before any model loads.
 - Smart App Control is ON (VerifiedAndReputablePolicyState=1). Since 2026-10-25 19:34 it blocks `~/.local/bin/phoenix.exe`
-  (WinError 4551; CodeIntegrity events 3033/3077). The uv tool launchers for phoenix, litellm and open-webui are unsigned;
-  litellm.exe is still allowed, so blocks are decided per file and could extend to the others.
+  (WinError 4551; CodeIntegrity events 3033/3077). Each `~/.local/bin/*.exe` uv launcher embeds its script, so Windows
+  judges every one as a new unsigned file. `stack.py up` no longer uses them: phoenix, litellm and open-webui start as
+  `<uv tool dir>\<env>\Scripts\python.exe -P -c <console-script entry point>`. That python.exe is the same standard venv
+  launcher in every environment and has not been blocked (no CodeIntegrity events since the switch).
 - Installed 2026-10-24: Ollama 0.40.11 (native; models on D:\ollama\models), Claude Code CLI 2.1.302 (winget) alongside VS Code extension 2.1.296 and the desktop app, uv 0.12.17, Python 3.14 (system) / 3.12 and 3.11 (uv-managed), Node 24.
 - uv tools: litellm[proxy] 1.106.3 (+ opentelemetry-sdk, opentelemetry-exporter-otlp), arize-phoenix 20.26, open-webui 0.12.3.
 - NOT installed by choice: Docker Desktop / WSL2 (would reserve RAM the MoE experts need). Compose file kept as an untested optional path.
@@ -25,20 +28,27 @@ Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; des
 - `local-reviewer` still points at flint:40b-a2b, which is not pulled; no department tier routes to it.
 
 ## Services (native, `uv run scripts/stack.py up|down|status`)
-| service | port | state 2026-10-25 evening |
+| service | port | state 2026-10-25 late evening |
 |---|---|---|
 | Ollama | 11434 | up; tray app is a child of Explorer, so it survives Claude Code sessions |
-| Phoenix | 6006 | down: launcher blocked by Smart App Control. LiteLLM logs span-export errors while it is down; requests are unaffected |
-| LiteLLM | 4000 | up; 17 model aliases; restarted on the new config |
-| Orchestrator MCP | 8765/mcp | up; tools list/delegate/get_job/cancel_job/record_lesson; 401 without bearer |
-| Open WebUI | 3000 | down (not started); first run (admin user, model import, MCP server) not done |
+| Phoenix | 6006 | up via its tool Python; receives LiteLLM spans again |
+| LiteLLM | 4000 | up via its tool Python; 17 model aliases; no OTel or callback errors |
+| Orchestrator MCP | 8765/mcp | up (`uv run`); tools list/delegate/get_job/cancel_job/record_lesson; 401 without bearer |
+| Open WebUI | 3000 | down; start and stop through its tool Python verified (healthy in ~1 min, ~700 MB); first run not done |
 
-Services started from a Claude Code tool shell do not survive that session ending. Phoenix, LiteLLM and the
-orchestrator started at ~15:00 were gone by 19:34 with no shutdown lines in their logs and no reboot in between,
-although `stack.py up` launches them with CREATE_BREAKAWAY_FROM_JOB. Started from your own terminal they are not
-tied to a Claude Code session.
+Pid files in `.run/pids/` hold three lines: pid, executable, process start time. A pid counts as the service only while
+a process with that pid and that start time exists, so a reused pid (for example one of the six long-lived `uv.exe`
+MCP servers) is never stopped by mistake; verified by pointing the orchestrator pid file at one of them.
+
+Persistence across Claude Code sessions is unreliable rather than impossible: services started at ~15:00 were gone by
+19:34 with no shutdown lines and no reboot, but LiteLLM and the orchestrator started at ~19:37 were still running in
+the next session. Started from your own terminal they are not tied to a Claude Code session.
 
 ## Verified on this machine
+- 2026-10-25 late evening, services launched through the uv tool Pythons: phoenix, litellm and open-webui start
+  healthy with no Smart App Control blocks; `stack.py smoke --dept docs` 8/8; Phoenix receives fresh LiteLLM spans;
+  `down` stops a service's launcher and its child interpreter; restarting the orchestrator leaves the other `uv.exe`
+  processes running; a stale pid file pointing at an unrelated `uv.exe` is detected and that process is left alone.
 - 2026-10-25 evening, primary = qwen3.5:9b @32k: `stack.py smoke --dept docs` 8/8 passed (71 s warm; chat 2.8 s;
   OpenAI tool call and tool-result round trip; Anthropic `/v1/messages` with `thinking`, `text`, `tool_use`; router alias;
   embeddings; orchestrator MCP). First cold load of the 9B at 32k from D: took 2 min 10 s; one load, no reloads.
@@ -64,11 +74,11 @@ tied to a Claude Code session.
   from desktop apps are the likely limits. Not yet tried: `LLAMA_ARG_N_CPU_MOE` tuning, closing apps, faster RAM.
 
 ## Open items
-1. Phoenix is blocked by Smart App Control. Options: run Phoenix (and the other uv tools) through their tool
-   environment's Python instead of the unsigned launchers; or turn Smart App Control off, which is a Windows security
-   decision for you. Until then tracing goes only to traces/litellm/*.jsonl.
+1. If Smart App Control ever blocks the environments' python.exe as well, the remaining options are turning it off
+   (a Windows security decision for you) or running the tools under the signed `uv` (`uv tool run`).
 2. Make the services persistent across Claude Code sessions (for example a Task Scheduler entry or a logon startup
    item that runs `stack.py up`), or start them from your own terminal.
+8. Linux/macOS service management (tool Python launch, start-time pid matching) is written but untested on those systems.
 3. Open WebUI first run at http://127.0.0.1:3000: create admin; Workspace > Models > Import each config/openwebui/*.json; Admin > Integrations > External Tool Servers > MCP (Streamable HTTP) http://127.0.0.1:8765/mcp with the bearer from .env.
 4. Add ANTHROPIC_API_KEY to .env to enable cloud tiers (Max plans include monthly API credits; confirm in Console), then `stack.py build` and restart litellm.
 5. Run `scripts/claude-local.ps1` once to verify Claude Code profile B end to end (Read/Edit tool round trip through LiteLLM) on the 9B at 32k.

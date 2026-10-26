@@ -169,8 +169,9 @@ MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`). Traces st
 ## 12. Not done / open
 
 - Open WebUI first-run (admin user, import `config/openwebui/*.json`, add the MCP server) is a manual step.
-- Services started from a Claude Code tool shell stop when that session ends, and Smart App Control blocks the unsigned
-  Phoenix launcher on SEKAIHOME; persistence and a signed launch path are open (`memory/state.md`, open items 1-2).
+- Services started from a Claude Code tool shell may stop when that session ends; persistence is open
+  (`memory/state.md`, open item 2). Smart App Control blocked the unsigned `~/.local/bin` uv launchers on SEKAIHOME, so
+  `stack.py up` starts uv tools through their environment's python.exe and identifies them by pid plus start time.
 - Open WebUI thumbs export -> traces, and Prometheus/Grafana + `nvidia_gpu_exporter`, are documented but not wired.
 - `adaptive_router`, virtual-key budgets and Langfuse need Postgres; deferred until traffic justifies them.
 - Cloud tiers are untested on this machine (no API key). `drop_params` is relied on to strip sampling params for Anthropic 5.5.
