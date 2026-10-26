@@ -34,15 +34,20 @@ Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; des
 | Phoenix | 6006 | up via its tool Python; receives LiteLLM spans again |
 | LiteLLM | 4000 | up via its tool Python; 17 model aliases; no OTel or callback errors |
 | Orchestrator MCP | 8765/mcp | up (`uv run`); tools list/delegate/get_job/cancel_job/record_lesson; 401 without bearer |
-| Open WebUI | 3000 | down; start and stop through its tool Python verified (healthy in ~1 min, ~700 MB); first run not done |
+| Open WebUI | 3000 | up (started by the tray); first run (admin user, model import, MCP server) not done |
 
 Pid files in `.run/pids/` hold three lines: pid, executable, process start time. A pid counts as the service only while
 a process with that pid and that start time exists, so a reused pid (for example one of the six long-lived `uv.exe`
 MCP servers) is never stopped by mistake; verified by pointing the orchestrator pid file at one of them.
 
-Persistence across Claude Code sessions is unreliable rather than impossible: services started at ~15:00 were gone by
-19:34 with no shutdown lines and no reboot, but LiteLLM and the orchestrator started at ~19:37 were still running in
-the next session. Started from your own terminal they are not tied to a Claude Code session.
+Since 2026-10-25 21:34 the services are owned by the tray app (`stack.py tray`, scripts/tray.py): a windowless
+`.venv\Scripts\pythonw.exe` launched through Explorer, so neither it nor its services belong to a terminal or Claude Code
+session. Its icon sits in the notification area's hidden icons; clicking it opens a status window with links to Open
+WebUI, Phoenix and the LiteLLM admin UI. Start at login is OFF (`stack.py tray --install-startup` or the tray's
+checkbox adds a Startup-folder shortcut). Log: `.run/logs/tray.log`.
+
+Before the tray, services started from a Claude Code tool shell stopped once (15:00 to 19:34, no reboot) and survived
+once across a session restart.
 
 ## Verified on this machine
 - 2026-10-25 late evening, services launched through the uv tool Pythons: phoenix, litellm and open-webui start
@@ -76,8 +81,8 @@ the next session. Started from your own terminal they are not tied to a Claude C
 ## Open items
 1. If Smart App Control ever blocks the environments' python.exe as well, the remaining options are turning it off
    (a Windows security decision for you) or running the tools under the signed `uv` (`uv tool run`).
-2. Make the services persistent across Claude Code sessions (for example a Task Scheduler entry or a logon startup
-   item that runs `stack.py up`), or start them from your own terminal.
+2. Decide whether the tray should start at login (`stack.py tray --install-startup`); after the next reboot confirm
+   the tray and its services come up on their own.
 8. Linux/macOS service management (tool Python launch, start-time pid matching) is written but untested on those systems.
 3. Open WebUI first run at http://127.0.0.1:3000: create admin; Workspace > Models > Import each config/openwebui/*.json; Admin > Integrations > External Tool Servers > MCP (Streamable HTTP) http://127.0.0.1:8765/mcp with the bearer from .env.
 4. Add ANTHROPIC_API_KEY to .env to enable cloud tiers (Max plans include monthly API credits; confirm in Console), then `stack.py build` and restart litellm.
