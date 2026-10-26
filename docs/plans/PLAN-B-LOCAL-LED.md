@@ -72,7 +72,8 @@ would need TLS at the edge, which this plan avoids.
 | B-S0 | Spike: Authelia and LLDAP as native Windows services (or alternatives that are); Caddy for Windows with TLS for two domains | S | - |
 | S1-S6, S8 | shared gate, hook, Open WebUI, MCP, build, evals | see shared file | - |
 | B1 | Build: private-only department routers; local vision deployment; "(private)" models; external aliases only when enabled | S | S6 |
-| B2 | Native services: privacy-gate in `services.py` and the tray; PostgreSQL install and databases in setup; LiteLLM tool reinstalled `--with-editable packages/privacy-gate`; ffmpeg check | M | S2, S3 |
+| B2 | Native services: privacy-gate in `services.py` and the tray; PostgreSQL install and databases in setup; LiteLLM tool reinstalled `--with-editable packages/privacy-gate`; ffmpeg check. The native manager stays as is for `owner` mode | M | S2, S3 |
+| B2b | Supervision for `edge` mode: Task Scheduler "at startup" tasks with restart on failure (services run before sign-in); keep the launch helper (uv tool `python.exe` start, `.env`, logs) and `stack.py status`; drop pid files and the tray's supervisor role (tray stays as an optional status viewer). On Linux, generate systemd units instead of finishing the untested native code | M | B2 |
 | R | Remove redundant parts (shared file section 5) | S | B2 |
 | B3 | `stack.py install --mode local-led [--access owner|edge]`: `INSTALL.md` 2.1 and 3 with checks and prompts; ends with smoke and gate-eval | M | B1, B2 |
 | S7 | Identity on SEKAIHOME (or a confidential edge VM per B-S0) | L | B-S0 |
@@ -80,7 +81,7 @@ would need TLS at the edge, which this plan avoids.
 | B5 | Tests (section 4) | M | all |
 | B6 | User guide: the privacy boundary, alerts, external consent | S | B5 |
 
-Order: B0 -> S1, S1b, S8 -> S2, S3, S6, B1 -> B2 -> R -> S4, S5 (`owner` mode usable here) -> B3 -> B-S0 -> S7, B4 ->
+Order: B0 -> S1, S1b, S8 -> S2, S3, S6, B1 -> B2 -> R -> S4, S5 (`owner` mode usable here) -> B3 -> B-S0 -> S7, B2b, B4 ->
 B5 -> B6.
 
 ## 4. Acceptance tests

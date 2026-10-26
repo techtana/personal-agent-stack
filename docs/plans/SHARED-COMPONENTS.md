@@ -235,7 +235,8 @@ categories and profilable context; false positives <= 10 %; latency and memory t
 | The tray's LiteLLM admin link while there is no database | restored once PostgreSQL is configured |
 | README, AGENTS.md and `docs/ORCHESTRATOR-DESIGN.md` sections on the above | rewritten; `memory/lessons.md` keeps its history |
 
-Kept: the native runtime (`services.py`, `startup.py`, `tray.py`, `stack.py up/down/status/tray/setup/pull`),
+Kept: the native runtime for `owner` mode (`services.py`, `startup.py`, `tray.py`, `stack.py up/down/status/tray/setup/pull`;
+shared or multi-user hosts move supervision to Task Scheduler or systemd, Plan B package B2b),
 `agents/*.yaml` and the build, `machines/*.yaml` and `doctor`, `bench`, `smoke` (retargeted), `why-routed`, `retro`,
 the trace hooks, evals.
 

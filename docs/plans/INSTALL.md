@@ -40,7 +40,7 @@ Runtimes (`runtime:` in `machines/<host>.yaml`):
 | 7 | PostgreSQL 17 | `winget install --id PostgreSQL.PostgreSQL.17 --exact` | setup creates databases `litellm` and `gate` with their own roles and writes `DATABASE_URL`, `GATE_DATABASE_URL` to `.env`; `shared_buffers=128MB` to keep RAM low |
 | 8 | ffmpeg | `winget install --id Gyan.FFmpeg --exact` | must be on PATH for the gate's video pipeline |
 | 9 | Claude Code (optional, owner development only) | `winget install --id Anthropic.ClaudeCode` | use profile B (`scripts/claude-local.ps1`) for anything private; profile A and Claude Desktop are outside the privacy boundary and get no integration |
-| 10 | Start at sign-in | - | the tray's Startup shortcut (already on) starts every native service, including privacy-gate |
+| 10 | Start automatically | - | `owner` mode: the tray's Startup shortcut (already on) starts every native service at sign-in, including privacy-gate. `edge` mode: `stack.py install` registers Task Scheduler "at startup" tasks (restart on failure) so services run before anyone signs in; the tray becomes a status viewer only |
 
 ### 2.2 Linux server or cloud VM, `compose` runtime (Plan A)
 
