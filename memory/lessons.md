@@ -15,3 +15,6 @@
 - [2026-10-25] On this box the MoE primary decodes at ~25 tok/s versus ~52 for the dense 9B, and leaves ~1 GB of RAM available instead of ~18 GB. Benchmark both before choosing; RAM pressure, not VRAM, is the binding constraint.
 - [2026-10-25] Processes started from an agent's tool shell die when that session ends (job object). Launch services with CREATE_BREAKAWAY_FROM_JOB and the Ollama tray app through explorer.exe.
 - [2026-10-25] Windows reuses pids: never kill or trust a pid file without checking the process image name.
+- [2026-10-25] Correction to the CREATE_BREAKAWAY_FROM_JOB bullet above: services started that way from a Claude Code tool shell still stopped when the session restarted. Persistent services need a launcher outside the session (Task Scheduler, a logon item, or the owner's own terminal).
+- [2026-10-25] Smart App Control can block unsigned uv tool launchers (`~/.local/bin/*.exe`) file by file: phoenix.exe was blocked (WinError 4551) while litellm.exe still ran. Service start must warn and continue, never abort the batch.
+- [2026-10-25] When two gateway tiers share one Ollama model, give them the same num_ctx and load options; any difference makes Ollama reload the runner on every switch between tiers.

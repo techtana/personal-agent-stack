@@ -20,9 +20,13 @@ model_store: 'D:\ollama\models'     # C: has 52 GB free; models live on D: (OLLA
 data_dir: ".run"                    # Phoenix SQLite, Open WebUI data, pids, logs (gitignored)
 
 models:
-  # override any role from the hardware class here after benchmarking, e.g.
-  # primary: flint:40b-a2b
-  # primary_num_ctx: 32768
+  # 2026-10-25: dense 9B as the default primary instead of the class's 35B MoE. Benchmarks (memory/state.md):
+  # 9B ~52 tok/s with ~18 GB RAM left available; 35B ~25 tok/s with ~1 GB available under the usual desktop load.
+  # Delete these four lines to return to the class default (qwen3.6:35b-a3b-coding with use_mmap).
+  primary: qwen3.5:9b
+  primary_options: {}      # use_mmap is only needed for the MoE's RAM-resident experts; keep Ollama's default here
+  primary_num_ctx: 32768
+  small_num_ctx: 32768     # same model as local-small: equal num_ctx lets both tiers share one Ollama runner
 
 ollama_env:
   # per-machine additions/overrides to machines/_defaults.yaml:ollama_env

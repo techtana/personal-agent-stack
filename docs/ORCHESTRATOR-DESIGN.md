@@ -100,6 +100,9 @@ Ollama disables mmap by default on Windows+CUDA, which turns the CPU-side expert
 the first load time out under normal desktop memory pressure.
 Measured throughput (2026-10-25): MoE primary ~25 tok/s decode with ~1 GB RAM left available; dense 9B ~52 tok/s
 with ~18 GB available. Details in `memory/state.md` (section Benchmarks); re-run with `uv run scripts/stack.py bench`.
+On that evidence SEKAIHOME overrides the class default: `local-primary` is qwen3.5:9b at 32k, sharing one Ollama
+runner with `local-small` (same num_ctx, no use_mmap). The 35B remains the class default for 32 GB machines with less
+desktop memory pressure, and returns here by deleting the override in `machines/SEKAIHOME.yaml`.
 
 ## 7. Routing (LiteLLM complexity router, per department)
 
@@ -166,6 +169,8 @@ MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`). Traces st
 ## 12. Not done / open
 
 - Open WebUI first-run (admin user, import `config/openwebui/*.json`, add the MCP server) is a manual step.
+- Services started from a Claude Code tool shell stop when that session ends, and Smart App Control blocks the unsigned
+  Phoenix launcher on SEKAIHOME; persistence and a signed launch path are open (`memory/state.md`, open items 1-2).
 - Open WebUI thumbs export -> traces, and Prometheus/Grafana + `nvidia_gpu_exporter`, are documented but not wired.
 - `adaptive_router`, virtual-key budgets and Langfuse need Postgres; deferred until traffic justifies them.
 - Cloud tiers are untested on this machine (no API key). `drop_params` is relied on to strip sampling params for Anthropic 5.5.

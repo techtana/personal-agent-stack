@@ -114,8 +114,9 @@ EXPECTED_IMAGES = {
     "orchestrator": ("uv",),
     "open_webui": ("open-webui",),
 }
-# Lets a started service outlive the shell that launched it when that shell runs inside a job object
-# (for example an agent's tool shell). Windows refuses it when the job forbids breakaway; start() then retries without.
+# Asks Windows to start the service outside the launching shell's job object. Windows refuses it when the job
+# forbids breakaway; start() then retries without. Observed 2026-10-25: services started from a Claude Code tool
+# shell still stopped when that Claude Code session restarted, so this flag alone does not make them persistent.
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 
 
@@ -183,6 +184,10 @@ def start(profile: dict, services: list[str] | None = None) -> None:
                 warn(f"{svc}: could not leave the launching shell's job; it stops when that shell exits")
         except FileNotFoundError:
             warn(f"{svc}: executable not found ({c['cmd'][0]}); run `uv run scripts/stack.py setup` to install tools")
+            continue
+        except OSError as e:
+            # e.g. WinError 4551: Smart App Control / App Control blocked the unsigned uv tool launcher.
+            warn(f"{svc}: Windows refused to start {c['cmd'][0]}: {e}. Other services still start; see memory/state.md")
             continue
         pf.write_text(str(proc.pid))
         info(f"{svc}: started pid {proc.pid}  (log: {run_dir(profile) / 'logs' / (svc + '.log')})")
