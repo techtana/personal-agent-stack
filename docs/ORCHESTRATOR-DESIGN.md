@@ -1,5 +1,9 @@
 # Orchestrator design (implemented 2026-10-24)
 
+> Status 2026-10-26: direction changed to private first (`docs/plans/`). Automatic cloud tiers, the orchestrator MCP
+> server and Phoenix are slated for removal (`docs/plans/SHARED-COMPONENTS.md` section 5). This document still
+> describes what is deployed today.
+
 This document records the architecture that replaced the Deep-Architect plan (`docs/archive/DESIGN-2025.md`)
 and the hand-rolled router. It was written on the target machine after the empirical checks in
 `docs/HANDOFF-2026-10-24.md` section 6 step 0, so every environment claim below was observed, not assumed.
