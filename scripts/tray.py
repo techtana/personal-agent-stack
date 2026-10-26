@@ -131,8 +131,8 @@ class TrayApp:
         self._in_background("Stopping services", lambda: services.stop(self.profile, self.managed))
 
     def toggle(self, svc: str) -> None:
-        healthy = any(r["service"] == svc and r["healthy"] for r in self.rows)
-        if healthy:
+        state = next((r["state"] for r in self.rows if r["service"] == svc), "stopped")
+        if state != "stopped":
             self._in_background(f"Stopping {svc}", lambda: services.stop(self.profile, [svc]))
         else:
             self._in_background(f"Starting {svc}", lambda: services.start(self.profile, [svc]))
@@ -239,12 +239,12 @@ class TrayApp:
         rows = {r["service"]: r for r in self.rows}
         up = 0
         for svc, (dot, state, toggle) in self.row_widgets.items():
-            healthy = bool(rows.get(svc, {}).get("healthy"))
-            up += healthy
-            dot.configure(fg=COLORS["ok"] if healthy else COLORS["bad"])
-            state.configure(text="running" if healthy else "stopped")
+            svc_state = rows.get(svc, {}).get("state", "stopped")
+            up += svc_state == "running"
+            dot.configure(fg=COLORS["ok"] if svc_state == "running" else COLORS["warn"] if svc_state == "starting" else COLORS["bad"])
+            state.configure(text=svc_state)
             if toggle is not None:
-                toggle.configure(text="Stop" if healthy else "Start", state="disabled" if self.busy else "normal")
+                toggle.configure(text="Start" if svc_state == "stopped" else "Stop", state="disabled" if self.busy else "normal")
         busy = f"  {self.busy}..." if self.busy else ""
         self.summary.configure(text=f"{up}/{len(self.row_widgets)} running, checked {self.checked_at}{busy}")
         self.startup_var.set(startup.is_installed())

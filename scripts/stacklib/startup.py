@@ -35,7 +35,7 @@ def _make_shortcut(path: Path) -> None:
     )
     env = {**os.environ, "LNK_PATH": str(path), "LNK_TARGET": str(tray_python()), "LNK_ARGS": f'"{TRAY_SCRIPT}"', "LNK_DIR": str(REPO)}
     path.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["powershell", "-NoProfile", "-Command", ps], env=env, check=True, capture_output=True)
+    subprocess.run(["powershell", "-NoProfile", "-Command", ps], env=env, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0)
 
 
 def _autostart_file() -> Path:
@@ -110,7 +110,7 @@ def stop_tray() -> None:
         info("tray: not running")
         return
     if IS_WINDOWS:
-        subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+        subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
     else:
         os.kill(pid, 15)
     PIDFILE.unlink(missing_ok=True)

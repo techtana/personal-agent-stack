@@ -34,7 +34,7 @@ def _uv_tool_dir() -> Path | None:
         if uv:
             try:
                 # uv writes UTF-8; decoding with the ANSI code page would break on a non-ASCII profile path.
-                raw = subprocess.run([uv, "tool", "dir"], capture_output=True, timeout=30).stdout
+                raw = subprocess.run([uv, "tool", "dir"], capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0).stdout
                 out = raw.decode("utf-8", "replace").strip()
             except (OSError, subprocess.TimeoutExpired):
                 out = ""
@@ -208,10 +208,16 @@ EXPECTED_IMAGES = {
     "orchestrator": ("uv",),
     "open_webui": ("open-webui",),
 }
+# Services run with a console that has no window (CREATE_NO_WINDOW), not with no console at all (DETACHED_PROCESS).
+# Every recorded pid is a launcher: a venv's Scripts\python.exe or uv.exe, each of which starts the real interpreter as
+# a console child. A child of a DETACHED_PROCESS parent gets a brand-new visible console window, and closing that
+# window kills the server (observed 2026-10-25: services died when their "CMD windows" were closed). Children of a
+# CREATE_NO_WINDOW parent inherit its hidden console instead, so nothing appears on screen and nothing can be closed.
 # Asks Windows to start the service outside the launching shell's job object. Windows refuses it when the job
 # forbids breakaway; start() then retries without. Observed 2026-10-25: services started this way once stopped and
 # once survived the end of the Claude Code session that started them, so persistence across sessions is not assured.
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+WINDOWS_FLAGS = 0x08000000 | 0x00000200 | CREATE_BREAKAWAY_FROM_JOB  # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
 
 
 def _proc_info(pid: int) -> tuple[str | None, str | None]:
@@ -325,7 +331,7 @@ def start(profile: dict, services: list[str] | None = None) -> None:
         log = open(run_dir(profile) / "logs" / f"{svc}.log", "ab")
         kwargs: dict = {"cwd": c["cwd"], "env": c["env"], "stdout": log, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL}
         if IS_WINDOWS:
-            kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB
+            kwargs["creationflags"] = WINDOWS_FLAGS
         else:
             kwargs["start_new_session"] = True
         try:
@@ -345,6 +351,8 @@ def start(profile: dict, services: list[str] | None = None) -> None:
             # e.g. WinError 4551: Smart App Control / App Control blocked the executable.
             warn(f"{svc}: Windows refused to start {c['cmd'][0]}: {e}. Other services still start; see memory/state.md")
             continue
+        finally:
+            log.close()  # the service holds its own inherited handle
         exe, started = _proc_info(proc.pid)
         if not started:
             warn(f"{svc}: could not read the process start time; `down` will match it by launcher name only")
@@ -365,43 +373,91 @@ def wait_healthy(profile: dict, services: list[str], timeout: float = 120.0) -> 
     return status
 
 
+def _port(profile: dict, svc: str) -> int:
+    return int(profile["ports"][svc])
+
+
+def parse_listeners(netstat: str, port: int) -> list[int]:
+    """Pids listening on TCP `port`, from `netstat -ano -p TCP` (and TCPv6) output."""
+    pids: list[int] = []
+    for line in netstat.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[0].upper().startswith("TCP") and parts[3].upper() == "LISTENING":
+            if parts[1].rsplit(":", 1)[-1] == str(port) and parts[4].isdigit() and int(parts[4]) not in pids:
+                pids.append(int(parts[4]))
+    return pids
+
+
+def port_pids(port: int) -> list[int]:
+    """Pids of the processes listening on a local TCP port: whoever serves it, whoever started them."""
+    try:
+        if IS_WINDOWS:
+            out = ""
+            for proto in ("TCP", "TCPv6"):
+                raw = subprocess.run(["netstat", "-ano", "-p", proto], capture_output=True, timeout=15,
+                                     creationflags=subprocess.CREATE_NO_WINDOW).stdout
+                out += raw.decode("ascii", "replace")
+            return parse_listeners(out, port)
+        out = subprocess.run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"], capture_output=True, text=True, timeout=15).stdout
+        return sorted({int(x) for x in out.split() if x.isdigit()})
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+
+
+def _kill_tree(pid: int) -> None:
+    if IS_WINDOWS:
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        return
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass  # already gone
+
+
 def stop(profile: dict, services: list[str] | None = None) -> None:
+    """Stop each service's whole process tree: the recorded launcher and its children, then whatever still listens
+    on the service's port (a copy started outside this tool, or a child orphaned when its launcher died)."""
     for svc in services or list(reversed(SERVICE_ORDER)):
         pf = _pid_file(profile, svc)
-        if not pf.exists():
-            continue
-        pid, started = _read_pidfile(pf)
-        if pid and not _owned(pid, svc, started):
-            other = _proc_exe(pid)
-            if other:
-                warn(f"{svc}: pid {pid} now belongs to another process ('{other}'); leaving it alone")
+        if pf.exists():
+            pid, started = _read_pidfile(pf)
+            if pid and _owned(pid, svc, started):
+                _kill_tree(pid)
+                info(f"{svc}: stopped pid {pid}")
+            elif pid and _proc_exe(pid):
+                warn(f"{svc}: pid {pid} now belongs to another process ('{_proc_exe(pid)}'); leaving it alone")
             pf.unlink(missing_ok=True)
+        if svc not in profile["ports"]:
             continue
-        if pid:
-            if IS_WINDOWS:
-                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
-            else:
-                try:
-                    os.killpg(os.getpgid(pid), signal.SIGTERM)
-                except OSError:
-                    try:
-                        os.kill(pid, signal.SIGTERM)
-                    except OSError:
-                        pass  # exited between the ownership check and the kill
-            info(f"{svc}: stopped pid {pid}")
-        pf.unlink(missing_ok=True)
+        # Only a port that answers this service's health check is treated as the service's.
+        for _ in range(10):
+            listeners = port_pids(_port(profile, svc))
+            if not listeners or not _http_ok(health_url(profile, svc), timeout=1.0):
+                break
+            for lp in listeners:
+                _kill_tree(lp)
+                info(f"{svc}: stopped pid {lp} (listening on port {_port(profile, svc)})")
+            time.sleep(0.5)
 
 
 def status(profile: dict) -> list[dict]:
+    """One row per service. `state` comes from the system, not from any handle held by the caller: "running" when
+    the health check answers, "starting" when the recorded process is alive but not answering yet, else "stopped"."""
     rows = []
     for svc in ["ollama", *SERVICE_ORDER]:
         pf = _pid_file(profile, svc)
         pid, started = _read_pidfile(pf) if pf.exists() else (0, None)
+        pid = pid if pid and _owned(pid, svc, started) else None
+        healthy = _http_ok(health_url(profile, svc))
         rows.append(
             {
                 "service": svc,
-                "pid": pid if pid and _owned(pid, svc, started) else None,
-                "healthy": _http_ok(health_url(profile, svc)),
+                "pid": pid,
+                "healthy": healthy,
+                "state": "running" if healthy else "starting" if pid else "stopped",
                 "url": health_url(profile, svc) if svc == "ollama" else health_url(profile, svc).rsplit("/", 1)[0],
             }
         )
