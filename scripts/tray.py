@@ -23,7 +23,7 @@ from tkinter import ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pystray  # noqa: E402
-from PIL import Image, ImageDraw  # noqa: E402
+from PIL import Image, ImageDraw, ImageTk  # noqa: E402
 
 from stacklib import REPO, metrics, process_metrics, profile as prof, services  # noqa: E402
 from stacklib import startup  # noqa: E402
@@ -71,7 +71,11 @@ class TrayApp:
         self.stop_event = threading.Event()
         self.root = tk.Tk()
         self.root.withdraw()
+        self.style = ttk.Style(self.root)
+        self._configure_ui_styles()
         self.window: tk.Toplevel | None = None
+        self.window_icon: ImageTk.PhotoImage | None = None
+        self.window_icon_color: str | None = None
         self.refresh_lock = threading.Lock()
         self.icon_color = COLORS["idle"]
         self.icon = pystray.Icon("agent-stack", make_icon(COLORS["idle"]), "Agent Stack: starting", menu=self._menu())
@@ -206,26 +210,137 @@ class TrayApp:
         self.window.lift()
         self.window.focus_force()
 
+    def _set_window_icon(self) -> None:
+        if self.window is None:
+            return
+        self.window_icon = ImageTk.PhotoImage(make_icon(self.icon_color), master=self.window)
+        self.window.iconphoto(True, self.window_icon)
+        self.window_icon_color = self.icon_color
+
+    def _configure_ui_styles(self) -> None:
+        if "clam" in self.style.theme_names():
+            self.style.theme_use("clam")
+        self.style.configure(".", font=("Segoe UI", 9), foreground="#243044")
+        self.style.configure("App.TFrame", background="#f2f5f9")
+        self.style.configure("Card.TFrame", background="#ffffff")
+        self.style.configure("TLabel", background="#f2f5f9", foreground="#243044")
+        self.style.configure("Card.TLabel", background="#ffffff", foreground="#243044")
+        self.style.configure("Title.TLabel", background="#f2f5f9", foreground="#17243a", font=("Segoe UI", 20, "bold"))
+        self.style.configure("Subtitle.TLabel", background="#f2f5f9", foreground="#66758a", font=("Segoe UI", 9))
+        self.style.configure("Section.TLabel", background="#ffffff", foreground="#17243a", font=("Segoe UI", 11, "bold"))
+        self.style.configure("Muted.Card.TLabel", background="#ffffff", foreground="#718096", font=("Segoe UI", 9))
+        for name, background, foreground in (
+            ("Ok", "#e6f4ec", "#227447"),
+            ("Warn", "#fff3d9", "#986610"),
+            ("Bad", "#fbe9e7", "#a33b32"),
+            ("Idle", "#edf1f6", "#66758a"),
+        ):
+            self.style.configure(
+                f"{name}.Summary.TLabel",
+                background=background,
+                foreground=foreground,
+                padding=(10, 6),
+                font=("Segoe UI", 9, "bold"),
+            )
+        for name, background, foreground in (
+            ("Running", "#e6f4ec", "#227447"),
+            ("Starting", "#fff3d9", "#986610"),
+            ("Stopped", "#f0f2f5", "#66758a"),
+            ("Error", "#fbe9e7", "#a33b32"),
+        ):
+            self.style.configure(
+                f"{name}.ServiceState.TLabel",
+                background=background,
+                foreground=foreground,
+                padding=(8, 3),
+            )
+        self.style.configure("TButton", padding=(10, 6), background="#e8edf4", borderwidth=0)
+        self.style.map("TButton", background=[("pressed", "#d5deea"), ("active", "#dfe7f1")])
+        self.style.configure("Primary.TButton", padding=(12, 7), background="#2864c5", foreground="#ffffff", font=("Segoe UI", 9, "bold"))
+        self.style.map("Primary.TButton", background=[("pressed", "#1d4f9e"), ("active", "#3474d4")])
+        self.style.configure("TNotebook", background="#f2f5f9", borderwidth=0)
+        self.style.configure("TNotebook.Tab", padding=(16, 9), background="#e8edf4", foreground="#66758a")
+        self.style.map(
+            "TNotebook.Tab",
+            background=[("selected", "#ffffff"), ("active", "#f8fafc")],
+            foreground=[("selected", "#2864c5")],
+        )
+        self.style.configure(
+            "Treeview",
+            background="#ffffff",
+            fieldbackground="#ffffff",
+            foreground="#243044",
+            rowheight=28,
+            borderwidth=0,
+            font=("Segoe UI", 9),
+        )
+        self.style.configure(
+            "Treeview.Heading",
+            background="#edf1f6",
+            foreground="#56657a",
+            padding=(7, 8),
+            font=("Segoe UI", 9, "bold"),
+            relief="flat",
+        )
+        self.style.map("Treeview", background=[("selected", "#dce9fb")], foreground=[("selected", "#17243a")])
+
     def _build_window(self) -> None:
         w = tk.Toplevel(self.root)
         w.title("Agent Stack")
-        w.resizable(True, True)
+        w.geometry("1120x730")
+        w.minsize(900, 620)
+        w.configure(background="#f2f5f9")
         w.protocol("WM_DELETE_WINDOW", w.withdraw)  # closing hides it; the tray keeps running
-        frame = ttk.Frame(w, padding=14)
-        frame.grid()
-        ttk.Label(frame, text="Agent Stack", font=("Segoe UI", 13, "bold")).grid(row=0, column=0, columnspan=4, sticky="w")
-        self.summary = ttk.Label(frame, text="")
-        self.summary.grid(row=1, column=0, columnspan=4, sticky="w", pady=(0, 10))
+        w.columnconfigure(0, weight=1)
+        w.rowconfigure(0, weight=1)
+        frame = ttk.Frame(w, style="App.TFrame", padding=22)
+        frame.grid(row=0, column=0, sticky="nsew")
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        header = ttk.Frame(frame, style="App.TFrame")
+        header.grid(row=0, column=0, sticky="we", pady=(0, 18))
+        ttk.Label(header, text="Agent Stack", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            header,
+            text="Local-first AI services, usage, and system health",
+            style="Subtitle.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+        self.summary = ttk.Label(header, text="", style="Ok.Summary.TLabel", anchor="e")
+        self.summary.grid(row=0, column=1, rowspan=2, sticky="e")
+        header.columnconfigure(0, weight=1)
+
+        notebook = ttk.Notebook(frame)
+        notebook.grid(row=1, column=0, sticky="nsew")
+        overview = ttk.Frame(notebook, style="App.TFrame", padding=(0, 16, 0, 0))
+        usage_page = ttk.Frame(notebook, style="App.TFrame", padding=(0, 16, 0, 0))
+        resources_page = ttk.Frame(notebook, style="App.TFrame", padding=(0, 16, 0, 0))
+        notebook.add(overview, text="Services")
+        notebook.add(usage_page, text="Usage")
+        notebook.add(resources_page, text="Resources")
+
+        services_card = ttk.Frame(overview, style="Card.TFrame", padding=18)
+        services_card.grid(row=0, column=0, sticky="new")
+        overview.columnconfigure(0, weight=1)
+        ttk.Label(services_card, text="Services", style="Section.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            services_card,
+            text="Monitor and control the components in your local agent stack.",
+            style="Muted.Card.TLabel",
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(3, 12))
         self.row_widgets: dict[str, tuple] = {}
         links = ui_links(self.profile)
         for i, svc in enumerate(["ollama", *services.SERVICE_ORDER], start=2):
-            dot = tk.Label(frame, text="●", font=("Segoe UI", 12))
-            dot.grid(row=i, column=0, padx=(0, 6))
-            ttk.Label(frame, text=LABELS[svc], width=20).grid(row=i, column=1, sticky="w")
-            state = ttk.Label(frame, text="", width=12)
-            state.grid(row=i, column=2, sticky="w")
-            buttons = ttk.Frame(frame)
-            buttons.grid(row=i, column=3, sticky="e")
+            row = ttk.Frame(services_card, style="Card.TFrame")
+            row.grid(row=i, column=0, columnspan=4, sticky="we", pady=4)
+            services_card.columnconfigure(0, weight=1)
+            dot = tk.Label(row, text="●", font=("Segoe UI", 11), bg="#ffffff", fg=COLORS["idle"])
+            dot.grid(row=0, column=0, padx=(2, 10))
+            ttk.Label(row, text=LABELS[svc], style="Card.TLabel", width=24).grid(row=0, column=1, sticky="w")
+            state = ttk.Label(row, text="", width=12, anchor="center")
+            state.grid(row=0, column=2, sticky="w", padx=(10, 0))
+            buttons = ttk.Frame(row, style="Card.TFrame")
+            buttons.grid(row=0, column=3, sticky="e")
             if svc in links:
                 ttk.Button(buttons, text="Open", width=7, command=lambda s=svc: self.open_url(s)).pack(side="left", padx=2)
             toggle = None
@@ -233,11 +348,29 @@ class TrayApp:
                 toggle = ttk.Button(buttons, text="Stop", width=7, command=lambda s=svc: self.toggle(s))
                 toggle.pack(side="left", padx=2)
             self.row_widgets[svc] = (dot, state, toggle)
+            row.columnconfigure(1, weight=1)
 
-        ttk.Separator(frame, orient="horizontal").grid(row=8, column=0, columnspan=4, sticky="we", pady=(12, 8))
-        metrics_header = ttk.Frame(frame)
-        metrics_header.grid(row=9, column=0, columnspan=4, sticky="we")
-        ttk.Label(metrics_header, text="Usage and operation averages", font=("Segoe UI", 10, "bold")).pack(side="left")
+        actions = ttk.Frame(overview, style="App.TFrame")
+        actions.grid(row=1, column=0, sticky="we", pady=(14, 0))
+        ttk.Button(actions, text="Start all", style="Primary.TButton", command=self.start_all).pack(side="left")
+        ttk.Button(actions, text="Stop all", command=self.stop_all).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="Open chat", command=lambda: self.open_url("open_webui")).pack(side="left", padx=(18, 0))
+        ttk.Button(actions, text="Logs", command=self.open_logs).pack(side="left", padx=8)
+        self.startup_var = tk.BooleanVar(value=startup.is_installed())
+        ttk.Checkbutton(
+            actions,
+            text="Start at login",
+            variable=self.startup_var,
+            command=self._toggle_startup,
+        ).pack(side="right")
+
+        usage_card = ttk.Frame(usage_page, style="Card.TFrame", padding=18)
+        usage_card.grid(row=0, column=0, sticky="nsew")
+        usage_page.columnconfigure(0, weight=1)
+        usage_page.rowconfigure(0, weight=1)
+        metrics_header = ttk.Frame(usage_card, style="Card.TFrame")
+        metrics_header.grid(row=0, column=0, sticky="we")
+        ttk.Label(metrics_header, text="Request usage & latency", style="Section.TLabel").pack(side="left")
         self.metrics_period_var = tk.StringVar(value=self.metrics_period)
         period_box = ttk.Combobox(
             metrics_header,
@@ -248,9 +381,14 @@ class TrayApp:
         )
         period_box.pack(side="right")
         period_box.bind("<<ComboboxSelected>>", self._metrics_period_changed)
+        ttk.Label(
+            usage_card,
+            text="Gateway calls only. Local model phase timings are shown when available.",
+            style="Muted.Card.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(4, 10))
         columns = ("process", "model", "requests", "input_tokens", "output_tokens", "total_tokens",
                    "load", "input", "inference", "model_total", "request", "cost")
-        self.metrics_tree = ttk.Treeview(frame, columns=columns, show="headings", height=7)
+        self.metrics_tree = ttk.Treeview(usage_card, columns=columns, show="headings", height=14)
         headings = {
             "process": ("Process", 130),
             "model": ("Model", 190),
@@ -268,20 +406,29 @@ class TrayApp:
         for column, (title, width) in headings.items():
             self.metrics_tree.heading(column, text=title)
             self.metrics_tree.column(column, width=width, minwidth=55, anchor="w" if column in ("process", "model") else "e")
-        self.metrics_tree.grid(row=10, column=0, columnspan=4, sticky="we", pady=(6, 0))
-        self.metrics_note = ttk.Label(
-            frame,
-            text="Gateway calls only. Ollama phase times appear when reported; cloud exposes request duration only.",
+        metrics_scroll = ttk.Scrollbar(usage_card, orient="vertical", command=self.metrics_tree.yview)
+        metrics_xscroll = ttk.Scrollbar(usage_card, orient="horizontal", command=self.metrics_tree.xview)
+        self.metrics_tree.configure(yscrollcommand=metrics_scroll.set, xscrollcommand=metrics_xscroll.set)
+        self.metrics_tree.grid(row=2, column=0, sticky="nsew")
+        metrics_scroll.grid(row=2, column=1, sticky="ns")
+        metrics_xscroll.grid(row=3, column=0, sticky="we")
+        usage_card.columnconfigure(0, weight=1)
+        usage_card.rowconfigure(2, weight=1)
+
+        resources_card = ttk.Frame(resources_page, style="Card.TFrame", padding=18)
+        resources_card.grid(row=0, column=0, sticky="nsew")
+        resources_page.columnconfigure(0, weight=1)
+        resources_page.rowconfigure(0, weight=1)
+        ttk.Label(resources_card, text="Live process resources", style="Section.TLabel").grid(
+            row=0, column=0, sticky="w"
         )
-        self.metrics_note.grid(row=11, column=0, columnspan=4, sticky="w", pady=(4, 0))
-        ttk.Separator(frame, orient="horizontal").grid(row=12, column=0, columnspan=4, sticky="we", pady=(12, 8))
-        ttk.Label(frame, text="Live process resources", font=("Segoe UI", 10, "bold")).grid(
-            row=13, column=0, columnspan=4, sticky="w"
-        )
-        process_frame = ttk.Frame(frame)
-        process_frame.grid(row=14, column=0, columnspan=4, sticky="nsew")
+        ttk.Label(
+            resources_card,
+            text="CPU is measured between refreshes; GPU metrics are reported by the driver.",
+            style="Muted.Card.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(4, 10))
         process_columns = ("name", "pid", "cpu", "memory", "gpu", "gpu_memory")
-        self.process_tree = ttk.Treeview(process_frame, columns=process_columns, show="headings", height=8)
+        self.process_tree = ttk.Treeview(resources_card, columns=process_columns, show="headings", height=16)
         process_headings = {
             "name": ("Process", 260, "w"),
             "pid": ("PID", 80, "e"),
@@ -293,39 +440,45 @@ class TrayApp:
         for column, (title, width, anchor) in process_headings.items():
             self.process_tree.heading(column, text=title)
             self.process_tree.column(column, width=width, minwidth=60, anchor=anchor)
-        process_scroll = ttk.Scrollbar(process_frame, orient="vertical", command=self.process_tree.yview)
-        self.process_tree.configure(yscrollcommand=process_scroll.set)
-        self.process_tree.pack(side="left", fill="both", expand=True)
-        process_scroll.pack(side="right", fill="y")
-        self.process_note = ttk.Label(
-            frame,
-            text="CPU is since the previous refresh. GPU engine utilization and dedicated memory are driver-reported; unavailable values show as —.",
-        )
-        self.process_note.grid(row=15, column=0, columnspan=4, sticky="w", pady=(4, 0))
-        bottom = ttk.Frame(frame)
-        bottom.grid(row=16, column=0, columnspan=4, sticky="we", pady=(12, 0))
-        ttk.Button(bottom, text="Open chat", command=lambda: self.open_url("open_webui")).pack(side="left")
-        ttk.Button(bottom, text="Start all", command=self.start_all).pack(side="left", padx=4)
-        ttk.Button(bottom, text="Stop all", command=self.stop_all).pack(side="left")
-        ttk.Button(bottom, text="Logs", command=self.open_logs).pack(side="left", padx=4)
-        self.startup_var = tk.BooleanVar(value=startup.is_installed())
-        ttk.Checkbutton(bottom, text="Start at login", variable=self.startup_var, command=self._toggle_startup).pack(side="right")
+        process_scroll = ttk.Scrollbar(resources_card, orient="vertical", command=self.process_tree.yview)
+        process_xscroll = ttk.Scrollbar(resources_card, orient="horizontal", command=self.process_tree.xview)
+        self.process_tree.configure(yscrollcommand=process_scroll.set, xscrollcommand=process_xscroll.set)
+        self.process_tree.grid(row=2, column=0, sticky="nsew")
+        process_scroll.grid(row=2, column=1, sticky="ns")
+        process_xscroll.grid(row=3, column=0, sticky="we")
+        resources_card.columnconfigure(0, weight=1)
+        resources_card.rowconfigure(2, weight=1)
         self.window = w
+        self._set_window_icon()
 
     def _render_window(self) -> None:
         if self.window is None or not self.window.winfo_exists():
             return
+        if self.window_icon_color != self.icon_color:
+            self._set_window_icon()
         rows = {r["service"]: r for r in self.rows}
         up = 0
         for svc, (dot, state, toggle) in self.row_widgets.items():
             svc_state = rows.get(svc, {}).get("state", "stopped")
             up += svc_state == "running"
             dot.configure(fg=COLORS["ok"] if svc_state == "running" else COLORS["warn"] if svc_state == "starting" else COLORS["bad"])
-            state.configure(text=svc_state)
+            state_style = {
+                "running": "Running.ServiceState.TLabel",
+                "starting": "Starting.ServiceState.TLabel",
+                "stopped": "Stopped.ServiceState.TLabel",
+            }.get(svc_state, "Error.ServiceState.TLabel")
+            state.configure(text=svc_state, style=state_style)
             if toggle is not None:
                 toggle.configure(text="Start" if svc_state == "stopped" else "Stop", state="disabled" if self.busy else "normal")
         busy = f"  {self.busy}..." if self.busy else ""
         self.summary.configure(text=f"{up}/{len(self.row_widgets)} running, checked {self.checked_at}{busy}")
+        summary_style = {
+            COLORS["ok"]: "Ok.Summary.TLabel",
+            COLORS["warn"]: "Warn.Summary.TLabel",
+            COLORS["bad"]: "Bad.Summary.TLabel",
+            COLORS["idle"]: "Idle.Summary.TLabel",
+        }.get(self.icon_color, "Idle.Summary.TLabel")
+        self.summary.configure(style=summary_style)
         self.startup_var.set(startup.is_installed())
         for item in self.metrics_tree.get_children():
             self.metrics_tree.delete(item)
