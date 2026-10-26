@@ -1,0 +1,15 @@
+# Optional: local tab-autocomplete + embeddings for VS Code via the Continue extension.
+# Continue's repository is read-only after 2.0.0, so this is autocomplete-only; chat and
+# agents live in Claude Code / OpenCode. Copy to ~/.continue/config.yaml if you use it.
+name: agent-stack-autocomplete
+version: 0.1.0
+schema: v1
+models:
+  - name: FIM qwen2.5-coder 1.5b (local)
+    provider: ollama
+    model: qwen2.5-coder:1.5b-base
+    roles: [autocomplete]
+  - name: nomic-embed-text (local)
+    provider: ollama
+    model: nomic-embed-text
+    roles: [embed]

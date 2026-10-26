@@ -1,0 +1,152 @@
+{
+ "area": "docs/DESIGN.md — Deep-Architect bespoke VS Code extension plan, reviewed against Oct-2026 coding-agent practice (Claude Code, OpenCode, Cline/Roo, Aider, Goose, LiteLLM) and the 3060/12GB hardware budget",
+ "summary": "DESIGN.md is a well-reasoned 2025-style plan that, in October 2026, proposes rebuilding ~80% of what Claude Code, OpenCode, Cline/Roo, Aider and Goose ship out of the box: the agent loop, tool registry, streaming, context compaction, session transcripts, AGENTS.md support, subagents, hooks and MCP. The bespoke extension, the 4-phase FSM with wall-clock phase timers, the Python RAG sidecar, the ContextPruner, the EpisodicLog and the custom webview should all be dropped; the five-week build plan (lines 455-493) would deliver a worse version of tools that already exist. What is durable and should be ported into a thin orchestration layer is the thinking, not the code: the pre-mortem risk register, a circuit breaker on repeated tool-call sequences, a cloud spend cap, VRAM-aware model/num_ctx selection, the adversarial architect/critic brainstorm, and the \"Lessons Learned\" write-back that is the only self-developing mechanism in the doc. The headline premise, a 9-hour autonomous session on a 14B Q4 model in 12GB VRAM, is not realistic: local models at that size have unreliable long-horizon tool use and ~8k-16k usable context, so the correct shape is bounded, issue-sized tasks (15-60 min) with human checkpoints, local models for one-shot/narrow work, and cloud (Sonnet 5.5 default, Haiku 4.5 for cheap routing/summaries, Opus 5.5 only for escalation) for multi-step agentic work. Two of the three \"technical unknowns\" are moot because they only exist if you build the extension, and the third (Ollama concurrency) is now documented configuration (OLLAMA_NUM_PARALLEL / OLLAMA_MAX_QUEUE), not an unknown.",
+ "findings": [
+  {
+   "title": "Bespoke VS Code extension reinvents the agent harness",
+   "severity": "critical",
+   "file": "docs/DESIGN.md",
+   "detail": "Lines 14-16 and 44-120 propose a custom extension with MessageBus, StateMachine, ToolRegistry (line 74), FileSystemTool/TerminalTool/SearchTool/TestRunnerTool (lines 75-78), OllamaAdapter NDJSON parsing (line 63), CloudAdapter (line 64) and a Preact/Zustand webview (lines 85-98). Every one of these is a solved component in Claude Code (tools, hooks, subagents, MCP, CLAUDE.md/AGENTS.md), OpenCode (open source, Ollama + Anthropic providers, AGENTS.md, custom agents/modes, plugins), Cline/Roo, Aider and Goose. Line 16 says 'Continue.dev already does that' about chat wrappers but misses that the orchestration depth it claims as differentiator (tool loop, subagents, persistent instructions) is also already shipped. The 5-week plan on lines 455-493 is 5 weeks to reach parity with free tools.",
+   "recommendation": "Do not build the extension. Pick one open-source agent harness as the execution engine (OpenCode is the best fit: MIT, provider-agnostic so it can hit both Ollama and Anthropic, native AGENTS.md, custom agents = your 6 departments, plugin hooks for the circuit breaker; Claude Code remains the heavy-lift cloud tool the owner already pays for). The repo's job becomes configuration + a thin routing/budget layer, not an agent runtime."
+  },
+  {
+   "title": "9-hour autonomous local session on a 3060 is not realistic",
+   "severity": "critical",
+   "file": "docs/DESIGN.md",
+   "detail": "Lines 14, 229-235 and 249 budget 390 minutes of autonomous local execution. A 14B coder model at Q4_K_M occupies ~9 GB of the 12 GB, leaving ~2-3 GB for KV cache, which caps usable context around 8k-12k tokens before Ollama spills layers to CPU and tokens/sec collapses from ~25 to single digits; the doc's own num_ctx table (lines 340-346) grants 16384 at '>=5000 MB free', a state that never occurs with a 14B model resident. More fundamentally, 7B-14B local models have unreliable multi-step tool calling: errors compound over hundreds of calls, and the doc's own pre-mortem (lines 24-30) is a list of symptoms of exactly that. The circuit breaker + cloud escalation is a patch over a wrong task shape.",
+   "recommendation": "Replace the 9-hour session with bounded tasks: one issue/PR-sized unit of 15-60 minutes, ending at a human checkpoint (review the diff, run tests). Local models do one-shot or narrow jobs (unit-test generation for one file, docstrings, lint/type-error fixes, commit messages, first-pass code review comments, log summarization). Multi-step agentic work goes to cloud by default. For local candidates, evaluate Qwen3-Coder-30B-A3B (MoE, 3B active; runs acceptably on 12 GB with partial CPU offload) and Qwen3 14B dense alongside the currently configured qwen2.5-coder:14b; verify actual VRAM with `ollama ps` and set OLLAMA_NUM_PARALLEL=1 and OLLAMA_MAX_LOADED_MODELS=1 (the compose file currently sets 3, which guarantees swapping/OOM on 12 GB)."
+  },
+  {
+   "title": "Python RAG sidecar (tree-sitter + FAISS + MiniLM) is a wheel reinvention and the wrong tool",
+   "severity": "high",
+   "file": "docs/DESIGN.md",
+   "detail": "Lines 104-113, 255-262 and 433-441 propose a JSON-RPC Python sidecar that chunks with tree-sitter, embeds with all-MiniLM-L6-v2 and queries FAISS + BM25. Modern coding agents (Claude Code, OpenCode, Cline) deliberately use agentic search (ripgrep, glob, LSP, read-on-demand) instead of embedding RAG for codebases of this size, because it is more precise, always fresh, and has no index to invalidate (line 260's file-watcher invalidation is a bug farm). Aider already ships a tree-sitter repo map if you want the structural overview. MiniLM is a general-sentence model and a poor code embedder; if embeddings were justified you would use a code model via Ollama (e.g. nomic-embed-code), not sentence-transformers on CPU. Phase I 'Repository Mapping' (lines 255-262) also duplicates `claude /init` and OpenCode's AGENTS.md generation.",
+   "recommendation": "Drop the sidecar entirely. Rely on the harness's built-in grep/glob/LSP tools. For a structural overview, generate a repo map once (Aider `--map-tokens` or a short script) into AGENTS.md's project section. If semantic search is later proven necessary, add it as an MCP server rather than a bespoke RPC protocol."
+  },
+  {
+   "title": "AGENTS.md is misused as a hot-write session-state file",
+   "severity": "high",
+   "file": "docs/DESIGN.md",
+   "detail": "Lines 153-192 and 286 ('Write AGENTS.md [Current State] after every iteration') treat AGENTS.md as mutable runtime state committed to git. AGENTS.md has since become a cross-tool convention (OpenCode, Codex, Cursor, Claude Code via CLAUDE.md) for stable project instructions that are loaded into every prompt. Writing 'Last tool: write_file(...) succeeded' and 'Test status: 2/5 passing' (lines 171-172) into it pollutes the instruction context, churns git history, and makes the file unreadable to humans. The repo's current AGENTS.md is already this skeleton (phase: idle, session_id: none) and tells the agents nothing useful about the project.",
+   "recommendation": "Split the file. AGENTS.md = stable, human-curated instructions plus the [Lessons Learned] section (this is the durable, self-developing part: keep it, line 175-177). Session/task state goes to a gitignored `.agent/state/<task>.json` or the harness's own session store; a 'current task' handoff note can be a short `.agent/HANDOFF.md`. Keep the [Counterpoints Log] (lines 184-187) as an ADR-style `docs/decisions/` folder rather than inline."
+  },
+  {
+   "title": "Fixed 4-phase FSM with wall-clock timers is the wrong control structure",
+   "severity": "high",
+   "file": "docs/DESIGN.md",
+   "detail": "Lines 227-253 define a state machine whose transitions are driven by timers (TIMEOUT(60min) on line 246, PHASE_TIMER(390min) on line 249). Time-based phase changes force the agent out of a task mid-way regardless of progress, and the phases themselves (map, brainstorm, execute, harden) are not a runtime concern; they are a workflow the human invokes. Claude Code's plan mode, OpenCode's agent modes, and slash-command skills already express 'plan first, then execute, then review' without a bespoke FSM, and with the human in control of each gate.",
+   "recommendation": "Encode the four phases as four invocable skills/commands, not states: `/map` (one-time repo onboarding into AGENTS.md), `/brainstorm` (architect + critic subagents, see separate finding), `/implement <task>` (bounded TDD loop), `/harden` (checklist: edge-case tests, `npm audit`/`bandit`, docstrings; lines 292-297 are a good checklist and should be kept verbatim as the skill body). Gates are the human typing the next command."
+  },
+  {
+   "title": "Circuit breaker is a durable idea but belongs in a 50-line hook, and the doc's thresholds contradict each other",
+   "severity": "medium",
+   "file": "docs/DESIGN.md",
+   "detail": "Lines 300-324 define a good failure taxonomy (consecutive_test_failures, reasoning_loop_detected, tool_error_cascade, etc.). However the loop-detection rule is stated three incompatible ways: line 26 'repeated 3-call sequence; trips after 2 repetitions', line 307 'same 3-call sequence repeated 2x in last 20 calls', line 323 'fires after 6 identical consecutive tool calls'. The escalation rule on line 316 ('reasoning_loop_detected -> always Human') is too conservative given that a cheap cloud call usually breaks a local loop. The pre-mortem row on line 26 also assumes the harness has 'no feedback mechanism', which is false for current tools.",
+   "recommendation": "Port the taxonomy into a PostToolUse hook (Claude Code `hooks` in settings.json; OpenCode plugin `tool.execute.after`). Rule: hash (tool, normalized args); if the last 3 hashes equal the 3 before them, or the same test command fails 3 times without an intervening edit, block further tool calls and emit a message. Escalation order: local -> cloud (Sonnet 5.5) -> human. Keep the 120s terminal timeout (line 27); harnesses already have it, just configure it."
+  },
+  {
+   "title": "Thermal gating and pynvml monitoring are over-engineered; VRAM awareness is the useful part",
+   "severity": "medium",
+   "file": "docs/DESIGN.md",
+   "detail": "Lines 350-360 and 110-112 propose a Python pynvml/psutil poller with 85C/80C policies, inter-request gaps and a 'paused' FSM state (lines 243, 251-252). An RTX 3060 throttles itself at ~83C via the driver; a user-space pause adds nothing the silicon does not already do, and the driver-reset scenario (line 29) is handled by Ollama restarting the model on next request. The genuinely useful signal is VRAM headroom for choosing model size and num_ctx (lines 340-346 and 356), and that is a one-liner: `nvidia-smi --query-gpu=memory.used,memory.total --format=csv`.",
+   "recommendation": "Drop the thermal FSM and the sidecar. Keep a tiny VRAM check in the router (or a start-of-session script) that picks the model tier and `num_ctx` and refuses to load a second model. Set OLLAMA_MAX_LOADED_MODELS=1, OLLAMA_NUM_PARALLEL=1, OLLAMA_FLASH_ATTENTION=1 and OLLAMA_KV_CACHE_TYPE=q8_0 to roughly double usable context on 12 GB. Run Ollama natively on the Windows host rather than in Docker Desktop (the compose file does the latter); GPU passthrough through WSL2 works but costs speed and is the most fragile piece of the stack."
+  },
+  {
+   "title": "Technical Unknown #1 (Ollama `context` token array) is moot: the API it depends on is deprecated",
+   "severity": "medium",
+   "file": "docs/DESIGN.md",
+   "detail": "Lines 36, 63 ('context token store'), 448 and 431 (langchain excluded specifically to preserve raw `context` handling) build the local adapter on the `/api/generate` `context` array, i.e. reusing KV-cache token IDs across calls. That field has been deprecated for a long time; every current client uses `/api/chat` with a messages array and native `tools`, and Ollama manages KV cache internally. Line 283-284's 'parse tool calls from output (JSON block detection)' is likewise obsolete; Ollama has native tool calling and the harnesses use it.",
+   "recommendation": "Mark Unknown #1 as resolved by design: never use `/api/generate` `context`; use chat messages, and reconstruct from text history (the doc's own fallback on line 36). This also removes the stated reason for excluding higher-level libraries, though with an off-the-shelf harness you need none."
+  },
+  {
+   "title": "Technical Unknown #2 (extension host memory) disappears with the extension; Unknown #3 (Ollama concurrency) is documented, not unknown",
+   "severity": "low",
+   "file": "docs/DESIGN.md",
+   "detail": "Line 38's 9-hour extension-host memory profiling is only relevant if you ship an extension. Line 40's 'undocumented on Windows' concurrency behavior is now plain configuration: Ollama queues requests up to OLLAMA_MAX_QUEUE (default 512) and runs OLLAMA_NUM_PARALLEL of them concurrently (auto-selects 1 or 4 by free memory); on 12 GB you want 1. The doc's instinct ('hard serialization mutex recommended regardless') was right but is now an env var.",
+   "recommendation": "Delete the 'Three Critical Technical Unknowns' section. Replace with two real unknowns for the new architecture: (a) which local model/quant actually gives usable tool-calling at >=20 tok/s within 12 GB (measure with a 10-task benchmark), (b) whether the owner's Claude subscription (Claude Code) or API billing is the cheaper path for cloud work, which decides whether 'escalate to cloud' means 'call the API' or 'hand off to Claude Code'."
+  },
+  {
+   "title": "Stale Anthropic model IDs in the doc and the repo",
+   "severity": "medium",
+   "file": "docs/DESIGN.md",
+   "detail": "Lines 164, 199 and 369 hardcode `claude-opus-4-5`; router/agents.yaml and config/vscode/continue.config.json use `claude-sonnet-4-6` and `claude-opus-4-8`, which are not current IDs. Current IDs: claude-sonnet-5-5, claude-opus-5-5, claude-haiku-4-5-20251001, claude-fable-5-1. The doc also makes Opus the only cloud tier (line 369), which is the most expensive possible choice for every escalation.",
+   "recommendation": "Three cloud tiers in agents.yaml: claude-haiku-4-5-20251001 for routing/classification/summaries (cheaper than most local-vs-cloud mistakes), claude-sonnet-5-5 as the default agentic worker, claude-opus-5-5 only for explicit `--deep` security/architecture reviews. Put IDs in one place (a models section in agents.yaml) and reference them by alias everywhere else. Enable prompt caching on the system prompts, which are static per agent."
+  },
+  {
+   "title": "Cloud budget is denominated in calls, not money, and is hand-rolled",
+   "severity": "medium",
+   "file": "docs/DESIGN.md",
+   "detail": "Line 30, 202 and 367 cap cloud usage at '20 calls/session' with an 8192 input-token cap. One Opus call with 8k in and 8k out costs ~40x a Haiku call; call-count is not a cost control. The repo's router/main.py also has no spend tracking at all. The 429 backoff on line 376 is already built into every provider SDK.",
+   "recommendation": "Replace the bespoke budget and router/main.py's provider plumbing with LiteLLM Proxy: it already does OpenAI-compatible fan-out to Ollama + Anthropic, per-key and per-team dollar budgets, spend logging, fallbacks, and model aliases, and plugs into Open WebUI, Continue and OpenCode unchanged. Keep only the department-routing logic as a small LiteLLM pre-call hook or a thin shim in front of it."
+  },
+  {
+   "title": "ContextPruner and EpisodicLog duplicate harness features; only the 'salvage lessons' step is novel",
+   "severity": "medium",
+   "file": "docs/DESIGN.md",
+   "detail": "Lines 82-83, 327-338 specify sliding-window pruning with importance scoring and an append-only JSONL episodic log. Claude Code auto-compacts and stores JSONL transcripts under ~/.claude/projects; OpenCode stores sessions and compacts too. The single durable idea is step 4 on line 336: extract lessons from dropped context and append to AGENTS.md before discarding.",
+   "recommendation": "Drop both modules. Implement 'salvage' as a PreCompact (Claude Code) / session-end hook that asks the model for a 3-bullet 'lessons learned' delta and appends it to AGENTS.md [Lessons Learned]. Read the harness's own transcripts for the retrospective job (see self-development finding)."
+  },
+  {
+   "title": "Self-development is under-specified: Lessons Learned is the only mechanism",
+   "severity": "high",
+   "file": "docs/DESIGN.md",
+   "detail": "The owner's hard requirement is a self-developing system, yet the doc's only improvement loop is appending timestamped lessons (lines 175-177, 283, 336). Nothing changes prompts, routing thresholds, or skills based on outcomes; the router's keyword+length classifier (router/main.py lines 82-105) is static and will misroute forever. There is no evaluation harness, so any prompt change is unmeasured.",
+   "recommendation": "Add an explicit retrospective loop, cheap and human-gated: (1) every task logs (department, model, task type, pass/fail, retries, cost) to a JSONL ledger; (2) a scheduled or on-demand `/retro` skill runs a cloud model over the last N transcripts + ledger and opens a PR proposing edits to AGENTS.md, the department system prompts, and the routing table (e.g. 'docs tasks on qwen 7b pass 95%: route them local'); (3) promptfoo regression evals on a 10-20 task golden set gate the merge. The owner approves by merging the PR, which is intuitive and auditable."
+  },
+  {
+   "title": "Adversarial brainstorm is durable and cheap to port as a skill",
+   "severity": "low",
+   "file": "docs/DESIGN.md",
+   "detail": "Lines 264-273 (Architect vs Critic sequential threads, synthesis by a larger model, approval gate) is the best original idea in the doc and maps one-to-one onto subagents. Running the Critic locally with fresh context is a sensible cost move; synthesis on Sonnet 5.5 is where the money is well spent.",
+   "recommendation": "Implement as a `/brainstorm` slash command / OpenCode agent: architect (local or Sonnet), critic (local, fresh context, adversarial prompt), one rebuttal round, synthesis (Sonnet 5.5) written to `docs/decisions/NNN-<topic>.md` and a task list. Human approval is just reading the file before running `/implement`."
+  },
+  {
+   "title": "Custom webview panel and status bar are unnecessary and hurt intuitiveness",
+   "severity": "low",
+   "file": "docs/DESIGN.md",
+   "detail": "Lines 380-414 design a sidebar with chain-of-thought stream, phase timeline, AGENTS.md viewer, tool log and GPU gauges. The owner's intuitiveness requirement is better served by surfaces they already use: the Claude Code / OpenCode terminal UI (which shows tool calls and streaming), Open WebUI for chat with the department models, and VS Code via the Claude Code extension or Continue. A GPU gauge in an editor sidebar is a curiosity, not a workflow.",
+   "recommendation": "Drop the UI. The single intuitive entry point should be: in the terminal, `opencode` (or `claude`) with department agents selectable by name (`@security review this PR`), and in Open WebUI the same six models via LiteLLM. Show cost/VRAM in the harness status line (OpenCode and Claude Code both expose this) rather than a custom panel."
+  },
+  {
+   "title": "Routing by keywords and message length is a poor proxy for task difficulty",
+   "severity": "medium",
+   "file": "router/main.py",
+   "detail": "Not in DESIGN.md but the successor to its escalation logic: `classify_complexity` (lines 82-105) routes to cloud on keyword hits and a token threshold of the last message. Short messages can be hard ('fix the race in the scheduler') and long pastes can be trivial. Silent auto-routing is also the opposite of intuitive; the owner cannot predict what they will be charged.",
+   "recommendation": "Make routing explicit first, learned second: the user picks the tier by agent name or a `--deep` flag, defaults per department live in agents.yaml, and the retro loop adjusts those defaults from the outcome ledger. If automatic classification is wanted, use claude-haiku-4-5 or a 1.5B local model as a one-token classifier rather than keywords."
+  }
+ ],
+ "keep": [
+  "Pre-mortem risk register (lines 20-31): the failure modes are real; keep it as a living risk table with the preventions rewritten for the new architecture",
+  "Circuit breaker failure taxonomy and loop detection on repeated tool-call sequences (lines 300-324), reimplemented as a harness hook with a single consistent threshold",
+  "Cloud spend cap and escalation ladder local -> cloud -> human (lines 363-374), but denominated in dollars/tokens via LiteLLM budgets",
+  "VRAM-aware model and num_ctx selection (lines 340-346, 356): the one hardware-awareness feature that matters on 12 GB; a few lines of nvidia-smi, not a sidecar",
+  "Adversarial architect/critic brainstorm with cloud synthesis and a human approval gate (lines 264-273), as a slash-command/skill with subagents",
+  "AGENTS.md [Lessons Learned] write-back (lines 175-177, 336): the seed of the self-developing requirement; keep and extend into a retrospective loop",
+  "Phase IV hardening checklist (lines 292-297): edge-case tests, npm audit/bandit, docstrings; good as the body of a `/harden` skill",
+  "Human checkpoints at phase boundaries (requirePhaseApproval, lines 201, 244-245, 273): correct instinct; make them the default by shaping work as bounded tasks",
+  "Terminal command timeout and Windows taskkill /F /T handling (lines 27, 76): configure in the harness rather than write, but the requirement stands",
+  "Counterpoints log (lines 184-187) as lightweight ADRs in docs/decisions/, not inline in AGENTS.md"
+ ],
+ "replace": [
+  "Bespoke VS Code extension + agent loop + ToolRegistry (lines 44-102, 129-147) -> OpenCode as the open-source execution harness (Ollama + Anthropic providers, AGENTS.md, custom agents per department, plugin hooks), with Claude Code as the heavy cloud tool the owner already uses",
+  "router/main.py provider plumbing, CloudAdapter cost guard and the 20-call CloudBudget (lines 64, 202, 363-377) -> LiteLLM Proxy for OpenAI-compatible routing, dollar budgets, spend logs, fallbacks and model aliases; keep only a thin department shim",
+  "Python RAG sidecar: tree-sitter chunker, MiniLM embeddings, FAISS + BM25 (lines 104-113, 255-262, 433-441) -> harness-native ripgrep/glob/LSP agentic search; Aider repo-map or a one-time tree-sitter summary into AGENTS.md if a structural overview is wanted",
+  "ContextPruner + EpisodicLog (lines 82-83, 327-338) -> Claude Code/OpenCode auto-compaction and built-in JSONL session transcripts, plus a PreCompact/session-end hook that appends lessons to AGENTS.md",
+  "Custom Preact/Zustand webview, status bar, session-start dialog (lines 85-98, 380-414) -> OpenCode/Claude Code terminal UI, Open WebUI (already deployed) for chat, Continue or the Claude Code VS Code extension inside the editor",
+  "Keyword+length complexity classifier (router/main.py lines 82-105) -> explicit tier selection by agent name/flag with per-department defaults, optionally a claude-haiku-4-5 or 1.5B local one-token classifier, tuned by the outcome ledger",
+  "Hand-written prompt tuning -> promptfoo golden-set evals gating any change the retrospective loop proposes to agent prompts or routing",
+  "Hardcoded model IDs claude-opus-4-5 / claude-sonnet-4-6 / claude-opus-4-8 -> claude-haiku-4-5-20251001 (cheap tier), claude-sonnet-5-5 (default worker), claude-opus-5-5 (explicit deep review only), defined once in agents.yaml"
+ ],
+ "drop": [
+  "The 9-hour autonomous session premise and all phase timers (lines 14, 229-235, 246, 249): replace with bounded 15-60 minute tasks ending at a human checkpoint",
+  "4-phase StateMachine.ts with guard table (lines 57, 227-253, 447): phases become four invocable skills, gates become the human typing the next command",
+  "Thermal response policy, pynvml/psutil sidecar monitors and the `paused` FSM state (lines 110-112, 243, 251-252, 350-360): the GPU driver already throttles; keep only the VRAM check",
+  "Ollama `/api/generate` `context` token-array persistence and JSON-block tool-call parsing (lines 36, 63, 283-284, 431, 448): deprecated API; use /api/chat with native tools, which the harness already does",
+  "All three 'Critical Technical Unknowns' (lines 34-40): #1 moot by using /api/chat, #2 moot without an extension, #3 is OLLAMA_NUM_PARALLEL=1 / OLLAMA_MAX_QUEUE configuration",
+  "Writing runtime session state ([Meta], [Current State] with last-tool and test counts) into AGENTS.md every iteration (lines 160-173, 286): move to a gitignored .agent/state file; AGENTS.md holds stable instructions and lessons only",
+  "Phase I RAG indexing with file-watcher invalidation (lines 255-262): duplicates `claude /init` / OpenCode onboarding and agentic search",
+  "Five-week implementation plan, 'Five Critical Files', and the verification plan tied to the extension (lines 445-503): replace with a one-week setup plan for the composed stack plus a 10-20 task benchmark/eval set",
+  "Preact/htm/zustand/eventemitter3/esbuild package selections and sentence-transformers/faiss-cpu/tree-sitter/rank-bm25 (lines 418-441): none are needed once the harness is off the shelf",
+  "OLLAMA_MAX_LOADED_MODELS=3 in infrastructure/docker-compose.yml and Ollama-in-Docker-Desktop: set to 1 and run Ollama natively on the Windows host for speed and stability on 12 GB"
+ ]
+}

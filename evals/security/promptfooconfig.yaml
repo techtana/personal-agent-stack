@@ -1,0 +1,28 @@
+# GENERATED from agents/security.yaml by `uv run scripts/stack.py build`. Edit the YAML, not this file.
+description: Security Reviewer regression gate (local tier via LiteLLM)
+prompts:
+- file://prompt.json
+providers:
+- id: openai:chat:security-local
+  label: local
+  config:
+    apiBaseUrl: http://127.0.0.1:4000/v1
+    apiKeyEnvar: LITELLM_MASTER_KEY
+    max_tokens: 1500
+tests:
+- description: sql-injection
+  vars:
+    prompt: 'Review: cur.execute("SELECT * FROM users WHERE name = ''" + name + "''"). Report findings in the required format.'
+  assert:
+  - type: regex
+    value: \[(CRITICAL|HIGH)\]
+  - type: regex
+    value: CWE-89
+  - type: icontains
+    value: SUMMARY
+- description: hardcoded-secret
+  vars:
+    prompt: 'Review: AWS_SECRET = ''AKIA...REAL'' committed in settings.py. Report findings in the required format.'
+  assert:
+  - type: icontains
+    value: '[CRITICAL]'

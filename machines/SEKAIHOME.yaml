@@ -1,0 +1,43 @@
+# Machine profile for SEKAIHOME (written 2026-10-24). Re-detect with
+#   uv run scripts/stack.py doctor --write-profile --refresh
+# Everything under `detected:` is overwritten by --refresh; everything else is yours.
+name: SEKAIHOME
+os: windows
+detected:
+  ram_gb: 31.9
+  ram_modules: "2 x 16 GB DDR4 @ 2133 MT/s"
+  cpu: "AMD Ryzen 5 5500 (6C/12T)"
+  gpu: "NVIDIA GeForce RTX 3060"
+  vram_mib: 12288
+  gpu_driver: "610.88"
+  idle_vram_mib: 1135          # WDDM/desktop overhead measured before Ollama was installed
+  disk_free_gb: {C: 52, D: 816}
+  detected_at: "2026-10-24"
+hardware_class: moe-12gb-32ram  # chosen from machines/_defaults.yaml by RAM/VRAM; override here if a bench says otherwise
+
+# Windows paths: use single quotes so YAML keeps the backslashes literal.
+model_store: 'D:\ollama\models'     # C: has 52 GB free; models live on D: (OLLAMA_MODELS)
+data_dir: ".run"                    # Phoenix SQLite, Open WebUI data, pids, logs (gitignored)
+
+models:
+  # 2026-10-25: dense 9B as the default primary instead of the class's 35B MoE. Benchmarks (memory/state.md):
+  # 9B ~52 tok/s with ~18 GB RAM left available; 35B ~25 tok/s with ~1 GB available under the usual desktop load.
+  # Delete these four lines to return to the class default (qwen3.6:35b-a3b-coding with use_mmap).
+  primary: qwen3.5:9b
+  primary_options: {}      # use_mmap is only needed for the MoE's RAM-resident experts; keep Ollama's default here
+  primary_num_ctx: 32768
+  small_num_ctx: 32768     # same model as local-small: equal num_ctx lets both tiers share one Ollama runner
+
+ollama_env:
+  # per-machine additions/overrides to machines/_defaults.yaml:ollama_env
+  OLLAMA_MODELS: 'D:\ollama\models'
+
+cloud:
+  enabled: auto
+  # Account: Claude Max 5x subscription (claude_max, default_claude_max_5x). No API key on this machine yet.
+  # Max plans include monthly API credits (research claim, unverified in Console); creating a key in
+  # console.anthropic.com and putting it in .env turns on the cloud tiers.
+
+notes:
+  - "Docker Desktop / WSL2 are NOT installed; all services run natively so the WSL2 VM does not take RAM from MoE expert offload."
+  - "DDR4-2133 is the bottleneck for CPU-side experts: expect lower tok/s than the 39-47 tok/s community numbers measured on faster RAM."

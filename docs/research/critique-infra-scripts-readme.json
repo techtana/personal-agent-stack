@@ -1,0 +1,139 @@
+{
+ "area": "Infrastructure, scripts, README (SRE review for Windows 11 + Docker Desktop/WSL2 + RTX 3060 12GB with native Ollama)",
+ "summary": "The compose stack as written will not come up on the owner's machine: it starts a second Ollama that collides with the native one on port 11434, and both healthchecks call curl in images that do not ship it (python:3.12-slim certainly, ollama image almost certainly), so `depends_on: service_healthy` deadlocks router and open-webui. The memory plan is physically impossible: OLLAMA_MAX_LOADED_MODELS=3 with two 14B Q4 models at num_ctx 16384 needs roughly 32 GB of VRAM (about 13 GB each for the 14B models alone) against 12 GB, and the six per-agent Modelfiles multiply loaded runners further. The scripts are Linux/macOS-shaped bash with no PowerShell or cross-platform path, no CRLF protection, and a two-run setup flow; README documents .env overrides the router never reads, a cost claim that is false, macOS keybindings, and no Windows, uninstall or real cost guidance. The right move is to delete the containerised Ollama (and probably Open WebUI, which the owner already runs), point everything at host.docker.internal:11434, size for one resident model, and replace the host-CLI scripts with API-driven init that works identically from PowerShell, Git Bash and WSL.",
+ "findings": [
+  {
+   "title": "Containerised Ollama duplicates the native install and collides on port 11434",
+   "severity": "critical",
+   "file": "/home/user/personal-agent-stack/infrastructure/docker-compose.yml",
+   "detail": "The `ollama` service publishes 11434:11434 while the owner's native Windows Ollama (tray app) already listens on 11434, so `docker compose up` fails with 'port is already allocated' or, if native Ollama is stopped, you now have two model stores (%USERPROFILE%\\.ollama vs the `ollama-data` volume, ~23 GB duplicated). setup.sh simultaneously requires the host `ollama` CLI and pulls through it, so which daemon ends up holding the models depends on who won the port. GPU inside the container goes Windows driver -> WSL2 -> dxg -> container, which adds latency and is the flakiest layer in the chain (driver resets, the DESIGN.md 'GPU driver reset overnight' risk). Native Ollama on Windows uses the GPU directly.",
+   "recommendation": "Remove the `ollama` service, the `ollama-data` volume and the `deploy.resources` GPU block entirely. Set `OLLAMA_BASE_URL=http://host.docker.internal:11434` for router and open-webui, add `extra_hosts: [\"host.docker.internal:host-gateway\"]` for Linux parity, and document that native Ollama must be started with `OLLAMA_HOST=0.0.0.0` (Windows user env var, then restart the tray app) so containers can reach it. Keep a commented-out `--profile docker-ollama` service only if you want a Linux-server fallback."
+  },
+  {
+   "title": "Healthchecks call curl in images that do not contain it; depends_on then deadlocks the whole stack",
+   "severity": "critical",
+   "file": "/home/user/personal-agent-stack/infrastructure/docker-compose.yml",
+   "detail": "router is built from python:3.12-slim (router/Dockerfile) which has no curl, so its healthcheck is permanently 'unhealthy'. The ollama image is an Ubuntu base without curl as well (verify with `docker run --rm --entrypoint sh ollama/ollama -c 'command -v curl || echo missing'`). Because open-webui depends on both with `condition: service_healthy` and router depends on ollama the same way, `docker compose up -d` exits with 'dependency failed to start: container ... is unhealthy' and only the ollama container ever runs. Also the image reference `ghcr.io/ollama/ollama:latest` is not the canonical image (it is `docker.io/ollama/ollama`); treat as a typo pending verification.",
+   "recommendation": "Router: `test: [\"CMD\", \"python\", \"-c\", \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status==200 else 1)\"]` (or `pip install` nothing and add `curl` via apt in the Dockerfile). If an Ollama container is ever kept: `test: [\"CMD\", \"ollama\", \"list\"]`. Once Ollama is native, drop that depends_on and have the router probe Ollama lazily and report it in /health instead."
+  },
+  {
+   "title": "OLLAMA_MAX_LOADED_MODELS=3 with two 14B models at 16k context needs ~32 GB VRAM on a 12 GB card",
+   "severity": "critical",
+   "file": "/home/user/personal-agent-stack/infrastructure/docker-compose.yml",
+   "detail": "Arithmetic at the Modelfiles' `num_ctx 16384`, fp16 KV cache: qwen2.5-coder:14b and deepseek-r1:14b are both Qwen2.5-14B (48 layers, 8 KV heads, head_dim 128) -> KV = 2*48*8*128*2 B = 192 KiB/token -> 3.1 GB at 16k; Q4_K_M weights ~9.0 GB; plus ~0.5-0.8 GB compute buffers = ~12.5-13 GB EACH, which already exceeds the ~11.3 GB usable on a 3060 under Windows WDDM. qwen2.5-coder:7b (28 layers, 4 KV heads) = 56 KiB/token -> 0.9 GB KV + 4.7 GB weights + buffers = ~6.2 GB. Sum = ~32 GB; weights alone = 22.7 GB. Consequence today: Ollama partially offloads the 14B models to CPU (5-10x slower, and the DESIGN.md 'OOM at hour 3' failure mode), and with 24h keep_alive the first model loaded squats the card. Worse, create-agents.sh produces six distinct model names; Ollama keys loaded runners by model name + parameters, so agent-app-dev and agent-security (same base) load two separate 14B runners.",
+   "recommendation": "Set OLLAMA_MAX_LOADED_MODELS=1 and OLLAMA_NUM_PARALLEL=1 (NVMe hot-swap costs ~5-8 s, far cheaper than CPU offload), enable OLLAMA_FLASH_ATTENTION=1 and OLLAMA_KV_CACHE_TYPE=q8_0 (halves KV: 14B@16k -> ~1.6 GB, total ~11 GB, fits) and set these as Windows env vars for the native daemon since compose env no longer applies. Drop num_ctx to 8192 for 14B models unless q8_0 KV is on; let 7B run 32k. Stop baking personas into Modelfiles (the router already injects system prompts) so only two or three base models ever exist. Add a `scripts/vram-check` that prints `ollama ps` and warns when SIZE/PROCESSOR shows CPU offload."
+  },
+  {
+   "title": "Deprecated top-level `version` key",
+   "severity": "low",
+   "file": "/home/user/personal-agent-stack/infrastructure/docker-compose.yml",
+   "detail": "`version: \"3.9\"` is ignored by Compose v2 and emits a warning on every command ('the attribute `version` is obsolete'). It also signals the file was written against v1 semantics (`deploy:` was originally swarm-only; v2 honours it, but `gpus: all` is the current idiom).",
+   "recommendation": "Delete line 1. If a GPU container is ever retained, use `gpus: all` (Compose spec >= 2.30) rather than the `deploy.resources.reservations.devices` block."
+  },
+  {
+   "title": "Open WebUI container duplicates the owner's existing Open WebUI and its auth/DB",
+   "severity": "medium",
+   "file": "/home/user/personal-agent-stack/infrastructure/docker-compose.yml",
+   "detail": "The owner already runs Open WebUI. A second instance means a second admin account, a second SQLite/vector DB, a second set of workspaces, and `WEBUI_SECRET_KEY` defaults to the literal `change-me-in-production` because nothing generates it. Nothing in this stack needs a new UI; the only integration is adding `http://host.docker.internal:8000/v1` (or the host-published router port) as an OpenAI-compatible connection in the existing instance.",
+   "recommendation": "Make open-webui an optional `profiles: [ui]` service, default off, and document the two-click 'add OpenAI connection' flow in the existing Open WebUI. If kept, generate WEBUI_SECRET_KEY in setup (`python -c 'import secrets;print(secrets.token_hex(32))'` / `[Convert]::ToHexString((1..32|%{Get-Random -Max 256}))` in PowerShell) and pin the image tag instead of `:main`."
+  },
+  {
+   "title": "No PowerShell or cross-platform entry point; bash scripts assume a Unix host",
+   "severity": "high",
+   "file": "/home/user/personal-agent-stack/scripts/setup.sh",
+   "detail": "On Windows the realistic shells are PowerShell, Git Bash and WSL. In WSL `command -v ollama` fails (the Windows binary is `ollama.exe`, interop needs it on PATH or an alias), `nano` is suggested, `~/.continue/config.json` is the wrong location (%USERPROFILE%\\.continue), and `docker compose` only works if WSL integration is enabled. In Git Bash, `declare -A` is fine (bash 5), but `docker compose up` through MSYS path mangling can break bind mounts like `../router/agents.yaml`. There is no .gitattributes, so a Windows clone with `core.autocrlf=true` converts the scripts to CRLF and WSL prints `/usr/bin/env: 'bash\\r': No such file or directory`. `set -euo pipefail` is correct, but `create-agents.sh` ends with `ollama list | grep \"^agent-\"`, which under pipefail exits non-zero on a fresh install (no matches) and aborts setup.sh after everything actually succeeded.",
+   "recommendation": "Replace host-CLI scripts with host-agnostic mechanisms: pull models via the Ollama HTTP API (`POST /api/pull`) from a one-shot `init` compose service or a 30-line Python/PowerShell script, so the same `docker compose up` works everywhere. Provide `scripts/setup.ps1` as the first-class Windows path and keep `setup.sh` for WSL/Linux, or adopt a single cross-platform task runner (go-task `Taskfile.yml` or `just`) that wraps both. Add `.gitattributes` with `*.sh text eol=lf` and `*.ps1 text eol=crlf`. Append `|| true` to the final grep, and make the model-presence check `ollama show \"$1\" >/dev/null 2>&1` (the second clause in `already_pulled` is a no-op duplicate of the first)."
+  },
+  {
+   "title": "Setup flow exits after creating .env and requires a second run; not a single idempotent path",
+   "severity": "medium",
+   "file": "/home/user/personal-agent-stack/scripts/setup.sh",
+   "detail": "First run copies .env.example and `exit 0` with 'edit it and re-run'. A user who skips editing gets a stack whose cloud path 500s but whose health looks fine. `source .env` executes arbitrary file content (quoted values with `$`, spaces or `#` break or run), and the API key check happens before compose starts even though setup also explicitly tolerates a missing key. The 60 s Ollama wait loop is redundant once compose's depends_on gates on health (and with native Ollama it should probe the host). Re-runs always re-`ollama create` all six agents (harmless but slow) and always `--build` the router.",
+   "recommendation": "Single pass: if .env is missing, create it, then read ANTHROPIC_API_KEY from the environment or prompt interactively (`read -rs` / `Read-Host -AsSecureString`), write it with a safe templating step rather than `source`, and continue in local-only mode with a loud banner when empty. Parse .env with `grep -E '^ANTHROPIC_API_KEY=' | cut -d= -f2-` instead of sourcing. Probe native Ollama first and fail fast with the exact OLLAMA_HOST fix if unreachable. Make `--build` and agent re-creation conditional on a changed hash (or just rely on compose's own change detection)."
+  },
+  {
+   "title": "README documents .env model overrides that the router never reads",
+   "severity": "high",
+   "file": "/home/user/personal-agent-stack/README.md",
+   "detail": "README (Step 2 table, Troubleshooting OOM) and .env.example say LOCAL_MODEL_PRIMARY/FAST/REASONING and CLOUD_MODEL_BALANCED/HEAVY change routing. router/main.py only reads OLLAMA_BASE_URL, ANTHROPIC_API_KEY, COMPLEXITY_TOKEN_THRESHOLD and ROUTER_LOG_LEVEL; model names are hard-coded in router/agents.yaml with no `${VAR}` substitution. The documented OOM fix ('set LOCAL_MODEL_PRIMARY=qwen2.5-coder:7b, restart router') does nothing. Model names are also repeated in four places that can drift: .env.example, agents.yaml, six Modelfiles, continue.config.json.",
+   "recommendation": "Either implement env substitution in load_agents (os.path.expandvars on the YAML text, with the .env values as defaults) or delete the dead variables from .env.example and the README. Pick one source of truth for model assignments (agents.yaml) and generate the Modelfiles/Continue config from it, or drop the Modelfiles."
+  },
+  {
+   "title": "Cost section is inaccurate: threshold=99999 does not disable cloud; no per-agent threshold exists; no $ figures",
+   "severity": "medium",
+   "file": "/home/user/personal-agent-stack/README.md",
+   "detail": "classify_complexity checks complexity_keywords on ALL message text (not just the last user message as the README's step 3 says) before the token threshold, so with COMPLEXITY_TOKEN_THRESHOLD=99999 any conversation containing 'migration', 'architecture', etc. still goes to Opus/Sonnet and bills the account. 'Increase its [security agent's] token threshold' refers to a per-agent knob that does not exist (the threshold is one global env var). The section has no pricing, no estimate of a typical day's spend, no budget cap, and the router logs route decisions but not token usage, so the owner cannot actually see cost. Cloud model IDs (claude-sonnet-4-6, claude-opus-4-8) are stale relative to the authoritative runtime IDs (claude-sonnet-5-5, claude-opus-5-5, claude-haiku-4-5-20251001, claude-fable-5-1).",
+   "recommendation": "Add a real kill switch (`CLOUD_ENABLED=false` short-circuits to local) and document it. Correct the routing description (keywords scan the full transcript). Have the router log/accumulate `usage.input_tokens/output_tokens` per cloud call and expose `/metrics` or a daily total; set a soft daily cap env var. Rewrite the cost section with current per-million-token prices for the models actually configured and a worked example (e.g. 50 escalations/day). Update model IDs everywhere (agents.yaml, .env.example, README table, continue.config.json) and consider Haiku 4.5 as the 'balanced' tier for most departments, reserving Sonnet/Opus 5.5 for security and architecture."
+  },
+  {
+   "title": "README has no Windows instructions, macOS keybindings, Linux-only GPU troubleshooting, and no uninstall",
+   "severity": "medium",
+   "file": "/home/user/personal-agent-stack/README.md",
+   "detail": "Quick Start uses `nano`, `cp ... ~/.continue/config.json`, `export ANTHROPIC_API_KEY`; Continue shortcuts are `Cmd+Shift+L`/`Cmd+I` (Windows: Ctrl+Shift+L / Ctrl+I). The GPU troubleshooting tells a Docker Desktop user to install the NVIDIA Container Toolkit (not applicable: WSL2 GPU support comes from the Windows NVIDIA driver) and to run `nvidia/cuda:12.0-base`, a tag that no longer exists on Docker Hub. Prerequisites omit Docker Desktop WSL2 backend, WSL kernel version, and that native Ollama must be set to OLLAMA_HOST=0.0.0.0. There is no teardown (`docker compose down -v`, `ollama rm agent-*`, removing the Continue config), so a failed experiment leaves ~25 GB of models and containers behind. Continue's `config.json` format has been superseded by `config.yaml`; flag to re-verify before shipping the copy instructions. The agent table says `app-developer` while Ollama models are `agent-app-dev` (naming drift between router ids and Modelfile names). Prerequisite 'VRAM 8 GB min' contradicts a default that needs ~13 GB per 14B model.",
+   "recommendation": "Add a 'Windows 11 (recommended path)' section first: Docker Desktop WSL2 backend, native Ollama env vars, PowerShell commands, %USERPROFILE% paths, Ctrl shortcuts. Replace GPU troubleshooting with `nvidia-smi` in PowerShell plus `ollama ps` to confirm '100% GPU'. Add an 'Uninstall' section and a `scripts/teardown.{sh,ps1}`. Align router ids and Ollama model names. State the real VRAM budget: 12 GB = one 14B at 8-16k ctx with q8 KV, or one 7B at 32k."
+  },
+  {
+   "title": "Secrets: .env is correctly ignored but the pattern leaks the key more widely than needed",
+   "severity": "low",
+   "file": "/home/user/personal-agent-stack/infrastructure/.env.example",
+   "detail": ".gitignore covers `.env`/`.env.local`, only .env.example is tracked, placeholders are safe. However: (1) `env_file: .env` injects every variable, including WEBUI_SECRET_KEY, into the router container, and open-webui gets WEBUI_SECRET_KEY via interpolation, so each service sees more than it needs; (2) `source .env` in setup.sh executes the file; (3) continue.config.json uses `${ANTHROPIC_API_KEY}` which Continue only expands if the variable is in VS Code's process environment, which on Windows means a user-level env var, not a shell `export`; (4) the key is read once at import time in main.py, so rotating it requires a container restart with no documented procedure; (5) no `.env.example` entry warns that WEBUI_SECRET_KEY must be stable across restarts or all sessions are invalidated.",
+   "recommendation": "Pass only ANTHROPIC_API_KEY and router vars to the router (explicit `environment:` list or a `router.env` file), generate WEBUI_SECRET_KEY once in setup, add `.env*` with `!.env.example` to .gitignore for safety, document setting ANTHROPIC_API_KEY as a Windows user env var for Continue, and add a key-rotation line to the README. Consider `docker compose config` in CI to assert no literal `sk-ant-` ever appears in tracked files (a pre-commit secret scan such as gitleaks)."
+  },
+  {
+   "title": "Pull list omits the embedding model the Continue config depends on",
+   "severity": "medium",
+   "file": "/home/user/personal-agent-stack/scripts/pull-models.sh",
+   "detail": "config/vscode/continue.config.json configures `nomic-embed-text` via Ollama for codebase indexing, but pull-models.sh only pulls the three chat models, so Continue's @codebase indexing fails until the user guesses the missing pull. No reranker is configured either.",
+   "recommendation": "Add `nomic-embed-text` (or whichever embedder is chosen after re-evaluation) to the model list, and generate the list from agents.yaml + continue config rather than hand-maintaining it."
+  },
+  {
+   "title": "Local model choices are 2024-2025 era and the reasoning pick is a poor fit for the slot",
+   "severity": "medium",
+   "file": "/home/user/personal-agent-stack/router/agents.yaml",
+   "detail": "qwen2.5-coder (Nov 2024) and deepseek-r1:14b (Jan 2025 Qwen-distill) are now roughly two model generations old for an October 2026 build. Beyond age: deepseek-r1 distills emit long `<think>` blocks (at ~20 tok/s on a 3060 a review can spend minutes thinking), do not support tool calling, and the router/Open WebUI path does not strip think tags; that makes it a weak 'code-review' default and a non-starter for any future agentic (tool-using) department. qwen2.5-coder also predates native tool-calling in Ollama for coder variants. Not researched here; flagged for re-evaluation only.",
+   "recommendation": "Re-evaluate against the current 12 GB-class field before committing: newer Qwen3 / Qwen3-Coder small dense models, Devstral-class agentic coders, gpt-oss-20b (MXFP4, borderline at ~12-13 GB), Gemma 3 / GLM-4.x small variants, and newer embedders. Selection criteria should be: tool-calling support in Ollama, Q4 weights <= 9 GB, native 32k+ context, and no mandatory thinking mode for the fast tier. Whatever is chosen, keep a thinking model only where latency is acceptable and strip `<think>` in the router."
+  },
+  {
+   "title": "Router container depends on Ollama being healthy at start and has no retry on the Ollama path",
+   "severity": "low",
+   "file": "/home/user/personal-agent-stack/infrastructure/docker-compose.yml",
+   "detail": "Once Ollama is native, Docker Desktop frequently starts containers before the Windows tray app has finished starting after a reboot; a hard `depends_on` cannot express that, and a router that merely proxies will return 502s until Ollama is up. /health currently returns ok regardless of Ollama reachability.",
+   "recommendation": "Make /health report `ollama: reachable|unreachable` (probe /api/tags with a 2 s timeout) and have the compose healthcheck accept degraded, plus simple retry/backoff in stream_ollama/complete_ollama. Set `restart: unless-stopped` (already) and document that Ollama on Windows should be set to start at login."
+  },
+  {
+   "title": "Image tags unpinned (`:latest`, `:main`) and no resource limits",
+   "severity": "low",
+   "file": "/home/user/personal-agent-stack/infrastructure/docker-compose.yml",
+   "detail": "`open-webui:main` is a moving target that has broken OpenAI-connection settings between releases; `ollama:latest` likewise. With Docker Desktop's WSL2 VM defaulting to 50% of host RAM, an unbounded open-webui (embeddings, RAG) can starve the host.",
+   "recommendation": "Pin to explicit version tags with a dated comment, add `mem_limit`/`cpus` for open-webui and router, and note the `.wslconfig` memory setting in the Windows section."
+  }
+ ],
+ "keep": [
+  "The OpenAI-compatible FastAPI router as the single integration point: both Continue and Open WebUI already speak that protocol, and it is the right place for system-prompt injection, routing, usage accounting and later self-improvement hooks.",
+  "router/agents.yaml as the single declarative source of department definitions (ids, prompts, local/cloud model, escalation rules) - extend it, and generate the other configs from it.",
+  "`.env.example` + ignored `.env` secrets pattern and the non-root router Dockerfile.",
+  "The `ollama/` and `cloud/` model-name prefixes for forcing a tier: cheap, discoverable from any client's model dropdown, good for the 'intuitive' requirement.",
+  "The intent behind setup.sh (dependency checks, one command to a running stack) - keep the UX goal, change the implementation to be host-agnostic."
+ ],
+ "replace": [
+  "Containerised Ollama service -> native Windows Ollama reached via host.docker.internal:11434 (OLLAMA_HOST=0.0.0.0, OLLAMA_FLASH_ATTENTION=1, OLLAMA_KV_CACHE_TYPE=q8_0, OLLAMA_MAX_LOADED_MODELS=1 set as Windows user env vars).",
+  "Hand-written bash pull/create scripts -> a one-shot compose `init` service (or tiny Python script) that calls the Ollama HTTP API (`POST /api/pull`), plus a cross-platform task runner (go-task `Taskfile.yml` or `just`) exposing `task up|down|pull|doctor` identically from PowerShell, Git Bash and WSL.",
+  "Keyword+length complexity classifier and the README's routing/cost claims -> an off-the-shelf LLM gateway with routing, usage/cost logging and budgets (LiteLLM proxy is the standard OSS choice: OpenAI-compatible, Ollama + Anthropic providers, per-key budgets, spend logs, model fallbacks); keep the custom router only for the thin persona-injection/self-improvement layer in front of it, or implement it as a LiteLLM custom router/callback.",
+  "Manual cost monitoring at console.anthropic.com -> gateway spend logs plus a Prometheus/Grafana or the gateway's built-in dashboard (LiteLLM UI), with a hard daily budget.",
+  "curl-based healthchecks -> python urllib probe (router) / `ollama list` (if any Ollama container remains).",
+  "Bundled second Open WebUI -> the owner's existing Open WebUI with the router/gateway added as an OpenAI connection; keep a `profiles: [ui]` service only for Linux/server installs.",
+  "Six per-agent Ollama Modelfiles -> prompts injected by the router/gateway from agents.yaml so only 2-3 base runners ever exist in VRAM."
+ ],
+ "drop": [
+  "`version: \"3.9\"` key in docker-compose.yml.",
+  "`ollama` service, `ollama-data` volume, and the `deploy.resources` GPU reservation block (owner runs Ollama natively).",
+  "OLLAMA_MAX_LOADED_MODELS=3 and OLLAMA_KEEP_ALIVE=24h as written (impossible on 12 GB; replace with 1 model resident, keep_alive 30m-1h).",
+  "`num_ctx 16384` on 14B Modelfiles without KV quantisation.",
+  "Dead .env variables LOCAL_MODEL_* / CLOUD_MODEL_* (or wire them up - do not keep them documented but unread).",
+  "The `exit 0 and re-run` two-pass setup flow and `source .env`.",
+  "Stale model IDs claude-sonnet-4-6 / claude-opus-4-8 across agents.yaml, .env.example, README and continue.config.json.",
+  "README Linux-only GPU troubleshooting (`nvidia/cuda:12.0-base`, NVIDIA Container Toolkit) and macOS keybindings for a Windows owner.",
+  "The false 'COMPLEXITY_TOKEN_THRESHOLD=99999 disables cloud' and 'per-agent threshold' statements in Cost Management.",
+  "The redundant second clause in `already_pulled` and the pipefail-fatal trailing `grep \"^agent-\"` in create-agents.sh."
+ ]
+}

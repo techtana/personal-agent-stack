@@ -1,0 +1,110 @@
+# Hardware classes and the model lineup each one gets.
+# `uv run scripts/stack.py doctor --write-profile` detects RAM/VRAM and picks a class;
+# the per-machine file (machines/<HOSTNAME>.yaml) can override any value here.
+# Verify tags with `ollama pull` before adding new models: sizes below were read from
+# ollama.com on 2026-10-24.
+
+schema_version: 1
+
+model_catalog:
+  # id -> ollama tag, approx download size, role notes
+  qwen2.5-coder:1.5b-base: {size_gb: 1.0,  role: fim,       notes: "Apache-2.0 FIM/autocomplete; always resident (~1.3 GB VRAM)"}
+  nomic-embed-text:        {size_gb: 0.3,  role: embed,     notes: "local embeddings for RAG/eval similarity"}
+  qwen3.5:9b:              {size_gb: 6.6,  role: small,     notes: "dense 9B, fits 12 GB fully at 16k ctx with q8_0 KV; tools+thinking"}
+  qwen3.6:35b-a3b-coding:  {size_gb: 23,   role: primary,   notes: "MoE 35B/3B-active coding tune; experts offloaded to RAM by llama.cpp fit; needs >=28 GB RAM"}
+  qwen3.6:35b-a3b:         {size_gb: 23,   role: primary,   notes: "general MoE sibling of the coding tune"}
+  flint:40b-a2b:           {size_gb: 23,   role: reviewer,  notes: "Apache-2.0 MoE 40B/2.5B-active (Recursive); vendor SWE-bench Verified 74.2; second-opinion reviewer"}
+  gpt-oss:20b:             {size_gb: 13,   role: reviewer,  notes: "different-family reviewer; spills ~1-2 GB to CPU on 12 GB"}
+
+hardware_classes:
+  # evaluated top-down; first match wins
+  - name: big-vram
+    when: {vram_mib_min: 20000}
+    models: {fim: qwen2.5-coder:1.5b-base, embed: nomic-embed-text, small: qwen3.5:9b, primary: qwen3.6:35b-a3b-coding, reviewer: flint:40b-a2b}
+    primary_num_ctx: 65536
+    small_num_ctx: 32768
+    max_loaded_models: 2
+  - name: moe-12gb-32ram
+    when: {vram_mib_min: 10000, ram_gb_min: 28}
+    models: {fim: qwen2.5-coder:1.5b-base, embed: nomic-embed-text, small: qwen3.5:9b, primary: qwen3.6:35b-a3b-coding, reviewer: flint:40b-a2b}
+    primary_num_ctx: 32768
+    small_num_ctx: 16384
+    max_loaded_models: 2
+    # Ollama turns mmap off by default on Windows+CUDA, which copies the ~12.6 GB of CPU-side expert weights into
+    # anonymous memory. With desktop apps open that forces paging and the load times out. Keep them file-backed.
+    primary_options: {use_mmap: true}
+    reviewer_options: {use_mmap: true}
+  - name: dense-12gb-16ram
+    when: {vram_mib_min: 10000}
+    models: {fim: qwen2.5-coder:1.5b-base, embed: nomic-embed-text, small: qwen3.5:9b, primary: qwen3.5:9b, reviewer: null}
+    primary_num_ctx: 16384
+    small_num_ctx: 16384
+    max_loaded_models: 2
+  - name: small-gpu
+    when: {vram_mib_min: 6000}
+    models: {fim: qwen2.5-coder:1.5b-base, embed: nomic-embed-text, small: qwen3.5:9b, primary: qwen3.5:9b, reviewer: null}
+    primary_num_ctx: 8192
+    small_num_ctx: 8192
+    max_loaded_models: 1
+  - name: cloud-first
+    when: {}
+    models: {fim: qwen2.5-coder:1.5b-base, embed: nomic-embed-text, small: null, primary: null, reviewer: null}
+    primary_num_ctx: 0
+    small_num_ctx: 0
+    max_loaded_models: 1
+
+cloud_models:
+  cheap:   claude-haiku-5-5     # $0.10/$0.50 per MTok (<=100K prompt)
+  default: claude-sonnet-5-5    # $2/$10
+  heavy:   claude-opus-5-5      # $4/$20
+  # claude-fable-5-1 ($10/$50) is never auto-routed; use it explicitly in Claude Code.
+
+ollama_env:
+  # Applied as Windows USER environment variables (or printed for systemd) by `stack.py setup`.
+  # Values marked {auto} are derived from the hardware class.
+  OLLAMA_FLASH_ATTENTION: "1"
+  OLLAMA_KV_CACHE_TYPE: "q8_0"
+  OLLAMA_NUM_PARALLEL: "1"
+  OLLAMA_MAX_LOADED_MODELS: "{auto}"
+  OLLAMA_MAX_QUEUE: "32"
+  OLLAMA_CONTEXT_LENGTH: "{auto}"
+  OLLAMA_KEEP_ALIVE: "30m"
+  OLLAMA_GPU_OVERHEAD: "536870912"
+  OLLAMA_LOAD_TIMEOUT: "15m"   # default 5m is too short for a 22 GB MoE read from a USB SSD under memory pressure
+  # LLAMA_ARG_N_CPU_MOE: "24"   # optional manual expert-offload override passed through to llama-server (see bench)
+
+ports:
+  ollama: 11434
+  litellm: 4000
+  phoenix: 6006
+  phoenix_grpc: 4317
+  orchestrator: 8765
+  open_webui: 3000
+
+services:
+  # native = run as a local process via `stack.py up`; docker = infrastructure/docker-compose.yml; off = not managed
+  ollama: native
+  litellm: native
+  phoenix: native
+  orchestrator: native
+  open_webui: native
+
+observability:
+  phoenix: true          # LiteLLM -> OTLP/HTTP -> Phoenix
+  jsonl_traces: true     # LiteLLM custom callback -> traces/litellm/*.jsonl
+  gpu_exporter: false    # winget install utkuozdemir.nvidia_gpu_exporter (Prometheus :9835)
+
+cloud:
+  enabled: auto          # auto = enabled when ANTHROPIC_API_KEY is present in .env or the environment
+  api_key_env: ANTHROPIC_API_KEY
+
+claude_code:
+  # Profile A (default): Claude Code talks to Anthropic directly on the subscription.
+  # Profile B (`scripts/claude-local.ps1|sh`): CLAUDE_CONFIG_DIR=~/.claude-local -> LiteLLM /v1/messages.
+  local_profile_dir: ~/.claude-local
+  local_profile:
+    default_model: local-primary
+    haiku_model: local-small
+    sonnet_model: local-primary
+    opus_model: local-primary      # set to cloud-default to mix cloud into the local profile (needs API key; bills per token)
+    max_output_tokens: 8192

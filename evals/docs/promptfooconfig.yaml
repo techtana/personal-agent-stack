@@ -1,0 +1,29 @@
+# GENERATED from agents/docs.yaml by `uv run scripts/stack.py build`. Edit the YAML, not this file.
+description: Documentation Writer regression gate (local tier via LiteLLM)
+prompts:
+- file://prompt.json
+providers:
+- id: openai:chat:docs-local
+  label: local
+  config:
+    apiBaseUrl: http://127.0.0.1:4000/v1
+    apiKeyEnvar: LITELLM_MASTER_KEY
+    max_tokens: 1500
+tests:
+- description: adr-structure
+  vars:
+    prompt: Write an ADR for choosing SQLite over Postgres for a single-user desktop tool.
+  assert:
+  - type: icontains
+    value: Context
+  - type: icontains
+    value: Decision
+  - type: icontains
+    value: Consequences
+- description: readme-table
+  vars:
+    prompt: Write the configuration section of a README for a CLI with env vars PORT (default 8080) and LOG_LEVEL (default
+      info).
+  assert:
+  - type: regex
+    value: \|.*PORT.*\|.*8080

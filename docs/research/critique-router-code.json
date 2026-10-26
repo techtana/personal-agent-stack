@@ -1,0 +1,122 @@
+{
+ "area": "router/main.py, router/agents.yaml, router/Dockerfile, router/requirements.txt (OpenAI-compatible routing proxy and agent registry)",
+ "summary": "The router is a clean 370-line prototype, but it is not a viable OpenAI-compatible surface for coding agents: the Message model accepts only string content and the request model silently drops `tools`, so every tool-using client (Continue agent mode, OpenCode, Open WebUI with tools, Claude Code via proxy) either 422s or degrades to plain chat. It has no fallback when Ollama is down, a 120s whole-stream timeout that will truncate long local generations on a 3060, never sets Ollama `num_ctx` (so the default 2-4k context silently drops the agent persona), and reports no usage, latency, or cost, which makes the owner's \"self-developing\" requirement impossible because there is no decision log to learn from. The keyword+len//4 classifier is substring-based across the entire conversation (including the client's system prompt and all prior turns), so it both misfires on trivial mentions of \"migrate\"/\"compliance\" and becomes sticky once any turn mentions a keyword, while missing short prompts over large contexts. The model IDs (claude-sonnet-4-6, claude-opus-4-8) are stale against the authoritative set, and the six prompts already drift from their Modelfile copies (none are byte-identical, and the router does not even use the Modelfile-built models). Recommendation: retire this router in favour of a LiteLLM proxy (full OpenAI surface, Ollama+Anthropic providers, fallbacks, context-window fallbacks, budgets, spend logging) plus harness-native agent definitions and a small routing hook; keep agents.yaml as the single declarative source that generates everything else.",
+ "findings": [
+  {
+   "title": "Message.content is str-only and ChatCompletionRequest drops tools: tool-using clients 422 or silently lose tool calling",
+   "severity": "critical",
+   "file": "router/main.py:61-71",
+   "detail": "`class Message(BaseModel): role: str; content: str` (main.py:61-63) rejects OpenAI content-parts arrays (`[{\"type\":\"text\",...},{\"type\":\"image_url\",...}]`), assistant messages with `content: null` + `tool_calls`, and `role: \"tool\"` results (which also need `tool_call_id`) with a Pydantic 422. `ChatCompletionRequest` (main.py:66-71) has no `tools`, `tool_choice`, `response_format`, `stop`, `top_p`, `n`, `user` fields; Pydantic v2 default `extra='ignore'` means a client sending `tools` gets a 200 with a plain-text answer and no `tool_calls`, so an agent harness loops or gives up. Continue's agent mode, OpenCode, Open WebUI tool servers and any Claude-Code-through-proxy setup all send these shapes. Roles like `developer`, `tool`, `function` are also forwarded verbatim to Anthropic (main.py:251) which returns 400.",
+   "recommendation": "Do not hand-roll the OpenAI surface. Put LiteLLM proxy in front of Ollama and Anthropic (it translates content parts, images, tool calls and tool results in both directions). If a custom layer survives, model `content: Union[str, list[ContentPart]]`, add `tools/tool_choice/tool_calls/tool_call_id/name`, and set `model_config = ConfigDict(extra='forbid')` during development so unsupported fields fail loudly instead of silently."
+  },
+  {
+   "title": "No fallback or error mapping when Ollama is down; streaming errors surface as a truncated 200",
+   "severity": "high",
+   "file": "router/main.py:188-207",
+   "detail": "`stream_ollama` opens `httpx.AsyncClient` inside an async generator passed to `StreamingResponse` (main.py:347, 369). A `httpx.ConnectError` (Ollama not running, model not pulled, OOM) or the `HTTPException` raised at main.py:192 is thrown after Starlette has already sent `200 text/event-stream`, so the client sees an empty/cut stream with no error object and no `[DONE]`. Non-streaming calls (main.py:223-226) turn connection errors into an unhandled 500 with a traceback. There is no local->cloud fallback, no retry, no cooldown, and no `/health` check of Ollama itself (main.py:316-318 only reports loaded agent ids). Anthropic errors (`RateLimitError`, `APIStatusError`, `APIConnectionError`) are likewise uncaught (main.py:263, 296).",
+   "recommendation": "Use LiteLLM `fallbacks` + `cooldown_time` for provider failure and `context_window_fallbacks` for the too-long case. If keeping custom code: wrap generator bodies, emit an SSE `error` event or an OpenAI-shaped `{\"error\":{...}}` chunk before closing, catch the Anthropic typed exception chain most-specific-first (`RateLimitError` -> `APIStatusError` -> `APIConnectionError`), and make `/health` probe `GET {OLLAMA}/api/tags`."
+  },
+  {
+   "title": "Ollama `num_ctx` never set: default 2-4k context silently truncates the agent persona",
+   "severity": "high",
+   "file": "router/main.py:178-186",
+   "detail": "The router calls the base models (`qwen2.5-coder:14b`, not the `agent-app-dev` models built from the Modelfiles that set `num_ctx 16384`), and only ever passes `options.temperature` / `num_predict`. Ollama's default context is 2048-4096 tokens depending on version; a ~450-token agent prompt plus a client system prompt plus a pasted file exceeds that quickly, and Ollama truncates from the front, which drops the system prompt first. The classifier's last-message-only token check (main.py:100-106) never notices total conversation length, so this happens silently and locally rather than escalating to cloud.",
+   "recommendation": "Always send `options.num_ctx` (per-agent, from agents.yaml) and compute total prompt tokens; if total > local ctx budget, route to cloud (LiteLLM `context_window_fallbacks` does exactly this). Alternatively point `local_model` at the Modelfile-built `agent-*` models so `num_ctx` is baked in, and stop injecting the prompt twice."
+  },
+  {
+   "title": "120s total stream timeout and a new HTTP client per request",
+   "severity": "high",
+   "file": "router/main.py:188, 223, 243, 276",
+   "detail": "`httpx.AsyncClient(timeout=120)` applies 120s to the entire streamed response, not per read. A 14B Q4 model on an RTX 3060 generates roughly 15-25 tok/s; a 4096-token answer takes 3-4 minutes and will be cut mid-stream. First-token latency on a cold model load (7-9 GB from disk) can alone approach the limit. Each request also constructs a fresh `httpx.AsyncClient` and `anthropic.AsyncAnthropic`, forfeiting connection pooling and the SDK's retry configuration.",
+   "recommendation": "Use `httpx.Timeout(connect=10, read=60, write=10, pool=10)` so the clock resets on each chunk; create one shared `httpx.AsyncClient` and one `AsyncAnthropic` in a lifespan handler. Set `max_tokens` defaults deliberately rather than relying on client defaults."
+  },
+  {
+   "title": "Classifier: substring match over the whole conversation is sticky and misroutes in both directions",
+   "severity": "high",
+   "file": "router/main.py:91-108",
+   "detail": "`full_text = ' '.join(m.content for m in request.messages)` includes the client's own system prompt and every prior user and assistant turn; `kw.lower() in full_text` is a bare substring test. Concrete misroutes: (1) 'migrate' (agents.yaml:12) fires on 'migrations', 'migrated' -- every Django/Alembic/Prisma question goes to cloud; (2) 'compliance' (agents.yaml:102) fires on 'ESLint compliance'; 'distributed' (agents.yaml:14) on 'distributed the files'; 'runbook' (agents.yaml:261) on 'where is the runbook?'; 'cost optimization' (agents.yaml:158) on a question about saving money, which then costs money; 'design review' (agents.yaml:199) on 'the design review is next week'; (3) once any assistant reply in the history says 'architecture', every subsequent turn in that conversation is cloud forever (sticky escalation = cost leak); (4) Continue/Open WebUI system prompts that contain 'architecture' or 'security architecture' push 100% of traffic to cloud. False negatives: a 200-char 'implement this feature across these modules' after a 40 KB file was pasted two turns earlier is local because only the last user message is measured (main.py:100-103); a short prompt plus tool-provided diff context is local; genuinely hard short questions ('why does this deadlock?') are local. Conversely a 4 KB pasted stack trace with a trivial question exceeds 800 est. tokens and goes to cloud. `len//4` overestimates for code (closer to 3 chars/token) and ignores the ~450-token injected prompt. The phrase keywords 'integration test architecture', 'mutation testing report', 'refactor entire' (agents.yaml:9, 56, 58) are unlikely to ever be typed verbatim, so they are dead config.",
+   "recommendation": "Replace keyword routing with a measurable policy: (a) hard constraints first (total tokens vs local ctx, tool/image presence -> cloud); (b) local-first cascade with self-check: run local, have it emit a machine-readable confidence/escalate token, escalate on low confidence (FrugalGPT-style; this also produces the labelled data a self-developing system needs); (c) later, a learned router (RouteLLM matrix-factorization/BERT router calibrated on your own logs). For known approaches: LiteLLM router handles failure/length fallbacks and budgets but not content difficulty; RouteLLM handles difficulty but needs calibration data; Aider's architect/editor split (Claude plans, qwen edits) fits the 3060 well and is the cheapest reliable split for coding. Whatever is chosen, match whole words with `\\b` and classify only the current turn plus a token budget check on the whole context."
+  },
+  {
+   "title": "Stale Anthropic model IDs and no cheap cloud tier",
+   "severity": "high",
+   "file": "router/agents.yaml:6, 50, 96, 149, 193, 255",
+   "detail": "All agents reference `claude-sonnet-4-6` and security references `claude-opus-4-8`. The authoritative IDs in the runtime context are `claude-sonnet-5-5`, `claude-opus-5-5`, `claude-haiku-4-5-20251001`, `claude-fable-5-1`. The same stale IDs are duplicated in README.md:46-51,233 and config/vscode/continue.config.json:9,25,54,61. There is also no mid tier: the jump is 7B-14B local -> Sonnet, with nothing like Haiku 4.5 for 'slightly too hard for local, far too cheap for Sonnet' work (test scaffolding, docstrings, changelog entries). Note also that Sonnet 5.5 rejects non-default `temperature` with 400 and newer API versions reject `temperature` entirely, yet the router forwards `temperature` from clients (main.py:260-261, 293-294) and the Modelfiles/Continue config set it.",
+   "recommendation": "Make `claude-sonnet-5-5` the default cloud model, `claude-opus-5-5` for security/architecture only, add `claude-haiku-4-5-20251001` as a `cloud_cheap` tier, and define model aliases once (LiteLLM `model_list`) so a model bump is a one-line change. Strip `temperature`/`top_p` before calling Anthropic. Validate configured IDs at startup against `client.models.list()` so the next rename fails fast instead of 404ing at 2 a.m."
+  },
+  {
+   "title": "Prompt duplication has already drifted; router and Modelfiles describe different agents",
+   "severity": "medium",
+   "file": "router/agents.yaml:16-44 vs config/ollama/Modelfile.*",
+   "detail": "Verified by diff: none of the six Modelfile `SYSTEM` blocks is byte-identical to the agents.yaml prompt (e.g. app-dev 1580 vs 1773 chars, code-review 1312 vs 2129). Naming differs (`agent-app-dev` in scripts/create-agents.sh:12 vs id `app-developer`). The router's `local_model` points at base `qwen2.5-coder:14b` (agents.yaml:5), so the Modelfile-built models are never used by the router path; they are only hit when Open WebUI talks to Ollama directly. Result: the 'same' department agent has two personas, two temperatures and two context sizes depending on which UI path the user takes. If someone later points `local_model` at `agent-app-dev`, the prompt is injected twice (Modelfile SYSTEM + main.py:115-125).",
+   "recommendation": "One source of truth. Either generate Modelfiles from agents.yaml in scripts/create-agents.sh (template `FROM/PARAMETER/SYSTEM` from the yaml) or delete the Modelfiles and keep prompt injection in one place. Better still, keep agent definitions where the coding harness reads them (Claude Code `.claude/agents/*.md`, OpenCode agent config, Continue rules) and let the yaml be the generator."
+  },
+  {
+   "title": "Anthropic response handling: content[0].text, stop_reason ignored, 4096 max_tokens default",
+   "severity": "medium",
+   "file": "router/main.py:256, 266, 289, 297",
+   "detail": "`response.content[0].text` (main.py:297) raises `AttributeError` when the first block is a `thinking` block, which is the default on Opus 5.5 / Fable (thinking cannot be disabled). `stop_reason` is never inspected: `max_tokens` and `refusal` both surface as `finish_reason: \"stop\"` with silently truncated or empty text (main.py:266, 160). `max_tokens or 4096` is low for code generation; an Opus/Sonnet answer that writes two files hits the cap. Only `usage.input_tokens` is read (main.py:298); `output_tokens` and cache tokens are discarded and `completion_tokens` is re-estimated with len//4 (main.py:150). Multiple `system` messages collapse to the last one (main.py:248-249) and consecutive same-role messages are forwarded, which Anthropic rejects. `anthropic>=0.40.0` is an unpinned floor that will resolve to the 1.x SDK with breaking changes.",
+   "recommendation": "Iterate `response.content` and join `text` blocks; map `stop_reason` -> `finish_reason` (`end_turn`->stop, `max_tokens`->length, `tool_use`->tool_calls, `refusal`->content_filter) and surface refusals; default `max_tokens` to 16k non-streaming / higher when streaming; pass real `usage` through; merge consecutive same-role messages; pin SDK versions. Or let LiteLLM do all of this."
+  },
+  {
+   "title": "Router Docker healthcheck uses curl, which python:3.12-slim does not ship; open-webui never starts",
+   "severity": "medium",
+   "file": "router/Dockerfile:1 and infrastructure/docker-compose.yml router.healthcheck",
+   "detail": "The compose healthcheck is `[\"CMD\",\"curl\",\"-f\",\"http://localhost:8000/health\"]` but the image is `python:3.12-slim`, which has no `curl`. The router container will remain `unhealthy`, and `open-webui` has `depends_on: router: condition: service_healthy`, so the UI never comes up. Also: `@app.on_event(\"startup\")` (main.py:309) is deprecated in current FastAPI (use lifespan), there is no `.dockerignore`, all requirements are open-ended `>=` floors (requirements.txt:1-7), and port 8000 is published to the host with no auth in front of an API key that spends money.",
+   "recommendation": "Healthcheck with `python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\"` or install curl; switch to a lifespan handler; pin versions; bind the router to 127.0.0.1 or require a bearer token (LiteLLM virtual keys give this for free)."
+  },
+  {
+   "title": "No observability or usage accounting; the self-developing loop has no data to learn from",
+   "severity": "medium",
+   "file": "router/main.py:96, 105, 358, 367",
+   "detail": "The only telemetry is four `log.info` lines about the route decision. There is no request id, no latency, no time-to-first-token, no provider/model actually used, no real token counts (Ollama returns `prompt_eval_count`/`eval_count` in its final chunk at main.py:200-207 and they are discarded), no cost computation, no per-agent/per-day budget, no `/metrics`, and no record of whether the local answer was accepted or the user re-asked. Without a decision log (route, model, tokens, cost, latency, outcome signal) there is nothing to tune prompts/routing/keywords against, so requirement (2) 'self-developing' cannot be met by this design regardless of model choice.",
+   "recommendation": "Emit one structured JSON event per request (request_id, agent, route, reason, model, prompt/completion tokens from the provider, cost, ttft, total_ms, finish_reason) to a local SQLite/Parquet store; add a tiny feedback endpoint or UI thumbs that writes an outcome column. LiteLLM proxy already logs spend per key/model/tag to a DB and exposes Prometheus; pair it with Langfuse or its own spend table so the routing policy can be evaluated and re-tuned from real data."
+  },
+  {
+   "title": "SSE chunk format deviations that trip strict clients",
+   "severity": "low",
+   "file": "router/main.py:132-146",
+   "detail": "A new `chatcmpl-` id is minted per chunk (main.py:134); OpenAI uses one id per stream and some clients (and LiteLLM itself when chained) group deltas by id. The first chunk never carries `delta.role = \"assistant\"`. There is no `usage` chunk even when `stream_options.include_usage` is requested. `finish_reason` is hard-coded `stop` (main.py:205, 266) even when Ollama reports `done_reason: \"length\"`. deepseek-r1 `<think>` segments (agents.yaml:192 uses `deepseek-r1:14b`) are passed through inline as content with no `reasoning_content` field, so reviewers see raw chain-of-thought in Open WebUI.",
+   "recommendation": "Generate one id per stream, send an initial role delta, map Ollama `done_reason`, strip or route `<think>` to `reasoning_content`, and append a usage chunk. Again, all handled by LiteLLM."
+  },
+  {
+   "title": "Prompt quality: right length, wrong shape for agent harnesses, with an un-actionable escalation instruction",
+   "severity": "medium",
+   "file": "router/agents.yaml:35-44, 86-90, 127-143, 183-188, 236-249",
+   "detail": "Each prompt is ~360-450 real tokens, which is affordable for 7B-14B models; length is not the problem. Shape is: (1) every prompt ends in an OUTPUT FORMAT block that tells the model to print filename-headed snippets, `-`/`+` diffs, or `[SEVERITY]` templates. Inside Continue agent mode, OpenCode, or Claude Code the harness's own system prompt (5-10k tokens of tool instructions) is appended after this via main.py:122, and the two conflict: the model dumps diffs into chat instead of calling the edit tool. (2) The ESCALATION clause (agents.yaml:42-44) instructs the local model to say 'consider routing this to cloud'; the router cannot detect or act on that sentence, so the user gets a dead end and pays for a wasted local generation. (3) 'LANGUAGES & FRAMEWORKS (ordered by proficiency)' (agents.yaml:28-33) spends ~80 tokens telling a model what it is good at and biases toward TypeScript answers in Go repos. (4) 25-40 bullet imperatives per prompt exceed what a 7B model reliably tracks; small models follow the first and last few instructions. (5) `deepseek-r1:14b` for code-review at temperature 0.1 (Modelfile.code-review) is contrary to DeepSeek's 0.5-0.7 guidance, is slow on a 3060 due to long reasoning chains, and leaks `<think>`; a coder model gives better review per second here. (6) `qwen2.5-coder` is a 2024-generation model; by late 2026 newer coder families (Qwen3-Coder, Devstral and successors) should be benchmarked on the owner's real tasks before locking in.",
+   "recommendation": "Split each prompt into a short persona/priorities core (~120 tokens) and harness-specific output rules that are only injected for plain-chat UIs. Replace the ESCALATION prose with a machine-readable sentinel (e.g. the model emits `<<ESCALATE: reason>>`) that the router/cascade catches and re-issues to cloud, logging the event. Drop the proficiency list. Re-evaluate local models with a 20-task eval drawn from the decision log rather than by reputation."
+  },
+  {
+   "title": "Hidden-prefix routing overrides are undiscoverable and unknown-model passthrough swallows typos",
+   "severity": "low",
+   "file": "router/main.py:84-88, 340-351",
+   "detail": "`ollama/` and `cloud/` prefixes force a route, but `/v1/models` (main.py:321-335) never advertises them, so UI users cannot pick them. Any unrecognised model id is passed straight to Ollama with a warning, so `cloud/app-developr` becomes an Ollama 404 for a model that does not exist rather than a clear 400 from the router. The unknown-model path also skips system-prompt injection and routing entirely.",
+   "recommendation": "Advertise explicit variants in `/v1/models` (e.g. `app-developer`, `app-developer:local`, `app-developer:cloud`) and return 400 with the list of known ids for anything else; keep raw Ollama passthrough behind an explicit `raw/` prefix if it is wanted."
+  }
+ ],
+ "keep": [
+  "agents.yaml as a declarative agent registry (id, description, local/cloud model pairing, context budget): it is the right single source of truth and should generate the Modelfiles, harness agent files and LiteLLM aliases rather than being one of several copies",
+  "The local-first, tiered cost idea itself and the per-department pairing of a small local model with a stronger cloud model; only the decision mechanism and the missing mid tier need replacing",
+  "Per-agent sampling and num_ctx parameters from the Modelfiles (16k for 14B, 8k for 7B) as explicit configuration, moved into agents.yaml and sent as Ollama options",
+  "Compose topology (ollama + proxy + open-webui on one network, agents.yaml mounted read-only) and the non-root, slim Dockerfile pattern",
+  "The core persona lines of each prompt (first 3-6 bullets: minimal correct code, test behaviour not implementation, severity-rated findings, 12-factor, keep-a-changelog) which are sound and model-agnostic",
+  "The explicit 'escalate' concept in the app-developer prompt, converted from prose into a machine-readable sentinel that a cascade router can act on"
+ ],
+ "replace": [
+  "router/main.py OpenAI-compatible surface, SSE formatting, provider adapters and error handling -> LiteLLM proxy (model_list with ollama/ and anthropic/ providers; handles content parts, images, tool calls, tool results, streaming usage, typed errors)",
+  "Keyword + len//4 classifier -> LiteLLM `fallbacks` + `context_window_fallbacks` + `cooldown` for the hard constraints, plus a local-first cascade with a self-check/escalate sentinel; graduate to RouteLLM (or a logistic classifier trained on your own decision log) once a few hundred labelled requests exist",
+  "Per-agent system prompt injection in a proxy -> harness-native agent definitions (Claude Code subagents in .claude/agents/*.md, OpenCode agents with per-agent model selection, Continue rules), generated from agents.yaml; for plain-chat UIs use LiteLLM's per-model `system_prompt`/pre-call hook",
+  "Ad-hoc log.info lines -> LiteLLM spend logging (SQLite/Postgres) + Prometheus /metrics, optionally Langfuse for traces and a feedback score column; this is the dataset the self-improvement loop runs on",
+  "Hand-maintained Modelfile.* copies -> templated Modelfiles rendered by scripts/create-agents.sh from agents.yaml (or dropped entirely if all local calls go through the proxy with explicit options)",
+  "Hard-coded claude-sonnet-4-6 / claude-opus-4-8 strings in five files -> one alias table (LiteLLM model_list) mapping `cloud-default` -> claude-sonnet-5-5, `cloud-heavy` -> claude-opus-5-5, `cloud-cheap` -> claude-haiku-4-5-20251001, validated at startup via the Models API"
+ ],
+ "drop": [
+  "router/main.py in its current form (the custom OpenAI-compatible proxy) once LiteLLM is in place; keep at most a ~100-line routing hook or sidecar",
+  "complexity_keywords lists in agents.yaml (author guesses, substring-matched, several phrases that will never be typed verbatim; contradict the self-developing requirement)",
+  "estimate_tokens = len//4 and the synthetic usage block in make_completion; use provider-reported token counts",
+  "deepseek-r1:14b as the code-review local model (slow reasoning chains on a 3060, leaks <think>, misconfigured temperature); use the coder model and spend the saved VRAM on context",
+  "The ESCALATION prose instruction and the LANGUAGES & FRAMEWORKS proficiency list in the app-developer prompt",
+  "The 'ollama/' and 'cloud/' hidden model-id prefixes unless they are also advertised in /v1/models",
+  "Open-ended '>=' version floors in requirements.txt (pin anthropic, fastapi, httpx, pydantic) and the deprecated @app.on_event startup hook"
+ ]
+}

@@ -1,0 +1,245 @@
+{
+ "topic": "Running Claude Code against local/alternative models (Oct 2026) and the Claude Code features relevant to a multi-department local orchestrator",
+ "summary": "Verified from primary sources (code.claude.com docs, Ollama's docs in the ollama/ollama GitHub repo, GitHub release pages; LiteLLM and ccrdesk.top docs were unreachable from this sandbox so those items are medium/low confidence). Headline facts: (1) Ollama has shipped a native Anthropic Messages endpoint (`/v1/messages`) since v0.14.0 (Jan 2026); Claude Code connects with `ANTHROPIC_BASE_URL=http://localhost:11434`, `ANTHROPIC_AUTH_TOKEN=ollama`, `ANTHROPIC_API_KEY=\"\"` or simply `ollama launch claude --model <m>`; tools/streaming/thinking work, `tool_choice`, `count_tokens`, prompt caching do not. (2) A Claude Code process has exactly ONE `ANTHROPIC_BASE_URL`; a subagent's `model:` field accepts \"the same values as `--model`\" (any string an endpoint accepts), so per-department local-vs-cloud routing requires a proxy that maps model names (or the new `x-claude-code-request-class` / `x-claude-code-agent-type` hint headers) to backends; Claude Code cannot itself send one subagent to Ollama and another to api.anthropic.com. (3) Any gateway credential (`ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `apiKeyHelper`) replaces the Max subscription and bills per token; only a credential-less pass-through proxy that forwards the OAuth `anthropic-beta` value keeps subscription billing, and Anthropic's terms restrict OAuth to ordinary personal use. (4) `ANTHROPIC_SMALL_FAST_MODEL` is deprecated; use `ANTHROPIC_DEFAULT_HAIKU_MODEL` (also drives background tasks) and `CLAUDE_CODE_SUBAGENT_MODEL`(+`_FORCE`). (5) Claude Code now natively provides the orchestration primitives the old Deep-Architect plan hand-rolled: subagents (`.claude/agents/*.md` with model/tools/permissionMode/memory/maxTurns/hooks/isolation), skills (`.claude/skills/*/SKILL.md`, `context: fork`), 30+ hook events incl. `Stop`/`SubagentStop`/`SessionStart`/`TaskCompleted` with command/prompt/agent handlers, `.mcp.json`, experimental agent teams, dynamic workflows (`.claude/workflows/*.js`), OpenTelemetry cost metrics, and the `--agent` flag. (6) Current Anthropic IDs per docs: `claude-opus-5-5` (opus), `claude-sonnet-5-5` (sonnet), `claude-haiku-5-5` (haiku, v2.1.293+), `claude-fable-5-1`; the repo's `claude-sonnet-4-6`/`claude-opus-4-8`/`claude-opus-4-5` are stale.",
+ "findings": [
+  {
+   "claim": "Ollama's native Anthropic Messages API compatibility (`/v1/messages`) was introduced in Ollama v0.14.0 (GitHub release dated 10 Jan; year 2026 per release ordering and Ollama's 16 Jan 2026 blog post 'Claude Code with Anthropic API compatibility').",
+   "evidence": "GitHub releases page for ollama/ollama, v0.14.0 notes: \"Anthropic API compatibility: support for the `/v1/messages` API\". Later notes: v0.19.0 improved KV-cache hit rate for the Anthropic-compatible API; v0.32.3 'restored Claude Code Channels, fixed Anthropic thinking streams'; v0.40.9 (22 Oct 2026) 'Streaming Anthropic Messages requests now report generation failures' and '`ollama launch` now passes cloud models' context lengths'. Web search corroborates the 16 Jan 2026 blog.",
+   "source_url": "https://github.com/ollama/ollama/releases/tag/v0.14.0",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "If Ollama lacked a native /v1/messages endpoint the stack would need a translation proxy in front of Ollama for every local call; with it, Claude Code can talk to Ollama directly.",
+   "source_date": "2026-01-10"
+  },
+  {
+   "claim": "Exact Claude Code -> local Ollama configuration: `export ANTHROPIC_AUTH_TOKEN=ollama` (required but ignored), `export ANTHROPIC_API_KEY=\"\"`, `export ANTHROPIC_BASE_URL=http://localhost:11434`, then `claude --model <ollama-model>`; or `ollama launch claude [--model <name>] [--yes] [-- <claude args>]`. For Ollama Cloud: `ANTHROPIC_BASE_URL=https://ollama.com`, `ANTHROPIC_AUTH_TOKEN=\"$OLLAMA_API_KEY\"` (cloud endpoint 'does not accept x-api-key alone'). The local server does not validate the key.",
+   "evidence": "ollama/ollama docs/api/anthropic-compatibility.mdx and docs/integrations/claude-code.mdx (fetched raw from GitHub main): 'export ANTHROPIC_AUTH_TOKEN=ollama (required but ignored)', 'ANTHROPIC_API_KEY=\"\"', 'ANTHROPIC_BASE_URL=http://localhost:11434'; launch flags `--model`, `--yes`, args after `--` go to Claude Code; 'Run /status in Claude Code to check the connection. Claude settings can override shell variables.'",
+   "source_url": "https://raw.githubusercontent.com/ollama/ollama/main/docs/integrations/claude-code.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "This is the concrete wiring for the local tier; getting the token/key pair wrong yields 401s or the subscription being used instead.",
+   "source_date": ""
+  },
+  {
+   "claim": "Ollama's /v1/messages supports: messages, streaming, system prompts, multi-turn, base64 vision, tools incl. tool_result, thinking blocks (budget_tokens accepted but not enforced), and request fields model/max_tokens/messages/system/stream/temperature/top_p/top_k/stop_sequences/tools/thinking/output_config(effort). NOT supported: `tool_choice`, `metadata`, `/v1/messages/count_tokens`, prompt caching, Batches, citations, PDF documents, SSE `error` events during streaming. Requires `anthropic-version: 2023-06-01` on the hosted endpoint. Any local model name works; to serve Anthropic names (so Claude Code's `haiku` alias hits a local model) use `ollama cp <local> claude-haiku-5-5`.",
+   "evidence": "docs/api/anthropic-compatibility.mdx: lists supported/unsupported fields verbatim; 'To use default Anthropic names such as claude-3-5-sonnet on a local server, copy a model with `ollama cp`.' Claude Code docs: missing count_tokens is tolerated ('Claude Code falls back to a character-based estimate').",
+   "source_url": "https://raw.githubusercontent.com/ollama/ollama/main/docs/api/anthropic-compatibility.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "No prompt caching + no count_tokens means every local turn re-processes the full prompt (latency on a 3060) and /context is approximate; the `ollama cp` trick lets alias-based routing work without a proxy.",
+   "source_date": ""
+  },
+  {
+   "claim": "Claude Code treats any `ANTHROPIC_BASE_URL` endpoint as the Anthropic API and sends the full feature set: `thinking: {type: adaptive}` (also for unrecognized model IDs), `output_config.effort`, `context_management`, beta tool fields (`strict`, `defer_loading`), and `role: \"system\"` entries inside `messages` for unrecognized IDs. It auto-retries once without the rejected piece on recognizable 400s (thinking type, system-in-messages, cache_control, effort, context_management, advisor tool). `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` strips most pre-release fields (but not adaptive thinking, effort, or system-in-messages). Inference posts to `/v1/messages?beta=true`; a `HEAD /api/hello` probe can be rejected harmlessly.",
+   "evidence": "llm-gateway-protocol: 'Request fields for a model ID Claude Code doesn't recognize, such as a gateway alias: Everything current Claude models accept on the Claude API, including adaptive reasoning, effort, and context management'; 'Claude Code sends some reminder and attachment text as role: \"system\" entries in messages for Claude Opus 4.8, models released after it, and unrecognized model IDs'; Automatic retry list; 'Inference requests post to /v1/messages?beta=true'.",
+   "source_url": "https://code.claude.com/docs/en/llm-gateway-protocol",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "A proxy or Ollama that rejects these fields will 400; the design must either rely on Claude Code's auto-retry, set CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1, or have the proxy strip/translate them.",
+   "source_date": ""
+  },
+  {
+   "claim": "For an unrecognized (non-`claude-`) model ID Claude Code assumes a 200K context window and a 32,000 default / 128,000 cap on output tokens; set `CLAUDE_CODE_MAX_CONTEXT_TOKENS=<n>` (applies directly to IDs not starting with `claude-` and without `[1m]`) and `CLAUDE_CODE_MAX_OUTPUT_TOKENS` to match the local model's num_ctx, otherwise auto-compaction fires at the wrong point or the local model silently truncates. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is clamped to >=100,000.",
+   "evidence": "model-config: 'Context window: Claude Code assumes 200K, or 1M when the ID carries [1m]'; 'For an unrecognized ID that doesn't start with claude- and has no [1m] suffix, the variable takes effect on its own.' env-vars: 'For a model ID Claude Code can't resolve to a model it knows, the default is 32000 and the cap is 128000.' llm-gateway-connect: 'Claude Code clamps the value to at least 100,000 tokens'.",
+   "source_url": "https://code.claude.com/docs/en/model-config",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Local models on 12GB VRAM will run at 32k-64k context; without these variables Claude Code will overrun the local context and the session degrades.",
+   "source_date": ""
+  },
+  {
+   "claim": "Model-selection env vars: `ANTHROPIC_MODEL` (this session; overrides the `model` setting; `--model`/`/model` override it), `ANTHROPIC_DEFAULT_MODEL` (default for new sessions, v2.1.236+), `ANTHROPIC_DEFAULT_OPUS_MODEL`/`_SONNET_MODEL`/`_HAIKU_MODEL`/`_FABLE_MODEL` (what the alias resolves to; HAIKU also drives background functionality), `CLAUDE_CODE_SUBAGENT_MODEL` (default for subagents, teammates and workflow agents; alias or full ID) plus `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1` (v2.1.257+, ignores frontmatter `model`). `ANTHROPIC_SMALL_FAST_MODEL` is DEPRECATED in favor of `ANTHROPIC_DEFAULT_HAIKU_MODEL`. `ANTHROPIC_CUSTOM_MODEL_OPTION` adds an unvalidated custom entry to `/model` ('you can use any string your API endpoint accepts'). The `_SUPPORTED_CAPABILITIES` variables have no effect behind an ANTHROPIC_BASE_URL gateway.",
+   "evidence": "env-vars: 'ANTHROPIC_SMALL_FAST_MODEL [DEPRECATED] Name of Haiku-class model for background tasks'; model-config table and 'Note: ANTHROPIC_SMALL_FAST_MODEL is deprecated in favor of ANTHROPIC_DEFAULT_HAIKU_MODEL'; 'Claude Code skips validation for the model ID set in ANTHROPIC_CUSTOM_MODEL_OPTION'; llm-gateway-protocol: the capability variables 'have no effect behind an ANTHROPIC_BASE_URL gateway'.",
+   "source_url": "https://code.claude.com/docs/en/env-vars",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "These are the only client-side knobs for tiering; the repo/old plan must not rely on ANTHROPIC_SMALL_FAST_MODEL.",
+   "source_date": ""
+  },
+  {
+   "claim": "Behind an `ANTHROPIC_BASE_URL` gateway with `ANTHROPIC_AUTH_TOKEN` set, background tasks (session titles, summaries, prompt-hook evaluation) run on the MAIN model unless `ANTHROPIC_DEFAULT_HAIKU_MODEL` pins one; with an Anthropic Console `ANTHROPIC_API_KEY` and no AUTH_TOKEN they use the default Haiku model.",
+   "evidence": "llm-gateway-protocol table row 'Model for background tasks unless ANTHROPIC_DEFAULT_HAIKU_MODEL pins one': Anthropic Messages format -> 'The main model, or the default Haiku model when ANTHROPIC_API_KEY or apiKeyHelper supplies an Anthropic Console key and ANTHROPIC_AUTH_TOKEN is unset'. hooks: prompt hooks use 'by default the one Claude Code uses for background functionality'.",
+   "source_url": "https://code.claude.com/docs/en/llm-gateway-protocol",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Pinning ANTHROPIC_DEFAULT_HAIKU_MODEL to a cheap/local model is the cheapest way to move all auxiliary traffic (titles, compaction summaries, prompt hooks) off Opus/Sonnet.",
+   "source_date": ""
+  },
+  {
+   "claim": "Subagent `model` frontmatter accepts an alias (`sonnet`,`opus`,`haiku`,`fable`), `inherit`, or 'a full model ID ... Accepts the same values as the --model flag'. Resolution order: per-invocation model param -> frontmatter -> CLAUDE_CODE_SUBAGENT_MODEL -> main model. The docs never state that a non-Claude string (e.g. `qwen3-coder`) is accepted in frontmatter, and ALL requests from one Claude Code process go to the single configured base URL, so a subagent cannot be pointed at Ollama while the main agent uses api.anthropic.com without an intermediate proxy that routes by model name.",
+   "evidence": "sub-agents 'Choose a model': 'Full model ID: use a full model ID such as claude-opus-5-5 or claude-sonnet-5... Accepts the same values as the --model flag'; model-config shows `claude --model 'my-gateway-opus[1m]'` and ANTHROPIC_CUSTOM_MODEL_OPTION 'any string your API endpoint accepts'. llm-gateway: ANTHROPIC_BASE_URL is 'the variable that points Claude Code at the gateway' (single value). No doc describes per-agent base URLs.",
+   "source_url": "https://code.claude.com/docs/en/sub-agents",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "This decides the architecture: tiering by department requires a model-name-routing proxy (LiteLLM / CCR / the repo's own router speaking /v1/messages), not Claude Code config alone. Whether `model: qwen3-coder` in frontmatter is honored verbatim needs an empirical test.",
+   "source_date": ""
+  },
+  {
+   "claim": "Claude Code (v2.1.273+) can send gateway hint headers a proxy can route on: `x-claude-code-request-class` (main | subagent | workflow | compaction | auxiliary), `x-claude-code-agent-type` (Explore/Plan/general-purpose/custom/teammate/fork), `x-claude-code-session-id`, `x-claude-code-agent-id`, `x-claude-code-prompt-id`. They are OFF by default for a custom base URL; enable with `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`. Values never include prompt text.",
+   "evidence": "llm-gateway-protocol 'Gateway hint headers': 'Custom base URL: off by default... To receive them, set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1'; header table with request classes and agent types.",
+   "source_url": "https://code.claude.com/docs/en/llm-gateway-protocol",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Gives a proxy a cheap, deterministic routing signal (send compaction/auxiliary/subagent traffic local, main turns to cloud) that is far more reliable than the repo's current keyword+length heuristics.",
+   "source_date": ""
+  },
+  {
+   "claim": "Gateway model discovery (`CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`) queries `GET /v1/models?limit=1000` (3 s timeout, no redirects) and keeps only IDs containing 'claude' or 'anthropic' (case-insensitive); plain Ollama names such as `qwen3-coder` are filtered out of the `/model` picker and must be selected via `--model`, `ANTHROPIC_MODEL`, `ANTHROPIC_CUSTOM_MODEL_OPTION`, or a `modelPicker` lineup.",
+   "evidence": "llm-gateway-protocol 'Model discovery': 'Claude Code keeps an entry when its id contains claude or anthropic anywhere in the string... and ignores the rest.'",
+   "source_url": "https://code.claude.com/docs/en/llm-gateway-protocol",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": ""
+  },
+  {
+   "claim": "Subscription economics: while `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` or `apiKeyHelper` is active, 'requests carry that credential in place of a developer's claude.ai subscription login, and the subscription's usage limits don't apply' (billed per token to the credential owner). Setting ONLY `ANTHROPIC_BASE_URL` keeps the saved claude.ai login as the credential, and a pass-through gateway must forward the OAuth capability in `anthropic-beta` or requests 401. Anthropic's terms: OAuth 'is intended exclusively for purchasers of ... subscription plans and is designed to support ordinary use of Claude Code and other native Anthropic applications'; developers 'may not ... route requests through Free, Pro, or Max plan credentials on behalf of their users' and 'may not collect, store, or intermediate Claude.ai credentials or session tokens'. Remote Control is disabled when ANTHROPIC_BASE_URL is not api.anthropic.com.",
+   "evidence": "llm-gateway 'Subscriptions and gateways' (quoted); llm-gateway-protocol request headers: 'this header also carries an OAuth capability that the upstream requires, and stripping it fails those requests with 401'; legal-and-compliance 'Authentication and credential use'; env-vars ANTHROPIC_BASE_URL row re Remote Control.",
+   "source_url": "https://code.claude.com/docs/en/llm-gateway",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Determines the cost model: a credentialed LiteLLM/CCR gateway means API-key billing for ALL Claude traffic; keeping Max-plan economics requires running Claude Code directly (or a credential-less pass-through you operate only for yourself) and moving cheap work to local via other mechanisms (separate local profile, hooks, CLI/MCP calls).",
+   "source_date": ""
+  },
+  {
+   "claim": "Current model IDs/aliases per Claude Code docs (Anthropic API): `opus` -> Opus 5.5 (`claude-opus-5-5`, v2.1.280+), `sonnet` -> Sonnet 5.5 (`claude-sonnet-5-5`, v2.1.284+), `haiku` -> Haiku 5.5 (v2.1.293+), `fable` -> Fable 5.1 (`claude-fable-5-1`). Default model for Pro/Max/API is Opus 5.5. The task brief listed `claude-haiku-4-5-20251001` as current Haiku; the docs show Haiku 5.5 now exists and is the `haiku` alias target (the bundled claude-api skill lists `claude-haiku-5-5` at $0.10/$0.50 per MTok, vs Opus 5.5 $4/$20, Sonnet 5.5 $2/$10). Repo references `claude-sonnet-4-6`, `claude-opus-4-8`, `claude-opus-4-5` are stale.",
+   "evidence": "model-config 'Version history': 'v2.1.293 haiku resolves to Haiku 5.5 on the Anthropic API', 'v2.1.284 sonnet resolves to Sonnet 5.5', 'v2.1.280 opus resolves to Opus 5.5'; alias table; repo grep shows router/agents.yaml cloud_model: claude-sonnet-4-6 / claude-opus-4-8 and AGENTS.md model_cloud: claude-opus-4-5.",
+   "source_url": "https://code.claude.com/docs/en/model-config",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "If Haiku 5.5 really is ~$0.10/$0.50 per MTok, the cheap-cloud tier may undercut running a local model for many tasks, shifting the local tier's justification to privacy/offline/zero-marginal-cost rather than price.",
+   "source_date": ""
+  },
+  {
+   "claim": "Subagent definition contract: files in `.claude/agents/*.md` (project), `~/.claude/agents/` (user), plugin `agents/`, or `--agents '<json>'`; frontmatter `name`, `description` (required), `tools`, `disallowedTools`, `model`, `permissionMode` (default|acceptEdits|auto|dontAsk|bypassPermissions|plan), `skills` (preloaded), `hooks`, `mcpServers`, `memory` (user|project|local), `maxTurns`, `background`, `isolation: worktree`, `effort`, `autoCompactWindow`, `color`. Limits: 20 concurrent (`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`), nesting depth 3, combined descriptions warn above 15,000 tokens. Run a whole session as an agent with `claude --agent <name>` or `\"agent\": \"<name>\"` in settings. Subagents start with fresh context; background subagents keep only a fixed built-in tool subset.",
+   "evidence": "sub-agents page: frontmatter table, 'Spawning is capped at 20 concurrent subagents by default', 'Nesting is allowed to three layers', 'Keep descriptions brief: Claude Code shows a startup warning when your subagents' combined descriptions pass the 15,000-token limit', example `claude --agents '{...}'`.",
+   "source_url": "https://code.claude.com/docs/en/sub-agents",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "These six department agents map 1:1 onto subagent files; the old plan's custom FSM/sidecar is redundant with this.",
+   "source_date": ""
+  },
+  {
+   "claim": "Skills: `.claude/skills/<name>/SKILL.md` (project), `~/.claude/skills/` (personal), plugin `skills/`; `.claude/commands/*.md` are merged into skills and still work. Frontmatter: `name`, `description`, `when_to_use`, `argument-hint`, `arguments`, `disable-model-invocation`, `user-invocable`, `allowed-tools`, `disallowed-tools`, `model`, `effort`, `context: fork` + `agent` (runs in a subagent, background by default), `hooks`, `paths`. Substitutions `$ARGUMENTS`, `$N`, `${CLAUDE_SESSION_ID}`, `${CLAUDE_SKILL_DIR}`, `${CLAUDE_PROJECT_DIR}`; dynamic injection with !`cmd`. Description+when_to_use truncated at 1,536 chars. Self-authoring aids: bundled `/run-skill-generator`, `/verify` writes `.claude/skills/verify/SKILL.md`, and the official `skill-creator` plugin runs evals.",
+   "evidence": "skills page quotes: 'Custom commands have been merged into skills'; 'Set to fork to run in a forked subagent context'; 'The combined description and when_to_use text is truncated at 1,536 characters'; '/run-skill-generator (bundled) records a recipe and commits it as .claude/skills/run-<name>/'.",
+   "source_url": "https://code.claude.com/docs/en/skills",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": ""
+  },
+  {
+   "claim": "Hooks: events include SessionStart, Setup, SessionEnd, UserPromptSubmit, PreToolUse, PermissionRequest, PermissionDenied, PostToolUse, PostToolUseFailure, PostToolBatch, Notification, SubagentStart, SubagentStop, TaskCreated, TaskCompleted, TeammateIdle, Stop, StopFailure, PreCompact, PostCompact, PreModelSwitch, PostModelSwitch, ConfigChange, FileChanged, WorktreeCreate/Remove, Elicitation. Handler types: `command`, `prompt` (one LLM call on the background model, returns {ok, reason, impossible}), `agent` (experimental multi-turn subagent, up to 50 turns), `http`, `mcp_tool`; fields `matcher`, `if`, `timeout`, `async`, `model`, `continueOnBlock`. Exit 2 blocks; JSON `decision: block`/`permissionDecision`/`updatedInput`/`additionalContext`/`continue`. Stop hooks get `stop_hook_active`, `last_assistant_message`, `background_tasks`; 8-consecutive-continuation cap (`CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`). SubagentStop gets `agent_id`, `agent_type`, `agent_transcript_path`. SessionStart can inject `additionalContext` and persist env via `CLAUDE_ENV_FILE`. Hooks live in settings.json (user/project/local/managed), plugin hooks.json, and skill/agent frontmatter.",
+   "evidence": "hooks page (fetched in three parts): event table, 'Exit with code 2 to block the action', prompt hook config table with `model` field 'Defaults to the model Claude Code uses for background functionality', Stop input example, 'Claude Code applies an 8-consecutive-continuation cap', SubagentStop input JSON with agent_transcript_path.",
+   "source_url": "https://code.claude.com/docs/en/hooks",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "The 'self-developing' requirement is best implemented as hooks (SubagentStop/Stop/TaskCompleted logging outcomes; PreToolUse preprocessing via a local model to cut tokens) rather than a custom circuit breaker/FSM.",
+   "source_date": ""
+  },
+  {
+   "claim": "Agent teams are experimental, off by default (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in env or settings.json `env`), interactive-only (not with `-p`/Agent SDK), one team per session, no nested teams, no resume of in-process teammates; teammates may be spawned from subagent definitions (their `model`, `tools`, `effort` apply), per-teammate model chosen by prompt > definition > CLAUDE_CODE_SUBAGENT_MODEL > lead; split-pane mode needs tmux or iTerm2 and 'isn't supported in VS Code's integrated terminal, Windows Terminal, or Ghostty'; teams use 'approximately 7x more tokens than standard sessions when teammates run in plan mode'. Quality gates via TeammateIdle/TaskCreated/TaskCompleted hooks (exit 2 to push back).",
+   "evidence": "agent-teams page: warning block, 'Compare with subagents' table, 'Specify teammates and models' order, Limitations list; costs page 'Agent teams use approximately 7x more tokens'.",
+   "source_url": "https://code.claude.com/docs/en/agent-teams",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": ""
+  },
+  {
+   "claim": "Dynamic workflows: Claude writes a JavaScript orchestration script (`agent()`, `pipeline()`, `parallel()`, `phase()`, `args`, optional JSON `schema` per agent), saved to `.claude/workflows/*.js` or `~/.claude/workflows/` and invoked as `/<name>`; trigger with the `ultracode` keyword or `/effort ultracode`; up to 16 concurrent agents (`CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS`), 1,000 agents/run, resumable; available on all paid plans (Pro default size 'small'); per-stage model follows the subagent order; `/deep-research` is bundled; works in `claude -p` and the Agent SDK with `Workflow` allow rules.",
+   "evidence": "workflows page: 'A dynamic workflow is a JavaScript script that orchestrates many subagents at once'; limits table; 'Claude Code picks each workflow agent's model in the same order it uses for subagents'.",
+   "source_url": "https://code.claude.com/docs/en/workflows",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": ""
+  },
+  {
+   "claim": "MCP config: project `.mcp.json` `{\"mcpServers\": {name: {type: http|sse|ws|stdio, url|command, args, env, headers}}}` (a `url` without `type` is an error); `claude mcp add --transport http|sse <name> <url> --scope local|project|user` or `claude mcp add <name> -- <cmd> [args]`; `${VAR}` and `${VAR:-default}` expansion in command/args/env/url/headers; MCP tool definitions are deferred by default (tool search; `ENABLE_TOOL_SEARCH=false` to disable); `MAX_MCP_OUTPUT_TOKENS` (default 25,000); permission/hook names `mcp__<server>__<tool>` (plugin-bundled: `mcp__plugin_<plugin>_<server>__<tool>`).",
+   "evidence": "mcp page: JSON examples, scope list, 'a JSON entry with a url but no type is a configuration error', 'limits output to 25,000 tokens by default. To change the token limit, set MAX_MCP_OUTPUT_TOKENS'.",
+   "source_url": "https://code.claude.com/docs/en/mcp",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": ""
+  },
+  {
+   "claim": "Cost telemetry: `CLAUDE_CODE_ENABLE_TELEMETRY=1`, `OTEL_METRICS_EXPORTER=otlp|prometheus|console`, `OTEL_LOGS_EXPORTER=otlp|console`, `OTEL_EXPORTER_OTLP_PROTOCOL=grpc|http/protobuf`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_METRIC_EXPORT_INTERVAL`, `OTEL_LOG_USER_PROMPTS=1`, `OTEL_LOG_TOOL_DETAILS=1`, `OTEL_RESOURCE_ATTRIBUTES`. Metrics: `claude_code.cost.usage` (USD; attrs model, query_source, effort), `claude_code.token.usage` (type input/output/cacheRead/cacheCreation, model), session/commit/PR/lines counters, `active_time.total`. Events: `claude_code.api_request` (model, cost_usd, tokens, duration), `tool_result`, `user_prompt`. These OTEL vars are ignored when set in project/local settings `env` (must be shell, user, or managed settings). `/usage` shows session cost (list price, not relevant for Max billing) and plan-usage attribution by subagent/skill/MCP; `/insights` writes `~/.claude/usage-data/report.html`. Average API cost is ~$13/dev/active day.",
+   "evidence": "monitoring-usage quick start and metrics/events tables; 'Claude Code ignores the OTEL_* exporter variables in a repository's .claude/settings.json'; costs page: 'the average cost is around $13 per developer per active day'.",
+   "source_url": "https://code.claude.com/docs/en/monitoring-usage",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": ""
+  },
+  {
+   "claim": "Cost levers documented by Anthropic: effort levels (`CLAUDE_CODE_EFFORT_LEVEL`, `/effort`; thinking cannot be disabled on Opus 5.5/Sonnet 5.5/Haiku 5.5/Fable), `model: haiku` for simple subagents or `CLAUDE_CODE_SUBAGENT_MODEL=haiku` + `_FORCE=1`, PreToolUse hooks that pre-filter verbose output (example filter-test-output.sh rewriting `tool_input.command`), moving CLAUDE.md content into skills (keep CLAUDE.md under ~200 lines), delegating verbose work to subagents, `/clear` between tasks, `subagentPromptCacheTtl: 1h`, and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` for offline/gateway setups (also disables auto-update and feature flags).",
+   "evidence": "costs page 'Reduce token usage' sections and the filter-test-output.sh hook example; env-vars row for CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC.",
+   "source_url": "https://code.claude.com/docs/en/costs",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": ""
+  },
+  {
+   "claim": "LiteLLM proxy exposes the Anthropic Messages format at `/v1/messages` for any provider in its `model_list` (incl. `ollama/...`), and its official Claude Code guide uses `ANTHROPIC_BASE_URL=http://localhost:4000`, `ANTHROPIC_AUTH_TOKEN=<LiteLLM virtual or master key>`, optionally `ANTHROPIC_MODEL=<model_name from config>`; Anthropic's own costs page notes 'Several large enterprises reported using LiteLLM' but that it 'is unaffiliated with Anthropic and has not been audited for security'. docs.litellm.ai and raw GitHub paths were unreachable from this sandbox, so config.yaml syntax was not verified first-hand; a third-party blog alleges two LiteLLM releases (1.82.7/1.82.8) shipped malicious code (unverified).",
+   "evidence": "Web search summary citing docs.litellm.ai/docs/proxy/client_setup/claude_code and /docs/tutorials/claude_non_anthropic_models ('LiteLLM serves that format at /v1/messages, so two environment variables point Claude Code at the gateway'); code.claude.com/docs/en/costs LiteLLM mention; morphllm.com security claim (unverified).",
+   "source_url": "https://docs.litellm.ai/docs/proxy/client_setup/claude_code",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "LiteLLM is the leading off-the-shelf replacement for router/main.py if API-key mode is chosen; if its /v1/messages translation to Ollama were missing or broken the repo's own router (upgraded to speak /v1/messages) would be needed instead. Pin versions and verify integrity before adopting.",
+   "source_date": ""
+  },
+  {
+   "claim": "claude-code-router (musistudio) is now v3.x (v3.1.3, 9 Oct 2026; 37.8k stars; MIT; Node 22+): a local gateway at `http://127.0.0.1:3456` with a management UI (`ccr ui`, port 3458), desktop app and Docker; supports Claude Code, Codex, Kimi CLI, OpenCode; providers OpenAI Chat/Responses, Anthropic Messages, Gemini, OpenRouter, DeepSeek, custom; routing by model prefix, header/body conditions, rewriting, retries, ordered fallbacks; custom JS routers receive `input.model`, `input.summary.{hasImage,lastUserText,toolNames}`, `input.tokenCount` and `api.env/api.fetch` and return `{model}` or null. The widely-cited v1-era `~/.claude-code-router/config.json` schema (Providers[name, api_base_url, api_key, models, transformer]; Router{default, background, think, longContext, longContextThreshold (default 60000), webSearch, image}; `ccr code`; `/model provider,model`) comes from third-party mirrors and may be stale for v3; ccrdesk.top docs were unreachable.",
+   "evidence": "github.com/musistudio/claude-code-router README (fetched) and releases page; examples/routing/jev.js (fetched raw) shows the v3 custom-router contract; web search results for v1 schema (IndustrialMagic mirror, morphllm guide).",
+   "source_url": "https://github.com/musistudio/claude-code-router",
+   "confidence": "medium",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-09"
+  },
+  {
+   "claim": "Settings mechanics relevant to packaging the stack: `env` blocks in `~/.claude/settings.json` (user), `.claude/settings.json` (shared, committed; never put credentials here), `.claude/settings.local.json` (per-project, gitignored); settings-file env overrides shell exports; VS Code extension needs gateway vars in `claudeCode.environmentVariables`; `permissions.defaultMode` `auto`/`bypassPermissions` only take effect from user or managed settings; `--settings '<json>'` for one session; Windows paths `%USERPROFILE%\\.claude`, hooks can use `shell: powershell`.",
+   "evidence": "settings page scope table and precedence; llm-gateway-connect VS Code snippet and 'Don't put the credential in a project's .claude/settings.json'; settings 'permissions.defaultMode values auto and bypassPermissions don't take effect from project or local settings'.",
+   "source_url": "https://code.claude.com/docs/en/settings",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": ""
+  },
+  {
+   "claim": "Ollama's Claude Code guidance: choose a local model with a 64k+ context window (blog earlier said >=32K), choose cloud models that support tools; `ollama launch` now passes cloud models' context lengths (v0.40.9); direct Ollama-Cloud connections note 'Hosted WebSearch and advanced tool controls are not fully supported'. Example models in the docs: local `qwen3.5`, `qwen3-coder`; cloud `glm-5.3-flash`, `gemma4:cloud`, `kimi-k2.7-code:cloud`, `gemma4:31b`.",
+   "evidence": "docs/integrations/claude-code.mdx: 'For larger repositories, set the context length to 64k or higher'; anthropic-compatibility.mdx examples; releases v0.40.9 note.",
+   "source_url": "https://raw.githubusercontent.com/ollama/ollama/main/docs/integrations/claude-code.mdx",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": ""
+  }
+ ],
+ "recommendations": [
+  "Make Claude Code itself the orchestrator and the single user interface (terminal + VS Code extension); delete the Deep-Architect custom extension/FSM/RAG-sidecar plan. Express the six departments as `.claude/agents/{app-dev,testing,security,devops,code-review,docs}.md` with `description` tuned for auto-delegation, `tools`/`disallowedTools`, `permissionMode`, `memory: project`, `maxTurns`, and `model:` set per tier; keep procedures (TDD loop, OWASP checklist, release) as `.claude/skills/*/SKILL.md` (use `context: fork` + `agent: <dept>` for heavy ones); keep AGENTS.md/CLAUDE.md under ~200 lines.",
+  "Pick the billing mode explicitly, because it decides the topology: (A) 'Max-plan mode': run `claude` directly against api.anthropic.com with the subscription (no gateway credential), use `CLAUDE_CODE_SUBAGENT_MODEL=haiku` + `_FORCE` or per-agent `model: haiku`/`sonnet`/`opus`, and get local-model savings through a second profile (`CLAUDE_CONFIG_DIR=~/.claude-local` alias `claude-local` with ANTHROPIC_BASE_URL=http://localhost:11434, ANTHROPIC_AUTH_TOKEN=ollama, ANTHROPIC_API_KEY=\"\"), plus hooks/skills that shell out to `ollama run`/the Ollama API for pre-filtering and bulk drafting. (B) 'API-key mode': one gateway (LiteLLM pinned to a verified version, or the repo's router upgraded to speak /v1/messages) as ANTHROPIC_BASE_URL with ANTHROPIC_AUTH_TOKEN=<gateway key>; route by model name and by `x-claude-code-request-class`/`x-claude-code-agent-type` (set CLAUDE_CODE_GATEWAY_HINT_HEADERS=1) so compaction/auxiliary/Explore go local and `main` turns go to Opus/Sonnet 5.5; Max-plan credits cannot be used in this mode. Do not try to forward subscription OAuth through a credentialed proxy.",
+  "Whichever mode: set `ANTHROPIC_DEFAULT_HAIKU_MODEL` (never the deprecated ANTHROPIC_SMALL_FAST_MODEL) to the cheapest acceptable model (claude-haiku-5-5 in cloud mode, or a local model name in local/gateway mode) because it drives session titles, summaries and prompt-hook evaluation; set `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, `CLAUDE_CODE_MAX_OUTPUT_TOKENS` and `CLAUDE_CODE_AUTO_COMPACT_WINDOW` to match the local model's num_ctx (e.g. 65536 / 8192 / 100000); set `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` for the local profile to avoid 400s on beta fields; put all of this in the `env` block of `~/.claude/settings.json` (or settings.local.json), not the committed project file.",
+  "Replace router/main.py's keyword+length complexity heuristic: in gateway mode route on (1) explicit model name from the agent definition, (2) request-class header, (3) token count, and only then a cheap local classifier (the CCR `jev.js` pattern). Expose the proxy as Anthropic Messages at /v1/messages (not OpenAI chat) so Claude Code's streaming, tool_use blocks and cache_control pass through unchanged; forward `anthropic-beta`/`anthropic-version` verbatim and do not reshape the `system` array.",
+  "Update all model IDs: claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5 (verify Haiku 5.5 availability/pricing in the Console; if it is ~$0.10/$0.50 per MTok, re-evaluate which 'cheap' tasks are actually cheaper locally vs on Haiku), claude-fable-5-1 only for the hardest architecture/security reviews. Remove claude-opus-4-5, claude-sonnet-4-6, claude-opus-4-8 from agents.yaml, continue.config.json, README, AGENTS.md, DESIGN.md.",
+  "Implement 'self-developing' with native primitives instead of a custom circuit breaker: SubagentStop/Stop/TaskCompleted `command` hooks append {agent_type, model, duration, tokens, success, last_assistant_message} to `.claude/metrics/*.jsonl`; a `PostToolUse` hook on test/lint commands records pass/fail; a scheduled `/improve` skill (context: fork, model: sonnet or local) mines those logs plus `agent_transcript_path` files and proposes diffs to agent descriptions/system prompts, skill text and routing thresholds, opened as a PR for human approval; use `/insights`, `/usage` attribution and the `skill-creator` plugin's evals to measure; use prompt/agent Stop hooks or `/goal` as quality gates (tests must pass) rather than a 9-hour autonomous FSM.",
+  "Use local Ollama models for: PreToolUse output filtering/summarization, first-draft docs, commit messages, log triage, embeddings/search, and as the `Explore`-style read-only department work; keep Opus/Sonnet 5.5 for architecture, security sign-off, multi-file refactors and code review verdicts. On a 12 GB RTX 3060 benchmark candidate models at 64k context (e.g. qwen2.5-coder:14b-q4, qwen3:14b, devstral-small, qwen3-coder at reduced ctx, gpt-oss:20b with partial offload) for tool-call reliability under Claude Code's prompt before fixing the tier table; Ollama Cloud models (`:cloud`) are a middle tier if the owner accepts the account/cost.",
+  "Treat agent teams as opt-in experiments only (interactive, Windows Terminal split panes unsupported, ~7x tokens); prefer subagents + background forks for daily work and dynamic workflows (`.claude/workflows/*.js`, size guideline small/medium) for fan-out audits and migrations. Add `.mcp.json` only for tools that have no CLI equivalent; prefer `gh`, `docker`, `kubectl` CLIs to keep context small.",
+  "Ship a reproducible setup: `scripts/install-claude-stack.sh|.ps1` that writes ~/.claude/settings.json env blocks, installs agents/skills/hooks into the repo's `.claude/`, pulls Ollama models and runs `ollama cp <model> claude-haiku-5-5` for alias-based local fallback, enables OTel (`CLAUDE_CODE_ENABLE_TELEMETRY=1` + a local OTLP collector/Prometheus+Grafana in docker-compose) so cost per department/model is visible, and documents `/status`, `/usage`, `/model`, `/agents`, `/hooks` as the day-to-day controls.",
+  "Decide and verify empirically before building the design around it: whether `model: <non-claude-name>` in subagent frontmatter is passed verbatim to a gateway (docs imply yes via '--model accepts any string' but never state it), and whether Ollama's /v1/messages accepts Claude Code's `role: system` mid-conversation entries and `output_config.effort` without tripping retries."
+ ],
+ "open_questions": [
+  "Does Claude Code honor an arbitrary (non-claude-) string in subagent `model:` frontmatter end-to-end through ANTHROPIC_BASE_URL, or does it coerce/ignore it? (Needs a 2-minute test with `claude --debug`.)",
+  "Exact release date of Ollama v0.14.0 (10 Jan 2026 per GitHub release listing; blog 16 Jan 2026) and which Ollama version added `ollama launch claude` (third-party source says v0.15, 23 Jan 2026; not verified against release notes).",
+  "Current LiteLLM config.yaml syntax for `/v1/messages` -> `ollama/` or `ollama_chat/` models and whether thinking/tool_result blocks round-trip losslessly; LiteLLM supply-chain incident (alleged 1.82.7/1.82.8) needs verification before adoption.",
+  "claude-code-router v3 configuration schema (ccrdesk.top docs unreachable); whether the v1 `~/.claude-code-router/config.json` Router.background/think/longContext fields still apply.",
+  "Which local models fit 12 GB VRAM at >=64k context with reliable Anthropic-format tool calling under Claude Code's large system prompt (qwen3-coder 30B-A3B q4 likely needs ~18 GB; qwen2.5-coder:14b-q4 ~9 GB + KV cache).",
+  "Confirmed Haiku 5.5 pricing/availability in the owner's Console (skill table says $0.10/$0.50 per MTok); this materially changes the local-vs-cloud break-even.",
+  "Owner's billing preference: Max subscription (no gateway credential possible) vs API key (gateway routing possible) vs both via separate CLAUDE_CONFIG_DIR profiles.",
+  "Ollama Cloud pricing/limits (ollama.com was unreachable) if `:cloud` models are to be a mid tier.",
+  "Whether Ollama's /v1/messages rejects Claude Code's mid-conversation `role: \"system\"` messages or `output_config.effort` (Claude Code auto-retries, but each retry costs latency)."
+ ]
+}

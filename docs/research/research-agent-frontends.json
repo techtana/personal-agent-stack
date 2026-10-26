@@ -1,0 +1,271 @@
+{
+ "topic": "Open-source agentic coding frontends (terminal, IDE, web) that mix local Ollama/LiteLLM models with cloud models, as of 2026-10-24: licenses, activity, provider config, MCP, subagents, per-mode models, AGENTS.md, sessions, UX; plus Open WebUI as the chat surface and a recommended shared-agent-definition scheme.",
+ "summary": "The landscape moved a lot since the repo's last session, and three of the tools the current stack leans on are dead or dying: Continue's repo is read-only after a final 2.0.0 (the repo's config/vscode/continue.config.json targets a dead product and the legacy JSON format), Roo Code was shut down and archived on 2026-05-15 (community fork ZooCode continues), and Google replaced Gemini CLI with the closed Antigravity CLI for consumer tiers on 2026-06-18. The clear winners for a local+cloud mixed stack are: OpenCode (MIT, ~221k stars, v1.19.4 on 2026-10-22) as the terminal hub, because it has Markdown agents with per-agent model selection, a separate small_model for cheap chores, native AGENTS.md plus CLAUDE.md/.claude/skills fallback, an HTTP server (opencode serve), ACP mode (opencode acp) and a VS Code extension; Claude Code as the cloud heavy-lift tool (it reads AGENTS.md natively from v2.1.277, has subagent .md files with model: haiku|sonnet|opus|fable|inherit, but Anthropic explicitly does not support routing it to non-Claude models through a gateway, so it cannot be the local-tier surface); Cline (Apache-2.0, ~70.8k stars, CLI v3.0.73 / desktop 2026-10-17) as the VS Code GUI agent with Plan/Act, Ollama/LM Studio/OpenAI-compatible providers and MCP; Zed (GPL-3.0, Windows supported) as the best-in-class alternative IDE because its agent panel speaks Ollama/openai_compatible/anthropic_compatible natively, has agent.default_model / subagent_model / compaction_model, and hosts Claude Code, Codex, OpenCode, Gemini CLI, Qwen Code etc. as ACP external agents; and Open WebUI (v0.12.3, 2026-10-16) as the chat surface via Workspace Models (base model + system prompt + knowledge + tools + skills, JSON import/export), native streamable-HTTP MCP since v0.6.31 (mcpo only for stdio servers), Functions (Pipe/Filter/Action/Event), Channels (@mention models, threads, Apps) and Notes. Aider remains the only tool with a first-class three-tier split in one session (architect model, editor model, weak model) and runs fine against Ollama (ollama_chat/ prefix) or any OpenAI-compatible base, but it is effectively dormant (last release 0.86.2, 2026-02-12). Goose (Apache-2.0, v1.56.0 on 2026-10-23) is a strong desktop+CLI MCP-native option with custom_providers JSON (engine openai|anthropic|ollama), subagent provider/model env vars and ACP providers that wrap Claude Code/Codex, but its lead/worker mode appears to have been removed in favour of a planner model. Codex CLI (Apache-2.0, 0.164.0 on 2026-10-23) supports local models via --oss with oss_provider = ollama|lmstudio and custom model_providers with base_url http://localhost:11434/v1, reads AGENTS.md and MCP; the allowed wire_api values are disputed. Qwen Code (Apache-2.0, v0.26.1 on 2026-10-24) has the cleanest documented local-model config of the Gemini-CLI lineage (modelProviders.openai with baseUrl localhost:11434/v1, wireApi, Anthropic-compatible too), subagents and agent teams. OpenHands has pivoted to Agent Canvas, a self-hosted control center that runs the OpenHands agent and third-party agents (Claude Code, Codex, Gemini CLI, Pi, OpenCode), which is directly relevant to an orchestrator design. For cross-tool reuse, the convergent standards are: AGENTS.md at the repo root (OpenCode, Claude Code >=2.1.277, Codex, Crush, Zed, Qwen Code), SKILL.md folders under .agents/skills or .claude/skills (OpenCode reads both plus .opencode/skills; Zed migrated rules to ~/.agents/skills; Claude Code reads .claude/skills), near-identical YAML-frontmatter subagent files for OpenCode (.opencode/agents/*.md) and Claude Code (.claude/agents/*.md), and ACP for letting any editor/orchestrator drive any agent. The recommended architecture: one YAML/Markdown source of agent definitions generated into those per-tool formats, a LiteLLM proxy (serves both /v1/chat/completions and Anthropic-format /messages) as the single model gateway with the existing router logic folded in as policy, OpenCode as the daily terminal surface, VS Code + OpenCode extension + Cline (or Zed) as the IDE surface, and Open WebUI Workspace Models bound to the proxy as the chat surface.",
+ "findings": [
+  {
+   "claim": "Continue (continuedev/continue) is no longer maintained: the repository is read-only for all users after a final 2.0.0 release of the VS Code extension, CLI and JetBrains plugin; the repo's config/vscode/continue.config.json therefore targets a dead product and uses the legacy config.json format rather than config.yaml.",
+   "evidence": "README: \"The continuedev/continue repository is no longer actively maintained and is read-only for all users.\" and \"We polished Continue and did a final 2.0.0 release of the VS Code extension, CLI, and JetBrains plugin.\" License Apache-2.0, 36.3k stars. The in-repo docs/reference.mdx documents the config.yaml schema (models with provider/model/apiBase/roles chat|edit|apply|autocomplete|embed|rerank|summarize, rules, prompts, context, mcpServers) which the repo's JSON config does not follow.",
+   "source_url": "https://github.com/continuedev/continue",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "The current stack ships a Continue config as its IDE surface; the IDE recommendation must change.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Roo Code was shut down on 2026-05-15 and its repository is archived/read-only; the README points users to ZooCode (community fork, Apache-2.0, v3.92.0, ~2.0k stars, modes Code/Architect/Ask/Debug/Custom, Orchestrator workflows, MCP) or back to Cline.",
+   "evidence": "GitHub banner: \"This repository was archived by the owner on May 15, 2026. It is now read-only.\" Disclaimer: \"The Roo Code Extension was shut down on May 15th.\" Successor repo Zoo-Code-Org/Zoo-Code shows latest release v3.92.0 and 7,814 commits.",
+   "source_url": "https://github.com/RooCodeInc/Roo-Code",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Rules out Roo Code as an IDE surface; ZooCode is a small fork and a riskier bet than Cline.",
+   "source_date": "2026-05-15"
+  },
+  {
+   "claim": "Gemini CLI was replaced by the closed-source Antigravity CLI for Google AI Pro/Ultra and free Code Assist users on 2026-06-18; the Apache-2.0 Gemini CLI remains usable only with paid Gemini API keys, has no Ollama/OpenAI-compatible provider support, and its README says it is not optimized for current Gemini models.",
+   "evidence": "Repo README: \"Gemini CLI was replaced by Antigravity CLI on June 18th, 2026\" and \"has not been optimized for Gemini 4 Argon\"; Google developer blog announcement (2026-05-19). README lists only Google auth, GEMINI_API_KEY and Vertex; MCP via ~/.gemini/settings.json; GEMINI.md context files; checkpointing.",
+   "source_url": "https://developers.googleblog.com/en/an-important-update-transitioning-gemini-cli-to-antigravity-cli/",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-06-18"
+  },
+  {
+   "claim": "OpenCode (now anomalyco/opencode, formerly sst/opencode) is MIT-licensed, ~221k stars, releasing weekly (v1.19.4 on 2026-10-22), and supports Ollama and any OpenAI-compatible proxy through the @ai-sdk/openai-compatible provider with a baseURL, plus an Anthropic baseURL override.",
+   "evidence": "providers.mdx snippet: {\"provider\":{\"ollama\":{\"npm\":\"@ai-sdk/openai-compatible\",\"name\":\"Ollama (local)\",\"options\":{\"baseURL\":\"http://localhost:11434/v1\"},\"models\":{\"llama2\":{\"name\":\"Llama 2\"}}}}}; custom provider uses the same npm with options.baseURL, apiKey \"{env:...}\", headers, and models.<id>.limit {context, output}; Anthropic override {\"provider\":{\"anthropic\":{\"options\":{\"baseURL\":\"https://api.anthropic.com/v1\"}}}}. Docs advise raising Ollama num_ctx to 16k-32k if tool calls fail. Releases page shows v1.19.4 2026-10-22, v1.19.3/v1.19.2 2026-10-16.",
+   "source_url": "https://github.com/sst/opencode/blob/dev/packages/web/src/content/docs/providers.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "OpenCode is the recommended primary terminal surface; if it could not target the local proxy the recommendation would change.",
+   "source_date": "2026-10-22"
+  },
+  {
+   "claim": "OpenCode agents are Markdown files with YAML frontmatter (description required; mode primary|subagent|all; model; temperature; permission; steps; hidden), stored in .opencode/agents/ (project) or ~/.config/opencode/agents/ (global), with built-in primary agents build and plan (Tab to switch) and subagents general/explore (@mention); a global small_model handles cheap chores such as session titles, and commands can pin an agent and model.",
+   "evidence": "agents.mdx: \"Global: ~/.config/opencode/agents/ ... Per-project: .opencode/agents/\"; frontmatter fields description, mode, model, temperature, permission (tools deprecated); JSON form \"agent\": {\"build\": {\"mode\": \"primary\"}} with prompt \"{file:./prompts/build.txt}\". config.mdx: {\"model\":\"anthropic/claude-sonnet-5-5\",\"small_model\":\"anthropic/claude-haiku-5-5\"}; \"command\" entries take template, description, agent, model; config precedence Remote < Global < OPENCODE_CONFIG < Project < .opencode dirs < inline < managed.",
+   "source_url": "https://github.com/sst/opencode/blob/dev/packages/web/src/content/docs/agents.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Per-agent model selection in Markdown is the mechanism that maps the six department agents to local vs cloud tiers in the terminal surface.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "OpenCode reads AGENTS.md (project root, upward search, and ~/.config/opencode/AGENTS.md), falls back to CLAUDE.md and ~/.claude/CLAUDE.md, loads skills from .opencode/skills, .claude/skills and .agents/skills (project and global), and can pull extra instruction files or URLs via the \"instructions\" config key.",
+   "evidence": "rules.mdx: \"CLAUDE.md in the project directory is used only if no AGENTS.md exists\"; \"~/.claude/skills/ is also supported\"; {\"instructions\": [\"CONTRIBUTING.md\", \"docs/guidelines.md\", \".cursor/rules/*.md\"]} and remote raw URLs with 5s timeout; env OPENCODE_DISABLE_CLAUDE_CODE=1 to opt out. skills.mdx: discovery in .opencode/skills/, .claude/skills/, .agents/skills/ plus ~/.config/opencode/skills/, ~/.claude/skills/, ~/.agents/skills/; permission.skill allow|deny|ask with wildcards.",
+   "source_url": "https://github.com/sst/opencode/blob/dev/packages/web/src/content/docs/rules.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "This compatibility is what allows one AGENTS.md and one skills folder to serve OpenCode and Claude Code without duplication.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "OpenCode is client/server: `opencode serve` exposes an OpenAPI 3.1 HTTP API (default 127.0.0.1:4096, /doc spec, POST /session, POST /session/:id/message, GET /agent, SSE /event, basic auth via OPENCODE_SERVER_PASSWORD), `opencode acp` runs it as an ACP agent for Zed/JetBrains/Neovim, and a VS Code/Cursor extension launches it in a split terminal with file/selection context.",
+   "evidence": "server.mdx: \"opencode serve [--port <number>] [--hostname <string>] [--cors <origin>]\", port default 4096; endpoints for sessions, messages, agents, permissions, /event. acp.mdx: Zed settings {\"agent_servers\":{\"OpenCode\":{\"type\":\"custom\",\"command\":\"opencode\",\"args\":[\"acp\"]}}}; supports MCP servers, AGENTS.md rules, agents and permissions over ACP. ide.mdx: Ctrl+Esc quick launch, @File#L37-42 references; VS Code, Cursor, Windsurf, VSCodium.",
+   "source_url": "https://github.com/anomalyco/opencode/blob/dev/packages/web/src/content/docs/server.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "The HTTP API and ACP mode are what let an orchestrator or Open WebUI drive the same agent definitions programmatically instead of building a custom monolith.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Claude Code can be pointed at an Anthropic-Messages-format gateway with ANTHROPIC_BASE_URL plus ANTHROPIC_AUTH_TOKEN (bearer) or ANTHROPIC_API_KEY (x-api-key), set in shell or in the env block of ~/.claude/settings.json, but Anthropic states it does not support routing Claude Code to non-Claude models through any gateway, and gateway credentials replace subscription billing.",
+   "evidence": "llm-gateway page: \"Anthropic doesn't endorse, maintain, or audit third-party gateway products, and doesn't support routing Claude Code to non-Claude models through any gateway.\" llm-gateway-connect: {\"env\":{\"ANTHROPIC_BASE_URL\":\"https://llm-gateway.example.com\",\"ANTHROPIC_AUTH_TOKEN\":\"sk-gateway-key\"}}; VS Code extension uses claudeCode.environmentVariables; gateway must serve /v1/messages (count_tokens optional) and forward anthropic-beta/anthropic-version; CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1 queries /v1/models. \"While a gateway credential variable ... is active ... the subscription's usage limits don't apply\" (billed per token).",
+   "source_url": "https://code.claude.com/docs/en/llm-gateway-connect",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Means Claude Code must stay the cloud-tier tool; the local/cheap tier must live in an open-source frontend (OpenCode/Cline/Aider), which shapes the whole surface split.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Claude Code subagents are Markdown files in .claude/agents/ (project) or ~/.claude/agents/ (user) with frontmatter name, description, tools, model (sonnet|opus|haiku|fable|full ID|inherit), permissionMode, skills, memory (user|project|local), background, maxTurns, isolation: worktree, effort, mcpServers, hooks; model resolution is per-invocation > frontmatter > CLAUDE_CODE_SUBAGENT_MODEL > main model; the `opusplan` alias uses opus in plan mode and sonnet for execution.",
+   "evidence": "sub-agents page example:\n---\nname: code-reviewer\ndescription: Reviews code for quality and best practices\ntools: Read, Glob, Grep\nmodel: sonnet\n---\nmemory dirs ~/.claude/agent-memory/<name>/ etc.; `claude --agent code-reviewer`; settings {\"agent\":\"code-reviewer\"}. model-config page: aliases default/best/fable/opus/sonnet/haiku/opus[1m]/sonnet[1m]/opusplan; ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL; effort low|medium|high|xhigh|max; IDs listed include claude-fable-5-1, claude-opus-5-5, claude-haiku-5-5, claude-sonnet-5.",
+   "source_url": "https://code.claude.com/docs/en/sub-agents",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "The Claude Code and OpenCode agent file formats are near-identical YAML-frontmatter Markdown, which is the basis for generating both from one source.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Claude Code reads a repository AGENTS.md natively as project instructions (v2.1.277+) when no CLAUDE.md exists in or above the working directory; if both exist only CLAUDE.md is read unless CLAUDE.md imports AGENTS.md with @AGENTS.md; it also has auto memory and .claude/rules/ path-scoped rules.",
+   "evidence": "memory page table: \"An AGENTS.md, and no CLAUDE.md or CLAUDE.local.md in your working directory or above it -> Your AGENTS.md\"; \"Reading AGENTS.md directly requires Claude Code v2.1.277 or later\"; @path/to/import syntax, max depth 4.",
+   "source_url": "https://code.claude.com/docs/en/memory",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Confirms AGENTS.md can be the single shared instruction file; the repo currently (ab)uses AGENTS.md as Deep-Architect session state, which would pollute every tool's context.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Cline is Apache-2.0 (~70.8k stars), actively released (CLI v3.0.73, Desktop v0.0.48, SDK 0.0.95 on 2026-10-17), ships VS Code extension + CLI (`npm i -g cline`, headless mode, `cline mcp`) + Desktop + closed JetBrains plugin, supports Plan/Act modes, Ollama (Base URL http://localhost:11434), LM Studio, Anthropic, OpenAI-compatible (Base URL, API key, Model ID, context window, pricing fields), MCP, .clinerules and skills, checkpoints; subagents (spawn_agent) exist only in CLI/Desktop, not the IDE extensions, and the docs do not say they can use a different model.",
+   "evidence": "README: \"Toggle between Plan mode and Act mode\"; providers list includes \"Ollama/LM Studio, and any OpenAI-compatible API\"; \"Currently we are not open-sourcing JetBrains plugins\". running-models-locally/overview.mdx: Ollama provider Base URL http://localhost:11434; RAM guidance 16-32GB small/quantized, 32-64GB mid-size. subagents.mdx: \"Subagents are available in the Cline CLI and Cline Desktop. The VS Code and JetBrains extensions don't support them.\"",
+   "source_url": "https://github.com/cline/cline",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Cline is the recommended VS Code GUI agent now that Continue and Roo are gone; the per-mode model split (Plan on cloud, Act on local) is the tiering lever there.",
+   "source_date": "2026-10-17"
+  },
+  {
+   "claim": "Zed (GPL-3.0, ~92k stars, Windows supported) has a native agent panel that configures Ollama via language_models.ollama (api_url, available_models with max_tokens/supports_tools/supports_thinking, context_window default 4096), generic OpenAI-compatible and Anthropic-compatible providers, and separate agent.default_model, agent.subagent_model (with effort), agent.compaction_model, inline_assistant_model, commit_message_model and thread_summary_model.",
+   "evidence": "use-a-local-model.md: {\"language_models\":{\"ollama\":{\"api_url\":\"http://localhost:11434\",\"auto_discover\":false,\"available_models\":[{\"name\":\"qwen2.5-coder\",\"display_name\":\"qwen 2.5 coder\",\"max_tokens\":32768,\"supports_tools\":true,\"supports_thinking\":true,\"supports_images\":true}]}}}. use-api-access.md: language_models.openai_compatible.<id>.{api_url, available_models[{name,max_tokens,capabilities}]} and language_models.anthropic_compatible.<name>.{api_url, custom_headers, available_models}; keys from <PROVIDER>_API_KEY env or keychain. agent-settings.md: agent.subagent_model {\"effort\":\"low\",\"model\":\"claude-opus-4-6\",\"provider\":\"anthropic\"}.",
+   "source_url": "https://github.com/zed-industries/zed/blob/main/docs/src/ai/use-a-local-model.md",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Zed hosts external agents over ACP (Claude, Codex, Gemini CLI, OpenCode, Copilot, Cursor, Pi, Poolside, plus any custom command via agent_servers), where each agent keeps its own model/auth config; Zed reads project rules from .rules, .cursorrules, .windsurfrules, .clinerules, .github/copilot-instructions.md, AGENT.md, AGENTS.md, CLAUDE.md, GEMINI.md (first match wins) and since v1.4.0 migrated its Rules Library into Skills under ~/.agents/skills/ and a global ~/.config/zed/AGENTS.md.",
+   "evidence": "external-agents.md: {\"agent_servers\":{\"my-agent\":{\"type\":\"custom\",\"command\":\"node\",\"args\":[\"~/projects/agent/index.js\",\"--acp\"],\"env\":{}}}}; \"External Agents generally choose their own models\". rules.md: ordered list of nine rules files; \"Non-default Rules become global Skills in ~/.agents/skills/\".",
+   "source_url": "https://github.com/zed-industries/zed/blob/main/docs/src/ai/external-agents.md",
+   "confidence": "high",
+   "load_bearing": true,
+   "load_bearing_note": "",
+   "why_load_bearing": "Shows ACP + AGENTS.md + .agents/skills are the de-facto cross-tool interop points; Zed is the fallback IDE recommendation if VS Code tooling churns again.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Aider (Apache-2.0, ~49.7k stars) is effectively dormant: latest PyPI release 0.86.2 on 2026-02-12, v0.86.0 on 2025-08-09; it still offers the only built-in three-model split in one session (--model as architect, --editor-model, --weak-model for commits/summaries) with --architect mode, Ollama via `aider --model ollama_chat/<model>` + OLLAMA_API_BASE, and OpenAI-compatible endpoints via OPENAI_API_BASE/OPENAI_API_KEY + `--model openai/<name>`.",
+   "evidence": "PyPI JSON: aider-chat 0.86.2 upload 2026-02-12; releases page v0.86.0 09 Aug, v0.85.0 27 Jun. options.md: --weak-model \"model for commit messages and chat history summarization\", --editor-model, --editor-edit-format, --architect, --openai-api-base, --read, --cache-prompts, --restore-chat-history. ollama.md: \"aider --model ollama_chat/<model>\", OLLAMA_API_BASE=http://127.0.0.1:11434, .aider.model.settings.yml extra_params num_ctx.",
+   "source_url": "https://github.com/Aider-AI/aider/blob/main/aider/website/docs/config/options.md",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-02-12"
+  },
+  {
+   "claim": "Crush (charmbracelet) is licensed FSL-1.1-MIT (source-available, converts to MIT after two years, not OSI open source today), ~28.8k stars, releasing frequently (v0.98.2 on 2026-10-23); it configures providers via a crushrc file (`provider add ollama --type ollama --base-url \"http://localhost:11434/v1\"`, `--type openai-compat`, `--type anthropic`), supports MCP (stdio/http/sse), LSP context, sessions in a local DB, SKILL.md skills, and reads ~/.config/crush/CRUSH.md and ~/.config/AGENTS.md plus a project AGENTS.md; no subagent or large/small model-role docs were found.",
+   "evidence": "README: License FSL-1.1-MIT; \"provider add ollama --type ollama --base-url \\\"http://localhost:11434/v1\\\"\" / \"model add ollama/llama3.3 --name \\\"Llama 3.3\\\" --context-window 128000\"; \"Project initialization creates AGENTS.md by default\"; JSON config \"should be considered deprecated\". Releases: v0.98.2 23 Oct 2026.",
+   "source_url": "https://github.com/charmbracelet/crush",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-23"
+  },
+  {
+   "claim": "Goose (Block, Apache-2.0, v1.56.0 on 2026-10-23) is a desktop app + CLI with 70+ MCP extensions; providers are set by GOOSE_PROVIDER/GOOSE_MODEL or config.yaml (~/.config/goose/config.yaml, Windows %APPDATA%\\Block\\goose\\config\\config.yaml), Ollama via OLLAMA_HOST, OpenAI-compatible via OPENAI_HOST/OPENAI_BASE_PATH or a custom_providers JSON (engine openai|anthropic|ollama), Anthropic via ANTHROPIC_HOST; subagents are controlled by GOOSE_SUBAGENT_PROVIDER/GOOSE_SUBAGENT_MODEL and GOOSE_MAX_CONCURRENT_SUBAGENTS; ACP providers (claude-acp, codex-acp, amp-acp, pi-acp) wrap other agents and pass goose extensions through as MCP servers.",
+   "evidence": "providers.md custom provider file in ~/.config/goose/custom_providers/: {\"name\":\"custom_corp_api\",\"engine\":\"openai\",\"api_key_env\":\"CUSTOM_CORP_API_API_KEY\",\"base_url\":\"https://api.company.com/v1/chat/completions\",\"models\":[{\"name\":\"gpt-4o\",\"context_limit\":128000}]}; \"OLLAMA_HOST ... localhost:11434\"; GOOSE_INPUT_LIMIT maps to Ollama num_ctx. acp-providers.md: `npm install -g @agentclientprotocol/claude-agent-acp`; \"ACP providers pass goose extensions through to the agent as MCP servers\"; session resume not supported over ACP.",
+   "source_url": "https://github.com/block/goose/blob/main/documentation/docs/getting-started/providers.md",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-23"
+  },
+  {
+   "claim": "Goose's lead/worker mode (GOOSE_LEAD_MODEL, lead for first N turns then cheaper worker, fallback on failures) appears to have been removed in favour of a planner model (/plan); current official docs do not list GOOSE_LEAD_* or GOOSE_PLANNER_* env vars.",
+   "evidence": "environment-variables.md lists GOOSE_PROVIDER, GOOSE_MODEL, GOOSE_SUBAGENT_*, GOOSE_MODE, GOOSE_CONTEXT_LIMIT, GOOSE_INPUT_LIMIT but no GOOSE_LEAD_*; a goose docs blog post (2025-08-11, marked outdated) states lead/worker was removed and replaced by Planning Mode; multi-model guide index is now a landing page.",
+   "source_url": "https://goose-docs.ai/blog/2025/08/11/llm-tag-team-lead-worker-model",
+   "confidence": "medium",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "OpenAI Codex CLI (Apache-2.0, ~131k stars, rust-v0.164.0 on 2026-10-23) runs local models with `codex --oss` (oss_provider = \"ollama\" | \"lmstudio\", --local-provider flag, default model gpt-oss:20b, minimum Ollama 0.13.4) and custom [model_providers.<id>] blocks with base_url (e.g. http://localhost:11434/v1), env_key and wire_api, where ids openai/ollama/lmstudio are reserved; it reads AGENTS.md, supports MCP, profiles, `codex exec`, and a desktop `codex app`; but the official config docs live on developers.openai.com (unreachable here) and sources disagree whether wire_api = \"chat\" is still accepted.",
+   "evidence": "Repo docs folder contains agents_md.md, config.md, exec.md, skills.md; README mentions `codex app`. Official config-advanced page (via search snippets): \"Custom providers can't reuse the reserved built-in provider IDs: openai, ollama, and lmstudio\"; \"If you pass --oss without specifying a provider, Codex uses oss_provider as the default\"; example base_url = \"http://localhost:11434/v1\". Third-party guides conflict on wire_api (\"chat\" removed Feb 2026 vs still shown).",
+   "source_url": "https://developers.openai.com/codex/config-advanced",
+   "confidence": "medium",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-23"
+  },
+  {
+   "claim": "Qwen Code (Apache-2.0, ~28.7k stars, v0.26.1 on 2026-10-24, independent fork of Gemini CLI v0.8.2) has well-documented local-model support via settings.json modelProviders.openai entries with baseUrl http://localhost:11434/v1 (Ollama), :8000/v1 (vLLM), :1234/v1 (LM Studio), per-entry generationConfig (contextWindowSize, timeouts, sampling), wireApi chat-completions|responses, Anthropic-compatible providers (ANTHROPIC_BASE_URL), MCP, subagents and agent teams, headless mode, session management, and VS Code/JetBrains/Zed integrations; it is listed as an ACP agent.",
+   "evidence": "model-providers.md snippet: {\"modelProviders\":{\"openai\":[{\"id\":\"qwen2.5-7b\",\"name\":\"Qwen2.5 7B (Ollama)\",\"envKey\":\"OLLAMA_API_KEY\",\"baseUrl\":\"http://localhost:11434/v1\",\"generationConfig\":{\"timeout\":300000,\"contextWindowSize\":32768,\"samplingParams\":{\"temperature\":0.7,\"max_tokens\":4096}}}]}}; auth.md: OPENAI_API_KEY/OPENAI_BASE_URL/OPENAI_MODEL and ANTHROPIC_API_KEY/ANTHROPIC_BASE_URL/ANTHROPIC_MODEL; README: \"SubAgents, Agent Teams, Dynamic Workflows\", \"Any third-party provider or local model (Ollama / vLLM)\".",
+   "source_url": "https://github.com/QwenLM/qwen-code/blob/main/docs/users/configuration/model-providers.md",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Kilo Code is MIT-licensed (~27.7k stars); its CLI is an acknowledged fork of OpenCode with Code/Plan/Ask/Debug agents, custom agents, MCP via a marketplace, `kilo run --auto` for CI, JetBrains and VS Code extensions.",
+   "evidence": "README FAQ: \"Kilo CLI is a fork of OpenCode\"; description \"Kilo is the all-in-one agentic engineering platform\"; agents Code (default), Plan, Ask, Debug.",
+   "source_url": "https://github.com/Kilo-Org/kilocode",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "OpenHands (MIT, ~91.7k stars) has pivoted its main repo to \"Agent Canvas\", a self-hosted control center that runs the OpenHands agent and third-party agents (Claude Code, Codex, Gemini CLI, Pi, OpenCode) with per-conversation Docker sandboxes (OH_CONVERSATION_RUNTIME=docker) and persisted ~/.openhands state; the underlying software-agent-sdk (MIT) exposes LLM(model=..., api_key=...) in LiteLLM naming plus an Agent Server REST/WebSocket API.",
+   "evidence": "README: \"runs the open-source OpenHands agent and third-party agents such as Claude Code, Codex, Gemini CLI, Pi, and OpenCode\"; docker run ... ghcr.io/openhands/agent-canvas:1.33.0 with -v $HOME/.openhands and -v ${PROJECTS_PATH}:/projects, UI at http://localhost:8000/canvas. SDK README example: llm = LLM(model=\"gpt-5.5\", api_key=os.getenv(\"LLM_API_KEY\")).",
+   "source_url": "https://github.com/All-Hands-AI/OpenHands",
+   "confidence": "medium",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Open WebUI (v0.12.3 on 2026-10-16, ~156.7k stars) is under the Open WebUI License, which adds a requirement to preserve Open WebUI branding (not a plain OSI license); it connects to Ollama and any OpenAI-compatible API URL, and its Workspace Models are presets that wrap a base model with a system prompt (with {{USER_NAME}}/{{CURRENT_DATE}} variables), Knowledge, Tools, Skills, Filters, Actions, capability toggles, prompt suggestions, access control, and JSON import/export/clone.",
+   "evidence": "README: \"components licensed under the Open WebUI License with an additional requirement to preserve the 'Open WebUI' branding\"; \"With support for Ollama and OpenAI-compatible APIs\". workspace/models.md: Workspace > Models > Create; bind Knowledge, Tools, Skills, Filters, Actions; Export downloads .json; Import accepts .json; a workspace model also requires access to its base model (make base public and Hide it).",
+   "source_url": "https://github.com/open-webui/docs/blob/main/docs/features/workspace/models.md",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Workspace Model JSON import is the mechanism to generate the six department agents into the chat surface from the shared definitions; the branding-clause license matters for an open-source composition claim.",
+   "source_date": "2026-10-16"
+  },
+  {
+   "claim": "Open WebUI natively supports MCP over Streamable HTTP since v0.6.31 (admin-only, Settings > Admin > Integrations > External Tool Servers, auth None/Bearer/Session/OAuth 2.1); stdio and SSE MCP servers are not supported natively and should be bridged with mcpo (PyPI 0.0.20, 2026-02-27) exposed as OpenAPI tool servers; Functions (Pipe = custom model/agent in the selector, Filter inlet/stream/outlet, Action button, Event) run in-process from Admin Panel > Functions, while Pipelines (MIT, ~2.4k stars) is a separate OpenAI-compatible plugin server on port 9099 recommended only for heavy workloads.",
+   "evidence": "mcp.mdx: \"Native MCP support starts in Open WebUI v0.6.31\"; \"Only Streamable HTTP is supported natively\"; \"recommends mcpo\"; set WEBUI_SECRET_KEY; use host.docker.internal from Docker. functions/index.mdx: type auto-detected from class name Pipe/Filter/Action/Event; stored in DB, hidden if ENABLE_FUNCTIONS=False. pipelines README: \"simple needs ... are better served by Open WebUI Functions\".",
+   "source_url": "https://github.com/open-webui/docs/blob/main/docs/features/extensibility/mcp.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Determines how the orchestrator's tools/agents are exposed in chat: streamable-HTTP MCP servers or a Pipe function, not stdio MCP.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Open WebUI Channels are persistent shared spaces where models reply only when @mentioned (e.g. @gpt-5.6), run the full chat pipeline (tools, knowledge), reply in threads by default, and can host admin-installed Apps; Notes is a persistent editor with an in-note model chat, voice dictation, read/write sharing, and notes can be attached to chats as full-text context or searched by tool-calling models.",
+   "evidence": "channels/index.md: \"A model responds only when someone tags it\"; admin enables under Settings > Admin > General. notes/index.md: Access button Read/Write levels; USER_PERMISSIONS_NOTES_ALLOW_SHARING; \"The full text goes into the context window, with no chunking or vector search\". v0.12.1 notes: \"External apps in channels\"; v0.12.3: end-to-end encrypted DMs.",
+   "source_url": "https://github.com/open-webui/docs/blob/main/docs/features/channels/index.md",
+   "confidence": "high",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-16"
+  },
+  {
+   "claim": "The Agent Client Protocol (ACP, Apache-2.0, protocol v1) is the convergent editor<->agent interop layer in 2026: its registry lists ~190 clients (Zed, JetBrains AI Assistant, Neovim, Emacs, several VS Code extensions, Obsidian, Sublime, Qt Creator, Telegram/Slack/Discord bridges, schedulers like Kronos, orchestrators like Jockey and Raven) and 46 agents including Claude Agent (Zed's Claude Code adapter), Codex CLI adapter, Gemini CLI, Goose, OpenCode, OpenHands, Qwen Code, Cline, Cursor, GitHub Copilot and Kimi CLI.",
+   "evidence": "docs/get-started/clients.mdx and agents.mdx listings; README: \"standardizes communication between code editors and coding agents\"; SDKs in TypeScript (@agentclientprotocol/sdk), Python, Rust, Kotlin, Java.",
+   "source_url": "https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/get-started/agents.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "An orchestrator that speaks ACP (or uses OpenCode's HTTP API) can drive Claude Code, Codex, OpenCode and Qwen Code uniformly, which is the alternative to writing a custom VS Code extension FSM as in docs/DESIGN.md.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "LiteLLM proxy (~62k stars, PyPI 1.106.3 on 2026-10-24) serves both OpenAI-format /v1/chat/completions and an Anthropic-format /messages endpoint across providers, so a single proxy can front Ollama and Anthropic for OpenAI-compatible frontends (OpenCode, Cline, Zed, Open WebUI, Qwen Code, Aider) and in principle for Anthropic-format clients; it is installed with `uv tool install 'litellm[proxy]'`.",
+   "evidence": "GitHub README lists \"/messages\" among supported endpoints and the provider table has a /messages column; quick start `litellm --model gpt-4o`. (The config.yaml docs at docs.litellm.ai were unreachable from this sandbox.)",
+   "source_url": "https://github.com/BerriAI/litellm",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "If the proxy did not expose both API shapes, the stack would need two gateways (the custom FastAPI router for OpenAI-format clients plus something else), changing the infrastructure design.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "The repo's current model IDs (claude-sonnet-4-6 in router/agents.yaml and continue.config.json, claude-opus-4-8 in continue.config.json) are stale relative to current Claude Code docs, which resolve `opus` to Opus 5.5, `sonnet` to Sonnet 5.5 and `haiku` to Haiku 5.5 on the Anthropic API and list claude-fable-5-1, claude-opus-5-5 and claude-haiku-5-5 as IDs; the runtime-provided IDs (claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5, claude-haiku-4-5-20251001) should be used, with the Haiku 4.5 vs 5.5 discrepancy flagged.",
+   "evidence": "Repo: config/vscode/continue.config.json \"model\": \"claude-sonnet-4-6\" and \"claude-opus-4-8\"; router/agents.yaml cloud_model: claude-sonnet-4-6. model-config page alias table: Anthropic API opus=Opus 5.5, sonnet=Sonnet 5.5, haiku=Haiku 5.5; IDs claude-fable-5-1, claude-opus-5-5, claude-haiku-5-5.",
+   "source_url": "https://code.claude.com/docs/en/model-config",
+   "confidence": "medium",
+   "load_bearing": false,
+   "why_load_bearing": "",
+   "source_date": "2026-10-24"
+  }
+ ],
+ "recommendations": [
+  "Primary terminal surface: OpenCode (anomalyco/opencode, MIT). Define the six department agents as .opencode/agents/{app-dev,testing,security,devops,code-review,docs}.md with frontmatter `model:` pointing at the local proxy model for cheap work (e.g. `model: local/qwen2.5-coder:14b`) and a `plan`-style primary agent on a cloud model; set `small_model` to a local Ollama model so titles/summaries never cost money; register the proxy once in ~/.config/opencode/opencode.json as an @ai-sdk/openai-compatible provider with baseURL http://localhost:4000/v1 (LiteLLM) or :8000/v1 (current router). Keep Claude Code installed alongside for the heavy tier: `claude --agent <name>` with .claude/agents/*.md generated from the same source, using aliases `sonnet`/`opus`/`opusplan` rather than pinned IDs.",
+  "Primary IDE surface: stay on VS Code (owner already uses it) with (a) the OpenCode extension for the terminal-split agent, (b) the Claude Code extension for cloud-heavy sessions, and (c) Cline for a GUI agent with Plan/Act where Plan uses a cloud model via the proxy and Act uses a local model. Delete config/vscode/continue.config.json (Continue is read-only/dead and the file uses the legacy JSON schema) and do not adopt Roo Code (archived). If the owner is willing to change editors, Zed is the strongest single-IDE answer: native Ollama/openai_compatible/anthropic_compatible providers, per-role models (default/subagent/compaction/inline/commit), and Claude Code, Codex, OpenCode and Qwen Code as ACP external agents.",
+  "Primary chat surface: Open WebUI (already running). Generate one Workspace Model preset per department agent (system prompt from the shared source, base model = the proxy's agent alias, bound Knowledge/Tools/Skills) and import them via the Workspace Models JSON import; expose orchestrator tools as Streamable-HTTP MCP servers in Admin > Integrations > External Tool Servers (use mcpo only for stdio servers); use Channels (@mention a department model) as the shared team timeline and Notes for ADRs/runbooks the agents can read. Prefer a Pipe Function over Pipelines if a custom routing model is needed inside the UI.",
+  "Model gateway: replace or wrap router/main.py with a LiteLLM proxy config (model_list aliases such as app-dev-local -> ollama/qwen2.5-coder:14b, app-dev-cloud -> anthropic/claude-sonnet-5-5, with fallbacks and budget tracking) so every frontend, including Anthropic-format clients, points at one URL; keep the existing keyword/length complexity policy as a thin pre-router or LiteLLM custom routing strategy rather than a bespoke OpenAI server. Do not try to send Claude Code to local models through the gateway (unsupported by Anthropic); Claude Code is the cloud tier only.",
+  "Shared agent definitions: adopt one source of truth `agents/<name>.yaml` (name, description, tier policy, tools, system prompt, skills) and a small generator script that emits: .opencode/agents/<name>.md, .claude/agents/<name>.md (same frontmatter: name/description/tools/model), config/ollama/Modelfile.<name> (for raw Ollama use), Open WebUI Workspace Model JSON, Cline .clinerules/<name>.md, and Aider `--read` convention files. Put cross-tool instructions in a short, stable AGENTS.md at the repo root (read natively by OpenCode, Claude Code >=2.1.277, Codex, Crush, Zed, Kilo) and move Deep-Architect's mutable session state OUT of AGENTS.md into e.g. .deep-architect/state.md, because every tool now injects AGENTS.md into context. Store reusable procedures as SKILL.md folders under .agents/skills/ (read by OpenCode and Zed) with a symlink or copy to .claude/skills/ for Claude Code.",
+  "Self-development loop: use the mechanisms the tools already provide instead of a custom FSM: Claude Code subagent `memory: project` and auto memory, OpenCode `instructions` globs (e.g. docs/lessons/*.md) that the generator appends lessons to, and Open WebUI Notes as the human-readable lesson log; have a nightly cheap local job summarize session outcomes into the lessons file and propose prompt diffs for review.",
+  "Orchestration layer: rather than the custom VS Code extension in docs/DESIGN.md, drive agents through OpenCode's HTTP API (`opencode serve`, POST /session, /session/:id/prompt_async, GET /agent) or ACP, and evaluate OpenHands Agent Canvas (MIT) as an off-the-shelf control center that already runs OpenHands, Claude Code, Codex and OpenCode in per-conversation Docker sandboxes with persisted state. Keep Aider only as an optional architect/editor tool for refactors where its weak-model/editor-model split saves tokens, with the caveat that it is dormant.",
+  "Update all model references to the runtime-authoritative IDs (claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5, claude-haiku-4-5-20251001) or to Claude Code aliases; remove claude-sonnet-4-6 and claude-opus-4-8 from router/agents.yaml and the IDE config."
+ ],
+ "open_questions": [
+  "Haiku ID: the runtime says claude-haiku-4-5-20251001 but Claude Code docs list claude-haiku-5-5 and resolve `haiku` to Haiku 5.5 on the Anthropic API; confirm which is available on the owner's account before pinning.",
+  "Codex CLI wire_api: official docs (developers.openai.com) were unreachable from this sandbox; third-party sources conflict on whether wire_api = \"chat\" is still accepted for custom Ollama providers or only \"responses\". Verify in the installed codex version before relying on Codex with Ollama.",
+  "Goose lead/worker mode: a goose blog says it was removed in favour of a planner model, but the env-var reference does not list GOOSE_PLANNER_* either; confirm the current multi-model mechanism in goose v1.56 if Goose is adopted.",
+  "LiteLLM: the config.yaml reference and license text were unreachable; confirm the current license terms and verify that the /messages (Anthropic-format) endpoint supports the features Claude Code sends (anthropic-beta forwarding, adaptive thinking, cache_control) if Claude Code is ever routed through it for cost tracking.",
+  "Open WebUI's latest release notes did not mention MCP changes; confirm in the running v0.12.x instance that the External Tool Servers MCP type and Apps in Channels are enabled and whether a user-level (non-admin) MCP connection exists.",
+  "Cline subagents: docs do not state whether spawned subagents can use a cheaper model than the parent; test in CLI v3.0.x.",
+  "Kilo Code's VS Code extension provenance (Roo/Cline fork vs new code) is not stated in the README; only the CLI's OpenCode lineage is confirmed.",
+  "OpenHands Agent Canvas LLM configuration (env names, LiteLLM prefixes) could not be fetched; verify before choosing it as the orchestrator shell.",
+  "Hardware fit (which local models the RTX 3060 12GB can run with 16k-32k num_ctx for reliable tool calling in OpenCode/Cline) was out of scope here and needs a separate check."
+ ]
+}

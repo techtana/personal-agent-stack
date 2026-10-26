@@ -1,0 +1,30 @@
+# GENERATED from agents/devops.yaml by `uv run scripts/stack.py build`. Edit the YAML, not this file.
+description: DevOps Engineer regression gate (local tier via LiteLLM)
+prompts:
+- file://prompt.json
+providers:
+- id: openai:chat:devops-local
+  label: local
+  config:
+    apiBaseUrl: http://127.0.0.1:4000/v1
+    apiKeyEnvar: LITELLM_MASTER_KEY
+    max_tokens: 1500
+tests:
+- description: dockerfile-nonroot
+  vars:
+    prompt: Write a production Dockerfile for a FastAPI app in ./app with requirements.txt.
+  assert:
+  - type: regex
+    value: (?i:FROM .* AS )
+  - type: regex
+    value: (?i:\nUSER )
+  - type: regex
+    value: (?i:HEALTHCHECK)
+- description: pinned-actions
+  vars:
+    prompt: Write a GitHub Actions workflow that runs pytest on push for Python 3.12.
+  assert:
+  - type: regex
+    value: actions/checkout@([0-9a-f]{40}|v[0-9])
+  - type: icontains
+    value: pytest

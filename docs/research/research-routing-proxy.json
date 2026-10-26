@@ -1,0 +1,204 @@
+{
+ "topic": "Gateway/routing layer for a mixed local (Ollama, RTX 3060 12GB) + cloud (Anthropic) coding-agent stack, October 2026: LiteLLM proxy in depth, alternatives (RouteLLM, semantic-router, Portkey, Bifrost, Kong, Arch/Plano, Ollama native), and routing patterns",
+ "summary": "Recommendation: replace the hand-written FastAPI router (router/main.py: keyword + 800-token heuristic, no tool calling, no /v1/messages, OpenAI-only) with a single LiteLLM proxy container as the one component that decides local vs cloud. Verified directly in the LiteLLM source at v1.108.0 (commit 5603724, 2026-10-24): (a) `ollama_chat/` supports tools and `num_ctx`; `ollama/` (the /api/generate path) does NOT accept `tools`; (b) the proxy's native `/v1/messages` + `/v1/messages/count_tokens` bridge any non-Anthropic deployment through `litellm.acompletion` with tools preserved, so Claude Code (ANTHROPIC_BASE_URL) and the Anthropic SDK can target local models; (c) `CustomLogger.async_pre_call_hook` returns a modified dict the proxy swaps in, so model rewriting is supported; (d) more importantly LiteLLM now ships a first-class `auto_router/complexity_router` deployment type with tier ladders, rule-based (<1 ms, offline) classification, optional LLM/`heuristic_first`/`hybrid` classifiers that can use a local Ollama model, keyword escalation, `plan_mode_min_tier`, session affinity, `enable_context_window_escalation`, and `stall_escalation_enabled` (bumps a tier when a weak model loops on the same tool call) — plus a `RoutingPlugin` protocol and a Thompson-sampling `adaptive_router` (needs Postgres) for the self-developing requirement. Routing decisions are logged (`StandardLoggingRoutingDecision`), spend is tracked, Langfuse/OTel/Prometheus callbacks are built in, Redis/semantic caching is built in. Alternatives are weaker for this use case: RouteLLM is dormant and needs an OpenAI embedding key; semantic-router is an intent (not difficulty) router and is already embedded in LiteLLM's `auto_router`; Portkey OSS conditional routing is metadata-only; Bifrost is a fast Go gateway with Ollama+Anthropic and per-request fallbacks but no documented custom routing logic in OSS; Kong semantic routing is Enterprise per secondary sources; Arch was renamed Plano and routes via a 4B model (heavy next to coder models on 12 GB); Ollama native has Anthropic-compat with tools (no tool_choice) and `ollama launch claude` but no routing. Critical cost caveat from Anthropic's own docs: when Claude Code is pointed at a gateway with a credential variable, the claude.ai subscription no longer applies and traffic is billed per token — so route Claude Code through the gateway only for local/mixed work, keep subscription sessions direct. Signals to use: task type via per-department alias/tier ladder, context size via token count + context-window escalation, tool-loop depth via stall escalation, prior failures via fallbacks/cooldown + stall counter, user override via explicit `local-*`/`cloud-*` aliases or escalation keywords. Tunability: everything lives in one config.yaml (weights also settable via API/dashboard); self-improvement = nightly job over routing-decision + spend logs that proposes tier-boundary/keyword/model changes, graduating to adaptive_router once Postgres is added. Repo's `claude-sonnet-4-6`/`claude-opus-4-8` IDs are stale; current ladder: Haiku (cheap cloud), `claude-sonnet-5-5` ($2/$10), `claude-opus-5-5` ($4/$20).",
+ "findings": [
+  {
+   "claim": "LiteLLM's `ollama_chat/` provider forwards OpenAI `tools` natively to Ollama /api/chat and maps Ollama `tool_calls` back with finish_reason `tool_calls` (including streaming), whereas the `ollama/` provider (/api/generate) does not list `tools` among its supported OpenAI params.",
+   "evidence": "litellm/llms/ollama/chat/transformation.py: get_supported_openai_params includes \"tools\"; comment 'Ollama 0.4+ supports native tool calling - pass tools directly'; response path sets finish_reason=\"tool_calls\" when _message.tool_calls; streaming path reads chunk[\"message\"][\"tool_calls\"]. litellm/llms/ollama/completion/transformation.py get_supported_openai_params = [max_tokens, stream, top_p, temperature, seed, frequency_penalty, stop, response_format, max_completion_tokens, reasoning_effort] (no tools). Also OllamaChatConfig exposes num_ctx, keep_alive, think params. Verified at v1.108.0, commit 560372456eff83f4d57e4247b41d04111514b3b8.",
+   "source_url": "https://github.com/BerriAI/litellm/tree/main/litellm/llms/ollama",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Agents need tool calling; every local deployment in config.yaml must be written as ollama_chat/<model>, not ollama/<model>, or tools silently vanish.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "LiteLLM proxy serves a native Anthropic-format `POST /v1/messages` and `POST /v1/messages/count_tokens`; for providers without a native Anthropic-messages config (e.g. Ollama) it bridges through `LiteLLMMessagesToCompletionTransformationHandler` -> `litellm.acompletion(**kwargs)` with `tools` carried through, so Claude Code / Anthropic SDK clients can call local models with tool use.",
+   "evidence": "litellm/proxy/anthropic_endpoints/endpoints.py registers /v1/messages and /v1/messages/count_tokens; litellm/llms/anthropic/pass_through/messages/handler.py checks ProviderConfigManager.get_provider_anthropic_messages_config() and when native_config is None uses the adapters handler; litellm/llms/anthropic/pass_through/adapters/handler.py async_anthropic_messages_handler(..., tools=...) builds request_data[\"tools\"]=tools and awaits litellm.acompletion. Open issue #24091 (LiteLLM 1.82.4, ollama_chat/qwen3.5:9b) reported tool calls dropped from Ollama responses; the 1.108 code path maps them, but this must be smoke-tested.",
+   "source_url": "https://github.com/BerriAI/litellm/tree/main/litellm/proxy/anthropic_endpoints",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "If the /v1/messages->ollama_chat tool round-trip fails, Claude Code cannot drive local models through LiteLLM and the design must fall back to Ollama's own /v1/messages for Claude Code with LiteLLM only in front of OpenAI-format clients.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "A proxy `CustomLogger.async_pre_call_hook(user_api_key_dict, cache, data, call_type)` may return a modified dict, which the proxy substitutes for the request data before routing (so it can rewrite `data[\"model\"]`), return a str to reject with a message, or raise.",
+   "evidence": "litellm/integrations/custom_logger.py: signature returns `Exception | str | dict | None` with comment 'return a modified dictionary for passing into litellm'; litellm/proxy/utils.py pre_call_hook: `response = await _callback.async_pre_call_hook(...)`; `if response is not None: data = await self.process_pre_call_hook_response(response=response, data=data, call_type=call_type)`. Registered via `litellm_settings.callbacks: custom_callbacks.proxy_handler_instance`.",
+   "source_url": "https://github.com/BerriAI/litellm/blob/main/litellm/integrations/custom_logger.py",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "This is the escape hatch for any custom routing rule (department-specific signals, prior-failure counters) not covered by the built-in complexity router.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "LiteLLM ships a built-in `auto_router/complexity_router` deployment type: rule-based 7-dimension scoring (<1 ms, offline) into SIMPLE/MEDIUM/COMPLEX/REASONING tiers mapped to model groups; classifier_type options heuristic | heuristic_v2 | llm | heuristic_first | hybrid | capability | oss_classifier | custom (ClassifierPlugin); plus keyword_tier_rules, escalation_keywords, plan_mode_min_tier, session_affinity(_ttl_seconds), enable_context_window_escalation(+buffer), stall_escalation_enabled/window/repeat_threshold, modality_routing, route_housekeeping_to_cheapest_tier, tier_labels/tier_definitions, and `plugins` (RoutingPlugin dotted paths).",
+   "evidence": "litellm/router_strategy/complexity_router/README.md (Basic Configuration: `model: auto_router/complexity_router` with `complexity_router_config.tiers`; sections 'Mid-task stall escalation', 'Session pin retention', 'Heuristic-first chaining', 'Hybrid', 'Capability forecasting' adapted from NVIDIA NeMo Switchyard); config.py field list; proxy_server.py resolve_routing_plugins() resolves `complexity_router_config[\"plugins\"]`; types/router.py RoutingPlugin/ClassifierPlugin protocols and RoutingContext (raw_messages, structured_messages, candidate_models, metadata, signals) which notes support for chat completions, Anthropic /v1/messages and Responses API surfaces.",
+   "source_url": "https://github.com/BerriAI/litellm/tree/main/litellm/router_strategy/complexity_router",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "This removes the need for a custom router: tier ladders per department, context escalation, stall escalation and user keyword override are all config, not code.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "LiteLLM's `auto_router/adaptive_router` learns per (request_type, model) Beta-bandit quality posteriors from post-call regex/tool-call signals and user feedback, weighted against cost, and persists to Postgres every ~10 s; callers can force a floor with header `x-litellm-min-quality-tier`. It is v0 with known limits (no latency term, English-biased regex signals, unvalidated delta mapping).",
+   "evidence": "litellm/router_strategy/adaptive_router/README.md: config example `model: auto_router/adaptive_router`, `adaptive_router_preferences.quality_tier/strengths` on model_info, weights quality 0.7/cost 0.3; 'Updates are batched in-memory and flushed to Postgres'; 'Known v0 limitations'.",
+   "source_url": "https://github.com/BerriAI/litellm/tree/main/litellm/router_strategy/adaptive_router",
+   "confidence": "high",
+   "load_bearing": false,
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "LiteLLM router_settings supports routing_strategy in {simple-shuffle (default), least-busy, usage-based-routing(-v2), latency-based-routing, cost-based-routing}, plus fallbacks, default_fallbacks, context_window_fallbacks, content_policy_fallbacks, num_retries, allowed_fails, cooldown_time, model_group_alias (with hidden flag), enable_tag_filtering (tag-based routing), and a CustomRoutingStrategyBase hook.",
+   "evidence": "litellm/types/router.py RoutingStrategy enum values; litellm/router.py __init__ params (lines ~1205-1233) and router_strategy/ directory: lowest_cost.py, lowest_latency.py, least_busy.py, tag_based_routing.py, budget_limiter.py (Redis-backed provider budgets). Cost-based routing ranks by model_prices_and_context_window.json or custom input_cost_per_token on model_info.",
+   "source_url": "https://github.com/BerriAI/litellm/blob/main/litellm/router.py",
+   "confidence": "high",
+   "load_bearing": false,
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Virtual keys, per-key/team budgets and spend tracking in the LiteLLM proxy require DATABASE_URL (Postgres); without a DB the proxy runs with master_key only, budgets are not enforced, and router-level provider budgets rely on Redis. Logging callbacks (Langfuse, langfuse_otel, otel, prometheus, mlflow, opik, arize, datadog...) and caching (local, redis, redis-semantic, qdrant-semantic, s3, disk) work without Postgres.",
+   "evidence": "proxy_server.py warning '...budget will NOT be enforced and requests will never be blocked. Set DATABASE_URL'; proxy/auth/user_api_key_auth.py 'No connected db.'; router_strategy/budget_limiter.py imports RedisCache; caching/caching.py docstring lists cache types and similarity_threshold for semantic; litellm/__init__.py _custom_logger_compatible_callbacks_literal includes prometheus, otel, langfuse, langfuse_otel, mlflow, opik, arize. Repo docker-compose.yml bundles postgres:16 and prom/prometheus.",
+   "source_url": "https://github.com/BerriAI/litellm/blob/main/docker-compose.yml",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Decides whether the stack starts with one container (no DB) or three (LiteLLM+Postgres+Redis); the self-developing loop (adaptive_router, spend history) needs Postgres eventually.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "LiteLLM gateway-side Anthropic prompt caching is opt-in (LITELLM_ENABLE_ANTHROPIC_PROMPT_CACHING / litellm_settings) with optional 5m/1h TTL; when the client already sends cache_control markers LiteLLM leaves them in place. Claude Code's own cache_control markers (on system blocks and mid-conversation system entries) must be forwarded unchanged and the `system` array must not be reshaped/stringified or the attribution-block strip and caching both break.",
+   "evidence": "litellm/__init__.py: enable_anthropic_prompt_caching env flag, anthropic_prompt_caching_ttl Literal['5m','1h'], anthropic_cache_control_hook; docs.litellm.ai prompt_caching page (via search): 'If the request already carries its own cache_control, LiteLLM stands down'. Claude Code gateway compatibility guide: 'Forward cache_control unchanged wherever it appears, and don't convert block-form system or message content to plain strings'; attribution block is stable per conversation from v2.1.181 so gateway-side caches work; set CLAUDE_CODE_ATTRIBUTION_HEADER=0 only if the gateway must reshape system content.",
+   "source_url": "https://code.claude.com/docs/en/llm-gateway-protocol",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Prompt caching is the single biggest cloud cost lever for agentic loops; a gateway that breaks it can double Anthropic spend.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "When Claude Code is pointed at a gateway with ANTHROPIC_BASE_URL plus a credential variable (ANTHROPIC_AUTH_TOKEN / apiKeyHelper), requests no longer use the claude.ai subscription and are billed per token to the forwarded credential; setting only ANTHROPIC_BASE_URL keeps the subscription login active, but then the gateway must forward the OAuth capability in anthropic-beta to Anthropic.",
+   "evidence": "code.claude.com 'Other LLM gateways' -> 'Subscriptions and gateways': 'While a gateway credential variable or apiKeyHelper is active, requests carry that credential in place of a developer's claude.ai subscription login, and the subscription's usage limits don't apply... billed per token'. Gateway protocol page: forward anthropic-beta verbatim; stripping the OAuth value fails with 401.",
+   "source_url": "https://code.claude.com/docs/en/llm-gateway",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "If the owner has a Claude subscription, routing all Claude Code traffic through LiteLLM with an API key would increase cost, inverting the goal; the architecture must keep subscription sessions direct and use the gateway for local/mixed sessions.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Claude Code treats an ANTHROPIC_BASE_URL gateway as an Anthropic endpoint and sends the full feature set (adaptive thinking, output_config.effort, context_management, defer_loading/tool_reference, mid-conversation role:system messages, cache_control). A gateway must stream event-by-event (no buffering), forward SSE pings, return retry-after as integer seconds, forward error bodies unmodified, and may optionally expose /v1/models for discovery (CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1; only ids containing 'claude' or 'anthropic' are listed). Gateway hint headers (x-claude-code-request-class main|subagent|compaction|auxiliary, x-claude-code-agent-type, x-claude-code-prev-tool-durations, x-claude-code-prompt-id) are sent to a custom base URL only when CLAUDE_CODE_GATEWAY_HINT_HEADERS=1.",
+   "evidence": "Claude Code gateway compatibility guide sections 'Feature pass-through', 'Streaming', 'Response headers', 'Gateway hint headers', 'Model discovery'. Unrecognized model ids get `thinking: {type: adaptive}` and role:system messages; Claude Code auto-retries without them on 400, or CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 reduces the surface.",
+   "source_url": "https://code.claude.com/docs/en/llm-gateway-protocol",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "The request-class/agent-type hint headers are the cleanest 'task type' and 'tool-loop' signals for the router (e.g. send compaction/auxiliary to local or Haiku), and local models behind /v1/messages must tolerate or have the gateway strip thinking/effort fields.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Ollama natively exposes an Anthropic-compatible /v1/messages (messages, streaming, system, tools + tool results, thinking, base64 images, stop_sequences, temperature/top_p/top_k) but NOT tool_choice, metadata or URL images; Claude Code can target it with ANTHROPIC_AUTH_TOKEN=ollama, ANTHROPIC_API_KEY=\"\", ANTHROPIC_BASE_URL=http://localhost:11434 or `ollama launch claude`; Ollama recommends a 64k+ context window and also offers cloud models (e.g. gemma4:cloud, glm-5.3-flash) through the same local daemon.",
+   "evidence": "ollama/ollama docs/api/anthropic-compatibility.mdx feature table; docs/integrations/claude-code.mdx ('ollama launch claude', 'set a 64k+ context window', cloud models must support tools). Ollama blog: Anthropic Messages compatibility arrived in v0.14.0. OpenAI-compat page: /v1/chat/completions supports tools, response_format, reasoning_effort; not tool_choice/n/logprobs; /v1/responses non-stateful since v0.13.3; context length cannot be set via the OpenAI API (use a Modelfile num_ctx).",
+   "source_url": "https://github.com/ollama/ollama/blob/main/docs/api/anthropic-compatibility.mdx",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Gives a zero-dependency fallback path for Claude Code -> local models if the LiteLLM bridge disappoints, and shows Ollama alone cannot route (no cross-provider logic), so a gateway is still needed for mixed traffic.",
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "LiteLLM's own docker-compose still pins `docker.litellm.ai/berriai/litellm:main-stable` as of 2026-10-24, but LiteLLM announced (May 2026) that the legacy main-stable tag would stop being published around 2026-06-30 in favour of `:latest` as the rolling stable pointer and versioned tags for reproducible pins; the newest release notes (v1.99.1) say latest and main-stable both pointed to that release. Current source version is 1.108.0.",
+   "evidence": "Clone of BerriAI/litellm docker-compose.yml line 7; pyproject.toml version = \"1.108.0\"; docs.litellm.ai blog (tags/docker) and newreleases.io v1.99.1 notes via web search. Exact tag naming on ghcr.io could not be verified (docs.litellm.ai is blocked from this sandbox).",
+   "source_url": "https://docs.litellm.ai/blog/tags/docker",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Current Anthropic pricing (claude-api skill table cached 2026-10-06, first-party API): claude-opus-5-5 $4/$20 per MTok (cache reads $0.20), claude-sonnet-5-5 $2/$10, claude-haiku-5-5 $0.10/$0.50 (<=100K prompts), claude-haiku-4-5 $1/$5, claude-fable-5-1 $10/$50. Opus 5.5 / Sonnet 5.5 / Fable 5.1 reject disabled thinking and forced tool_choice any/tool, and run the preserved-thinking history-edit check; prefill is removed. The repo's claude-sonnet-4-6 ($3/$15) and claude-opus-4-8 ($5/$25) are older and pricier than their 5.5 successors.",
+   "evidence": "claude-api skill 'Current Models' table and per-model sections; repo grep: router/agents.yaml cloud_model: claude-sonnet-4-6 (x5) and claude-opus-4-8 (x1), README.md table. The task brief's runtime list names claude-haiku-4-5-20251001 as Haiku while the skill and Claude Code docs reference Haiku 5.5 — flagged as an open question.",
+   "source_url": "https://platform.claude.com/docs/en/about-claude/models/overview",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "Model ladder and cost math (local -> Haiku -> Sonnet 5.5 -> Opus 5.5) depend on these IDs/prices; a gateway that passes `tool_choice: any` or `thinking: disabled` to 5.5 models will 400.",
+   "source_date": "2026-10-06"
+  },
+  {
+   "claim": "RouteLLM (lm-sys) self-hosts as `python -m routellm.openai_server --routers mf --strong-model X --weak-model Y` with model name `router-mf-<threshold>` and LiteLLM-style model strings for strong/weak (Ollama allowed via openai/ prefix + --base-url), but the mf and sw_ranking routers still require an OPENAI_API_KEY for embeddings, the repo shows no releases and ~175 commits (5.6k stars, Apache-2.0), i.e. effectively dormant.",
+   "evidence": "lm-sys/RouteLLM README: 'an OPENAI_API_KEY will currently still be required to generate embeddings'; calibrate_threshold command; GitHub page shows empty Releases.",
+   "source_url": "https://github.com/lm-sys/RouteLLM",
+   "confidence": "high",
+   "load_bearing": false,
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "aurelio-labs/semantic-router (1.x line) is an intent router: Routes defined by example utterances, embedded once by a local FastEmbedEncoder (e.g. BAAI/bge-small-en-v1.5, no API key) in `IndexedRouter`, returns route.name or None under `confidence_threshold`, tunable with router.fit(X, y). LiteLLM's `auto_router/*` wraps this same library via LiteLLMRouterEncoder (embedding_model can be any LiteLLM embedding deployment, e.g. an Ollama embedding model), at ~100-500 ms per decision.",
+   "evidence": "semantic-router README (install `semantic-router[fastembed]`, IndexedRouter, confidence_threshold, fit); litellm/router_strategy/auto_router/litellm_encoder.py and auto_router.py (embedding_model, default_model, auto_router_config_path); complexity_router README comparison table (auto_router: semantic embedding, 100-500ms, requires utterance examples).",
+   "source_url": "https://github.com/aurelio-labs/semantic-router",
+   "confidence": "high",
+   "load_bearing": false,
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Portkey AI Gateway OSS (npx @portkey-ai/gateway, port 8787) supports Ollama and Anthropic providers, fallback/loadbalance/conditional strategies with $eq/$ne/$in/$nin/$regex/$gt/$gte/$lt/$lte and nested $and/$or, but current docs describe conditional routing on request *metadata* (params-based routing such as token count or tool support is listed as 'soon'), and semantic caching, logging/tracing and prompt management are hosted/enterprise features.",
+   "evidence": "Portkey-AI/gateway README feature footnotes ('Available on the hosted app', semantic caching marked hosted/enterprise); conditional-routing docs via search: 'Soon, Portkey will also support routing based on other critical parameters like input character count, input token count, prompt type, tool support'.",
+   "source_url": "https://github.com/Portkey-AI/gateway",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Bifrost (maximhq, Apache-2.0, Go) runs as `npx -y @maximhq/bifrost` or `docker run -p 8080:8080 maximhq/bifrost`, supports 23+ providers including Ollama (custom base_url, allow_private_network) and Anthropic, exposes an Anthropic drop-in at /anthropic and an OpenAI-compatible API, with fallbacks specified per request (ordered provider/model list), semantic caching, virtual keys/budgets, MCP, Prometheus/OTel; it claims ~11 µs overhead at 5k RPS. Its README documents custom plugins as middleware (enterprise docs) but no OSS mechanism for content-based routing decisions.",
+   "evidence": "maximhq/bifrost README; provider-configuration doc (ollama-local example with network_config.base_url and allow_private_network: true); getmaxim.ai fallback article (fallbacks array of provider/model in request body).",
+   "source_url": "https://github.com/maximhq/bifrost",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Kong's semantic/advanced balancing lives in the `ai-proxy-advanced` plugin, which secondary comparisons (API7, Folio3) place in the Enterprise/Konnect tier; Kong Gateway core is Apache-2.0. Kong's own licensing page could not be fetched from this sandbox.",
+   "evidence": "developer.konghq.com how-to states AI Proxy Advanced can route by semantic similarity; api7.ai comparisons list semantic routing as Enterprise (AI Proxy Advanced); folio3 says advanced plugins need Konnect or Enterprise license.",
+   "source_url": "https://developer.konghq.com/how-to/set-up-ai-proxy-advanced-with-openai/",
+   "confidence": "low",
+   "load_bearing": false,
+   "source_date": "2026"
+  },
+  {
+   "claim": "katanemo/archgw has been renamed Plano (`planoai up config.yaml`, Apache-2.0, ~7.1k stars): an Envoy/Rust 'AI-native proxy and data plane for agentic apps' whose preference routing (`router: plano_orchestrator_v1`) is powered by a 4B-parameter routing model, hosted free by Katanemo or runnable locally; the README no longer mentions Arch-Router-1.5B or Ollama provider config.",
+   "evidence": "github.com/katanemo/plano README (model_providers with provider/model + access_key, listeners with router, agents with descriptions; leftover archgw.code-workspace); HN/HF material on the earlier Arch-Router-1.5B (arXiv 2506.16655, ~50 ms/decision).",
+   "source_url": "https://github.com/katanemo/plano",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2026-10-24"
+  },
+  {
+   "claim": "Cascade pattern evidence: a 2026 arXiv paper on local-cloud code-completion cascading uses the local model's mean token probability over its first N tokens as the escalation signal; practitioner analyses warn LLM self-reported confidence is poorly calibrated and recommend 'route first (coarse), cascade within tier', with >30% escalation rate meaning the cheap tier is over-routed. Aider's architect/editor split (strong planner, cheap local editor via --architect --editor-model ollama/...) is documented but Aider's own benchmark found only modest gains at high latency when the architect is itself a local reasoning model.",
+   "evidence": "arXiv 2603.05974 (Balancing Latency and Accuracy of Code Completion via Local-Cloud Model Cascading); tianpan.co 2025-11-03 'LLM Routing and Model Cascades'; aider.chat 2024-12-03 QwQ post ('fairly high cost in terms of latency').",
+   "source_url": "https://arxiv.org/abs/2603.05974",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2026-03"
+  },
+  {
+   "claim": "The existing repo router (router/main.py) is a 374-line FastAPI proxy that only speaks /v1/chat/completions, drops `tools`/`tool_choice` entirely (Pydantic ChatCompletionRequest has only model/messages/stream/temperature/max_tokens and Message.content is a str), routes cloud on keyword match or >800 estimated tokens of the last user message only, injects agents.yaml system prompts, and uses stale claude-sonnet-4-6 / claude-opus-4-8 IDs; docker-compose runs ollama + router + open-webui.",
+   "evidence": "Read of /home/user/personal-agent-stack/router/main.py (classify_complexity, ChatCompletionRequest), /home/user/personal-agent-stack/router/agents.yaml cloud_model lines 6/50/96/149/193/255, /home/user/personal-agent-stack/infrastructure/docker-compose.yml.",
+   "source_url": "file:///home/user/personal-agent-stack/router/main.py",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Confirms the custom router cannot serve tool-using agents and should be replaced rather than extended.",
+   "source_date": "2026-10-24"
+  }
+ ],
+ "recommendations": [
+  "Make LiteLLM proxy (one container, `ghcr.io`/`docker.litellm.ai` berriai/litellm pinned to a versioned tag at or above 1.108; verify tag name on the releases page) the single routing authority. Retire router/main.py; keep Ollama Modelfiles only for num_ctx/keep_alive, or better set `num_ctx` per `ollama_chat/` deployment in litellm_params and keep system prompts out of the gateway.",
+  "Minimal config.yaml shape: model_list with `ollama_chat/qwen2.5-coder:7b|14b`, `ollama_chat/deepseek-r1:14b` (api_base http://ollama:11434, num_ctx 32768+), `anthropic/claude-haiku-*`, `anthropic/claude-sonnet-5-5`, `anthropic/claude-opus-5-5` (api_key os.environ/ANTHROPIC_API_KEY); one `auto_router/complexity_router` deployment per department (e.g. `app-dev`, `testing`, `security`, `devops`, `code-review`, `docs`) whose `tiers` map SIMPLE->local 7b, MEDIUM->local 14b, COMPLEX->sonnet-5-5, REASONING->opus-5-5 (security/code-review ladders skew higher); `router_settings`: num_retries 1, allowed_fails 2, cooldown_time 30, context_window_fallbacks [{local-14b: [sonnet]}], default_fallbacks [sonnet]; `general_settings.master_key`; `litellm_settings`: callbacks [langfuse or otel], cache {type: redis} optional, drop_params true. Start without Postgres; add Postgres (+ virtual keys, budgets, adaptive_router) in phase 2.",
+  "Routing signals, all expressible in complexity_router_config: task type = the department alias the client picks (and per-tier litellm_params overrides such as reasoning_effort low on cloud tiers); context size = enable_context_window_escalation with context_window_escalation_buffer so prompts near the local num_ctx jump to cloud; tool-loop depth / prior failures = stall_escalation_enabled with stall_escalation_window ~6 and repeat_threshold ~2 plus router fallbacks/cooldown; user override = explicit `local-*`/`cloud-*` model aliases (model_group_alias, hidden) and escalation_keywords such as 'escalate', 'use claude'; plan/architecture = plan_mode_min_tier COMPLEX so planning goes to Sonnet/Opus and edits stay local (architect/editor pattern). Keep classifier_type: heuristic first; graduate to heuristic_first or hybrid with classifier_llm_config.model = a small local Ollama model (or Haiku) only after measuring the escalation rate.",
+  "Self-developing loop: enable routing-decision logging (StandardLoggingRoutingDecision via Langfuse/OTel callback) and spend logging; run a nightly local-model job that reads yesterday's decisions, escalations, stall events and user escalation keywords and proposes diffs to tier_boundaries, keyword lists and per-department ladders as a PR to config.yaml (human-approved, hot-reloadable). Once Postgres exists, switch chatty departments (docs, testing) to `auto_router/adaptive_router` with quality_tier metadata on each deployment and x-litellm-min-quality-tier as the user floor; treat its v0 regex signals as noisy and prefer verifier-based signals (tests passed, lint clean, diff applied) emitted by the harness as feedback.",
+  "Claude Code integration: do NOT route subscription Claude Code sessions through the gateway with an API-key credential (per-token billing replaces the subscription). Use two profiles: (a) direct Anthropic for heavy cloud sessions; (b) `ANTHROPIC_BASE_URL=http://localhost:4000 ANTHROPIC_AUTH_TOKEN=<litellm key>` with ANTHROPIC_MODEL=<department alias> for local/mixed sessions, CLAUDE_CODE_GATEWAY_HINT_HEADERS=1 so the gateway can send `x-claude-code-request-class: compaction|auxiliary|subagent` to local/Haiku, and CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 if local models choke on beta fields. Smoke-test a tool round-trip (Read/Edit) through LiteLLM /v1/messages -> ollama_chat before relying on it; fallback is Ollama's own /v1/messages (`ollama launch claude`).",
+  "Cost hygiene on the cloud tiers: forward cache_control and the system array unchanged (LiteLLM does by default); set output_config.effort low/medium on Sonnet/Opus tiers for routine work via per-tier litellm_params; never send tool_choice any/tool or thinking disabled to 5.5 models (LiteLLM drop_params); use Haiku (cheapest cloud) as the 'cheap cloud reviewer' for the 'local first draft, cloud review' pattern in code-review/testing; avoid speculative parallel races (they double spend and compete for 12 GB VRAM). Keep OLLAMA_MAX_LOADED_MODELS at 2 (7b coder + one 14b) and avoid co-loading an LLM classifier on the GPU; the heuristic classifier is free.",
+  "Compose multiple OSS tools rather than one monolith: Ollama (serving), LiteLLM (routing/cost/observability), Open WebUI + Continue/aider + Claude Code (intuitive front ends all pointing at the same department aliases), Langfuse or OTel+Prometheus (feedback data), optional Redis (exact/semantic cache). Reserve Bifrost as a drop-in replacement if LiteLLM's Python latency becomes a problem; skip RouteLLM, Kong Enterprise and Plano for this hardware/scale.",
+  "Update stale references: replace claude-sonnet-4-6 -> claude-sonnet-5-5 and claude-opus-4-8 -> claude-opus-5-5 in agents.yaml/README; confirm the Haiku ID (claude-haiku-4-5-20251001 per the runtime list vs claude-haiku-5-5 per Anthropic docs) by calling GET /v1/models with the owner's key before pinning."
+ ],
+ "open_questions": [
+  "Does the owner use Claude Code on a claude.ai subscription (Max/Pro) or an API key? This decides whether Claude Code should ever be routed through the gateway for cloud work (subscription billing is bypassed when a gateway credential variable is set).",
+  "Haiku model ID conflict: the runtime list names claude-haiku-4-5-20251001 while the claude-api skill (cached 2026-10-06) and Claude Code docs reference claude-haiku-5-5 at $0.10/$0.50; verify via /v1/models with the owner's key.",
+  "Empirical check needed: LiteLLM 1.108 /v1/messages -> ollama_chat/qwen2.5-coder tool-call round trip with Claude Code (issue #24091 reported dropped tool calls on 1.82.4); also whether complexity_router's stall/plan-mode features fire on the /v1/messages surface (RoutingContext says the surface is supported, but no end-to-end test was run here).",
+  "Exact current LiteLLM image tag convention (main-stable retirement vs :latest vs versioned ghcr tags) could not be verified because docs.litellm.ai is blocked from this sandbox; confirm on the GitHub releases page before pinning.",
+  "VRAM budget: can a 14b Q4 coder + 7b coder + embedding model co-reside in 12 GB with 32k+ context, or must the ladder be 7b-only locally with 14b swapped in on demand? Affects whether MEDIUM tier should be local or Haiku.",
+  "Which front end is the primary 'intuitive' surface (Open WebUI, Continue, aider, Claude Code)? Each needs the department aliases wired, and only Claude Code emits gateway hint headers.",
+  "Kong ai-proxy-advanced licensing and Bifrost custom-routing capabilities were only confirmed via secondary sources; both are non-recommended so low impact, but recheck if either becomes a candidate."
+ ]
+}

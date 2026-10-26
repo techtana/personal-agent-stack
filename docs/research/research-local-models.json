@@ -1,0 +1,212 @@
+{
+ "topic": "Best open-weight coding/agentic models for an RTX 3060 12GB (with CPU/RAM MoE offload) as of 2026-10-24, and a 3-tier local lineup for the personal-agent-stack router",
+ "summary": "Research caveat: from this sandbox, ollama.com, huggingface.co, unsloth.ai and most primary hosts are blocked (proxy CONNECT 403 / DNS fail), so every fact below comes from web-search snippets of primary sources or from secondary write-ups quoting them; exact Ollama tags and sizes are marked medium confidence and must be verified with `ollama pull` on the owner's machine.\n\nThe landscape has moved decisively since the repo's current lineup (qwen2.5-coder 7b/14b, deepseek-r1:14b, all dense 2024-25 models). The dominant pattern for 12GB cards in Oct 2026 is a ~30-35B MoE with ~3B active params, run with llama.cpp's expert-offload flag (`--n-cpu-moe N`) so attention/shared weights sit in VRAM and experts sit in system RAM. Measured on an RTX 3060 12GB + 32GB RAM, Qwen3.6-35B-A3B (Apr 2026, Apache-2.0, vendor SWE-bench Verified 73.4) decodes at ~39-47 tok/s with ~9.8GB VRAM and 32k-150k context, i.e. faster than the dense 14B models the repo uses today and roughly 20+ points better on agentic coding benchmarks. Dense 27B models (Qwen3.6-27B 77.2 SWE-V, Qwen3.8-27B) are the best small open coders on paper but do not fit at Q4 (17-18GB) and collapse to ~2 tok/s when offloaded, so they are not viable on this card. No official Qwen3.6/3.8 small (<=9B) or new Qwen3-Coder small release exists; the newest small dense options are Qwen3.5-9B (Mar 2026) and Gemma 4 12B (Jun 2026), both of which fit fully with 32k context but have documented tool-calling flakiness in agent loops.\n\nCritical architectural implication: Ollama still has no expert-aware offload (`--n-cpu-moe` PR #12333 unmerged, issue #11772 open; only layer-granular `num_gpu`), so a 20-24GB MoE on 12GB under Ollama falls back to a slow layer split. The workhorse/reasoning tier should therefore be served by llama.cpp `llama-server` (optionally behind llama-swap) exposing an OpenAI-compatible endpoint, while Ollama remains the convenient host for small models that fit entirely (FIM model, Qwen3.5-9B/Gemma 4 12B fallbacks) and for Open WebUI integration.\n\nRecommended lineup: (1) FIM: `qwen2.5-coder:1.5b-base` on Ollama (~1GB, always resident; Continue's documented default). (2) Workhorse chat+agent: Qwen3.6-35B-A3B UD-Q4_K_XL via llama.cpp (`-ngl 99 --n-cpu-moe 18-26 -fa on -np 1 --cache-type-k q8_0 --cache-type-v q8_0 -c 32768+`), non-thinking mode; fallback if the box has <32GB RAM: `qwen3.5:9b` on Ollama. (3) Local-heavy reasoning/review: the same Qwen3.6-35B-A3B weights with thinking enabled and larger context (zero extra VRAM, no model swap), plus `gpt-oss:20b` at reasoning=high (SWE-bench Verified 60.7, Aider 34.2 per OpenAI card; ~30-50 tok/s partially offloaded on a 3060) as a different-family second reviewer. Stretch: Bonsai 2 27B (Prism ML ternary pack of Qwen3.8-27B, 5.95-7.21GB, Sep 2026; needs PrismML's llama.cpp fork, not Ollama), or Qwen3-Coder-Next 80B-A3B if the host has 64GB RAM. Anthropic cloud tiers should map to the authoritative IDs given in the task (claude-sonnet-5-5 balanced, claude-opus-5-5 heavy, claude-haiku-4-5-20251001 cheap), replacing the stale claude-sonnet-4-6/opus-4-8 strings.",
+ "findings": [
+  {
+   "claim": "Qwen3.6-35B-A3B (35B total / 3B active MoE, hybrid Gated-DeltaNet + gated attention, 262K native context, Apache-2.0) was released 2026-04-16 and reports SWE-bench Verified 73.4, SWE-bench Multilingual 67.2, SWE-bench Pro 49.5, Terminal-Bench 2.0 51.5, LiveCodeBench 80.4 (vendor numbers, internal scaffold, temp 1.0 / top_p 0.95).",
+   "evidence": "QwenLM GitHub dates weights to 2026-04-16; multiple write-ups quote the model card (73.4 SWE-V, 67.2 Multilingual, 49.5 Pro); DataLearner/BenchLM aggregate LCB 80.4 and Terminal-Bench 51.5. Model card notes numbers come from an internal bash+file-edit scaffold; third-party reruns often shift 3-8 points.",
+   "source_url": "https://qwen.ai/blog?id=qwen3.6-35b-a3b",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "This is the proposed workhorse and local-heavy model; if its agentic coding quality were much lower the tier design would revert to a dense 9B-14B model.",
+   "source_date": "2026-04-16"
+  },
+  {
+   "claim": "Qwen3.6-35B-A3B runs on an RTX 3060 12GB with 32GB system RAM at roughly 39-47 tok/s decode using llama.cpp expert offload: UD-Q4_K_M/IQ4_XS, `-ngl 99 --n-cpu-moe 18-26`, q8_0 KV cache, `-np 1`, peak ~9.8GB VRAM; one user reports 150K context fitting with these flags, another ~46.8 tok/s at -ncmoe 18 with 32GB DDR4.",
+   "evidence": "smeltcore recipe: 38.9 tok/s, 9.8GB peak VRAM, -ncmoe 24, flat to 8K ctx; Reddit (via sentinel snapshot) llama-bench tg128 ~46.8 t/s pp512 ~914 t/s at -ncmoe 18 -ctk/-ctv q8_0; X post by Doğukan Ürker: ~45 tok/s, 150K ctx, full llama-server command with --n-cpu-moe 26 -np 1 --cache-type-k q8_0. Contrasting SpecPicks estimate of 3-6 tok/s is a calculator estimate, not a measurement.",
+   "source_url": "https://smeltcore.com/recipes/qwen3-6-35b-a3b-on-rtx-3060-38-9-tok-s-from-a-12gb-card-via-moe-expert-cpu-offload/",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Whole tier-2/3 design assumes a ~30-35B MoE is fast on this card via expert offload; if real speed were single-digit tok/s the workhorse would have to be a dense 9B-12B.",
+   "source_date": "2026-05"
+  },
+  {
+   "claim": "Ollama (v0.40.x as of Oct 2026) has no expert-aware MoE offload: `--n-cpu-moe`/tensor-override support was proposed in PR #12333 (num_moe_offload) and not merged, feature request #11772 remains open (last activity 2026-06-05); Ollama only offers layer-granular `num_gpu`, so a 20-24GB MoE on a 12GB card gets a slow layer split.",
+   "evidence": "GitHub ollama/ollama PR #12333 open/unmerged with maintainer comment that no new features go into the old llama engine; issue #11772 'use cpu to offload moe weights' open since 2025-08-07; aliteq write-up 'Ollama has no --n-cpu-moe switch'. A 16GB-card Ollama benchmark shows split models at 21-51 tok/s vs llama.cpp 12GB measurements of 39-47 tok/s for a similar model.",
+   "source_url": "https://github.com/ollama/ollama/pull/12333",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Determines that the MoE workhorse must be served by llama.cpp llama-server (or LM Studio/llama-swap) rather than the existing Ollama container; the router/compose design must add a second inference backend.",
+   "source_date": "2026-06-05"
+  },
+  {
+   "claim": "Ollama tag for Qwen3.6 35B exists in the official library (reported as `qwen3.6:35b-a3b`, ~23-24GB, 256K ctx, tools+vision+thinking) alongside `qwen3.6:27b` (~17GB); the official library lists only 27b and 35b variants.",
+   "evidence": "agenticwire table lists 'qwen3.6 | qwen3.6:35b-a3b | 23GB | 256K | tools, vision, thinking'; locallyuncensored guide lists 24GB; search snippet of ollama.com/library/qwen3.6 states only 27b and 35b variants. Exact tag spelling (`qwen3.6:35b` vs `qwen3.6:35b-a3b`) differs between sources; ollama.com was unreachable from this sandbox.",
+   "source_url": "https://ollama.com/library/qwen3.6",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "If the Ollama tag did not exist, the only way to run the model would be llama.cpp with a HF GGUF (which is the recommended path anyway, but Open WebUI/Continue model lists would differ).",
+   "source_date": "2026-05"
+  },
+  {
+   "claim": "Qwen3.6-27B (dense, Apache-2.0, released 2026-04-22) reports SWE-bench Verified 77.2 but its Q4_K_M GGUF is 16.8-18GB, exceeding 12GB; offloaded on an RTX 3060 it is estimated at ~2 tok/s (dense offload collapses), so it is not viable on this card. Same applies to Qwen3.8-27B (dense, 2026-08-14, SWE-bench Pro 61.7, LiveCodeBench 90.3, `qwen3.8:27b` ~18GB on Ollama).",
+   "evidence": "insiderllm/labellerr: 77.2 SWE-V, Q4_K_M 16.8GB; willitrunai/modelfit estimate 2-2.2 tok/s on 3060 at Q4_K_M, Q2_K still 13.6GB; Reddit anecdote ~3 tok/s dense 27B with 31 layers offloaded on a 5070. Qwen3.8-27B: VentureBeat/yottalabs cite 61.7 SWE-bench Pro, 90.3 LCB v6; Ollama size 17.7-18GB per yottalabs/systemdesign.academy.",
+   "source_url": "https://qwen.ai/blog?id=qwen3.6-27b",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Rules out the strongest small dense coders for tier 3; the design must get local-heavy reasoning from the MoE in thinking mode instead.",
+   "source_date": "2026-08-14"
+  },
+  {
+   "claim": "No official Qwen3.6 or Qwen3.8 model smaller than 27B exists, and no Qwen3-Coder release after Qwen3-Coder-Next (Feb 2026) exists; the only official small Qwen models are the Qwen3.5 series (0.8B/2B/4B/9B, released 2026-03-02, all on Ollama as qwen3.5:0.8b/2b/4b/9b with native tool calling, thinking and vision). 'Qwen3.8-9B' on HF/Ollama is an unofficial Empero community distill.",
+   "evidence": "Ollama X announcement lists the four Qwen3.5 small tags; codersera/systemdesign.academy: 'Qwen3.8-27B is the smallest Qwen 3.8 model, no 4B/8B/14B'; QwenLM/Qwen3.8 repo and release trackers show only 27B, Flash-Next (125B), Max; empero-ai/Qwen3.8-9B-Distill is community-built on Qwen3.5-9B.",
+   "source_url": "https://x.com/ollama/status/2028514180936908842",
+   "confidence": "high",
+   "load_bearing": false,
+   "source_date": "2026-10-05"
+  },
+  {
+   "claim": "Qwen3.5-9B (9.7B dense, hybrid GDN 3:1 attention, 262K context, Apache-2.0) fits fully on a 12GB card: Ollama `qwen3.5:9b` is ~6.6GB (Q4_K_M ~5.7GB), estimated 45-53 tok/s on an RTX 3060; vendor benchmarks LiveCodeBench v6 65.6, BFCL-V4 66.1, TAU2-Bench 79.1; no official SWE-bench Verified number for the 9B.",
+   "evidence": "willitrunai: 5.7GB Q4_K_M, 3060 Q4_K_M 45.0 tok/s 'Fits'; modelfit est. 53 tok/s; HF model card row LCB v6 65.6; vendor BFCL-V4 66.1/TAU2 79.1 via doubleword/together listings; Ollama tags page 9B ~6.6GB 256K ctx.",
+   "source_url": "https://huggingface.co/Qwen/Qwen3.5-9B",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "This is the Ollama-only fallback workhorse for hosts with <32GB RAM; if it did not fit with 32k ctx the fallback would be Gemma 4 12B or qwen2.5-coder:7b.",
+   "source_date": "2026-03-02"
+  },
+  {
+   "claim": "Qwen3.5-9B shows documented tool-call reliability problems in agent loops under Ollama (prints tool calls as text instead of executing; Roo Code/OpenCode failures), and an independent multi-step agent test concluded 9B-class models are 'not agent-ready'.",
+   "evidence": "ollama/ollama issue #14745 (OpenCode 1.2.24: model emits tool call as text, workaround pin Ollama 0.17.5); March 2026 Reddit thread: nonstop failed tool calls with Roo Code + Qwen3.5 9B; dev.to 'Qwen 3.5 vs Ornith 1.0 9B as coding agents' concluded neither is agent-ready and native tool API made easy tasks worse than plain prompting.",
+   "source_url": "https://github.com/ollama/ollama/issues/14745",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2026-03"
+  },
+  {
+   "claim": "Gemma 4 12B ('12B Unified', ~11.95B dense, encoder-free multimodal, 256K context) was released 2026-06-03 under Apache-2.0 (the Gemma 4 family moved to Apache-2.0 on 2026-04-02); vendor LiveCodeBench v6 72.0; Ollama download ~7.7-8.0GB; a community llama.cpp run on an RTX 3060 12GB measured ~33 tok/s generation / ~1,150 tok/s prefill at 4K ctx (Q5_K_XL, q8_0 KV).",
+   "evidence": "analyticsvidhya/datanorth/rits: June 3 2026 release, 11.95B, 256K, Apache-2.0 (one source says Gemma license); Google model card table: 'Gemma 4 12B Unified 72.0' LCB v6; promptquorum: 7.7-8.0GB Ollama download; gemma4all/note.com RTX 3060 test ~33.3 tok/s; the-decoder/gigazine: Gemma 4 Apache-2.0 from April 2 2026.",
+   "source_url": "https://ai.google.dev/gemma/docs/core/model_card_4",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2026-06-03"
+  },
+  {
+   "claim": "Gemma 4 tool calling in agent loops is reported as less reliable than Qwen3.6 (looping, early Ollama tool-parser breakage at v0.20.1), and Ollama shipped a Gemma 4 renderer fix in v0.40.10 (Oct 2026); Gemma 4 has no native FIM. Gemma 4 26B-A4B (77.1 LCB, tau2-bench 85.5) is ~12-18GB at 4-bit and reported at only 17.4% SWE-bench Verified in one comparison, so it is not recommended.",
+   "evidence": "HN thread on Gemma 4 12B: 'doesn't seem as reliable as qwen 3.6 for tool calls, got stuck in a loop'; X post (Paweł Huryn): Ollama tool parser broken v0.20.1; Releasebot Ollama v0.40.10 notes 'Gemma 4 renderer variant that renders assistant content before its tool calls'; aimadetools: no native FIM; labellerr comparison: Gemma4-26B-A4B 17.4% vs Qwen3.6-35B-A3B 73.4% SWE-V (single source).",
+   "source_url": "https://news.ycombinator.com/item?id=48385906",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2026-10"
+  },
+  {
+   "claim": "gpt-oss-20b (~21B total / ~3.6-4B active MoE, Apache-2.0, 128K ctx, MXFP4) scores SWE-bench Verified 60.7 and Aider Polyglot 34.2 at reasoning=high (53.2/26.6 medium, 37.4/16.6 low) per OpenAI's model card, independently reproduced at 60.4; Ollama `gpt-oss:20b` is ~13-14GB so it partially offloads on 12GB, with reported RTX 3060 speeds of ~30-50 tok/s at short context, collapsing to ~9 tok/s at 128K.",
+   "evidence": "arXiv 2508.10925 model card table (60.7 SWE-V high, 34.2 Aider high); third-party reproduction 60.4%; willitrunai 50.6 tok/s on RTX 3060 MXFP4 'Offloads'; runaihome 30-31 tok/s CPU-bound and 9 tok/s at 128K; Ollama page lists tool support.",
+   "source_url": "https://arxiv.org/pdf/2508.10925",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Proposed as the different-family second reviewer in tier 3 and as an Ollama-native option; if it did not run acceptably offloaded the review tier would use only Qwen3.6 thinking.",
+   "source_date": "2025-08"
+  },
+  {
+   "claim": "GLM-4.7-Flash (31.2B total / ~3B active MoE, MIT, released 2026-01-19/20, 128K-200K ctx) reports SWE-bench Verified 59.2 and tau2-bench 79.5; Q4_K_M GGUF is ~19GB so it needs expert offload on 12GB; Unsloth explicitly advised against running its GGUF in Ollama due to chat-template issues (use llama.cpp/LM Studio); a 16GB card ran it at ~34 tok/s with a 27/73 CPU/GPU split.",
+   "evidence": "gigazine/rits/towardsai: Jan 19-20 2026, 30B-A3B, MIT; llm-stats: SWE-V 59.2, tau-bench 79.5; medium guide Q4_K_M 19GB, 198K ctx; unsloth docs: 'we don't recommend running this GGUF with Ollama'; dev.to 16GB benchmark 21GB total, 34 tok/s.",
+   "source_url": "https://unsloth.ai/docs/models/glm-4.7-flash",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2026-01-20"
+  },
+  {
+   "claim": "Devstral Small 2 (24B dense, Apache-2.0, released 2025-12-09, 256K ctx, needs Ollama >=0.13.3) reports SWE-bench Verified 68.0 / Multilingual 55.7, but `devstral-small-2` is ~15GB at Q4 so on a 12GB card it must offload (projected single-digit to ~12 tok/s) or drop to Q3_K_M (~25 tok/s, heavily degraded); Mistral's API marks Devstral 2 deprecated as of Sep 2026 though weights remain on HF/Ollama.",
+   "evidence": "mistral.ai news post (Dec 9 2025, 24B/123B, Apache-2.0 for Small 2); morphllm/modal: 68.0 SWE-V, 55.7 Multilingual; codersera/aimadetools: Ollama tag devstral-small-2, 0.13.3+; llmconfigurator: Q4_K_M 15.7-16.6GB, Q3_K_M only fit ~25 tok/s degraded; willitrunai offload projection 8.6-12.5 tok/s on a 16GB card for Small 1.1.",
+   "source_url": "https://ollama.com/library/devstral-small-2",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2025-12-09"
+  },
+  {
+   "claim": "Qwen3-Coder-30B-A3B-Instruct (30.5B / 3.3B active, 48 layers, 128 experts top-8, 262K ctx, non-thinking only, Jul 2025) is on Ollama as `qwen3-coder:30b` (~19GB Q4_K_M) and its early tool-calling template bug was fixed by Unsloth/Ollama; it is now superseded for agentic coding by Qwen3.6-35B-A3B (Artificial Analysis Coding Index 19.4, Terminal-Bench Hard 15.2 vs Qwen3.6's 51.5 TB2.0). Qwen3-Coder-Next (80B / 3B active, Feb 2026, ~49-51GB at Q4, SWE-V ~70.6 secondary) runs only as a 64GB-RAM stretch ('usable but slow' on 8GB VRAM + 32GB RAM).",
+   "evidence": "HF model card: 30.5B/3.3B, 48 layers, 128 experts, 262,144 ctx, non-thinking; unsloth tutorial: tool-calling fixed for llama.cpp/Ollama; llmconfigurator: qwen3-coder:30b ~19GB; opencode data page AA index 19.4/TB-Hard 15.2; ollama issue #14049 51GB q4_K_M pull of qwen3-coder-next; insiderllm SWE-V 70.6; llmconfigurator 8GB VRAM + 32GB RAM 'usable but slow'.",
+   "source_url": "https://huggingface.co/Qwen/Qwen3-Coder-30B-A3B-Instruct",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2026-02"
+  },
+  {
+   "claim": "NVIDIA Nemotron 3 Nano 30B-A3B (hybrid Mamba-2/MoE with only 6 attention layers, ~31.6B/3.6B active, 1M ctx, released 2025-12-15) is on Ollama as `nemotron-3-nano:30b` (18GB Q4_K_M; default tag reported 24GB) and `nemotron-3-nano:4b` (2.8GB); coding benchmarks: SWE-bench (OpenHands) 38.8, LiveCodeBench v6 68.3, BFCL v4 53.8, Terminal-Bench hard 8.5; recommended tool-calling sampling temp 0.6 / top_p 0.95. Nemotron 3.5 Bolt E4B (4B, multi-turn tool use) was scheduled for 2026-10-23 and added to Ollama in v0.40.10 but has no coding benchmarks yet.",
+   "evidence": "arXiv 2512.20848 and NVIDIA model card tables (38.8 SWE-Bench OpenHands, 68.3 LCB, 53.8 BFCL v4, 49.0 TauBench V2); ollama library snippets: 30b 18GB-24GB 1M ctx, 4b 2.8-2.9GB 256K; unsloth docs sampling; letsdatascience/thenewstack: Bolt E4B Oct 23; Releasebot Ollama v0.40.10 adds Nemotron 3.5 Bolt E4B.",
+   "source_url": "https://arxiv.org/pdf/2512.20848",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2025-12-15"
+  },
+  {
+   "claim": "Bonsai 2 27B (Prism ML, 2026-09-17, Apache-2.0) is a ternary-quantized Qwen3.8-27B: PTQ1_0 pack 5.95GB (1.75 bpw) / PQ2_0 pack 7.21GB (2.13 bpw), 262K ctx, vendor claims 98.2% of FP16 quality and ~47 tok/s on an M5 Max; it requires PrismML's llama.cpp binaries (upstream >= b11555 runs only the Q2_0 packing) and cannot be loaded by stock Ollama; no coding benchmarks published.",
+   "evidence": "HF prism-ml/Ternary-Bonsai-2-27B-gguf card and docs.prismml.com: sizes, bpw, 98.2% claim, llama.cpp build requirements; mindstudio/atomic.chat guides: stock llama.cpp refuses PQ2_0/PTQ1_0; Ollama mirror notes stock Ollama cannot run the packs.",
+   "source_url": "https://docs.prismml.com/models/bonsai-2-27b",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2026-09-17"
+  },
+  {
+   "claim": "For FIM/tab autocomplete, Continue.dev's docs still name Qwen2.5-Coder 1.5B (and 7B) as the best open autocomplete models (`ollama run qwen2.5-coder:1.5b`, ~986MB, Apache-2.0, sub-500ms even on CPU); the 3B variant is under the non-commercial Qwen Research license; alternatives are starcoder2:3b (OpenRAIL-M, ~4GB) and deepseek-coder:1.3b-base; Codestral 22B is highest FIM quality but non-production licensed and needs 16GB+. Qwen3.5 small models and Gemma 4 have no documented FIM token support.",
+   "evidence": "docs.continue.dev autocomplete page: 'Autocomplete: QwenCoder2.5 (1.5B), QwenCoder2.5 (7B)', FIM template uses <|fim_prefix|>/<|fim_suffix|>/<|fim_middle|>; localaimaster comparison table: 1.5B 986MB Apache-2.0, 3B Qwen Research license, StarCoder2-3B OpenRAIL-M; aimadetools: Codestral MNPL, Gemma 4 12B no native FIM; apidog describes qwen3.5:4b as 'smart autocomplete' without FIM evidence.",
+   "source_url": "https://docs.continue.dev/customize/deep-dives/autocomplete",
+   "confidence": "high",
+   "load_bearing": true,
+   "why_load_bearing": "Tier 1 choice; if a newer small FIM model existed with Continue support the autocomplete slot (and the VRAM budget reserved for it) would change.",
+   "source_date": "2026"
+  },
+  {
+   "claim": "KV-cache cost on this card (fp16 K+V, per-token = 2 x n_full_attn_layers x n_kv_heads x head_dim x 2 bytes): Qwen3.6-35B-A3B has 10 softmax-attention layers with 2 KV heads x 256 dim = 20 KiB/token (~0.3 GiB at 16k, ~0.6 GiB at 32k; GDN layers add a fixed ~30 MiB/seq); Qwen3.5-9B ~8 full-attn layers x 4 KV heads x 256 = ~32 KiB/token (~0.5 GiB at 16k, ~1.0 GiB at 32k, inferred from library defaults); Qwen3-Coder-30B-A3B is full GQA 48 layers x 4 KV x 128 = 96 KiB/token (1.5 GiB at 16k, 3 GiB at 32k); Devstral Small 2 (40 layers x 8 KV x 128) = 160 KiB/token (2.5/5 GiB); Gemma 4 uses a 1024-token sliding window on 5 of every 6 layers so KV grows slowly past 8k (SWA removes ~70-83% of KV). Resulting 32k-context VRAM estimates at Q4: Qwen3.5-9B ~7-8GB fits; Gemma 4 12B ~9-10GB fits; Qwen3.6-35B-A3B ~10-11GB on GPU with experts in RAM fits (q8 KV halves this); gpt-oss-20b ~13.5GB does not fully fit; Qwen3-Coder-30B/GLM-4.7-Flash/Nemotron ~20-22GB need expert offload; Qwen3.6-27B/Qwen3.8-27B/Devstral Small 2 18-21GB dense do not fit.",
+   "evidence": "Model card architecture for Qwen3.6-35B-A3B (Gated Attention 16 Q / 2 KV heads, dim 256; 40 layers, 3:1 GDN:attention) and TreeWY paper (20 KiB/token at 35B, 30 MiB/seq GDN state); Qwen3.5 configuration defaults (32 layers, 4 KV heads, head_dim 256, full_attention_interval 4); Qwen3-Coder HF card (48 layers, GQA); Kaitchup Gemma 4 memory analysis and ik_llama.cpp issue #1607 (SWA saves 70-83%); modelfit/bestllmfor VRAM ranges; smeltcore 9.8GB peak for Qwen3.6 with offload. Per-token numbers for 9B and Devstral are derived, not measured.",
+   "source_url": "https://arxiv.org/pdf/2608.20961",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "Context-window defaults in the router/llama-server config (16k vs 32k vs larger) depend on these budgets; an error would cause OOM or forced layer offload and a speed collapse.",
+   "source_date": "2026-08"
+  },
+  {
+   "claim": "Models that do NOT fit a 12GB card acceptably and should be excluded from the local tiers: Mistral Small 4 (119B/6.5B, ~74GB Q4), Mistral Small 3.2 (deprecated, retired 2026-07-31), Codestral (closed/non-production), Seed-OSS-36B (dense, LCB 67.4, ~20GB+ Q4 => ~2 tok/s offloaded), DeepSeek-V4-Flash (284B/13B, >100GB), GLM-5.3-Flash (~176GB), Qwen3.8-Flash-Next (125B); DeepSeek-Coder-V2-Lite (16B/2.4B, `deepseek-coder-v2:16b` 8.9GB) fits but is a 2024 model clearly outperformed by Qwen3.5-9B/Qwen3.6-35B-A3B.",
+   "evidence": "Mistral docs model cards/changelog (Small 4 119B/6.5B, Small 3.2 deprecated); runaihome ~74GB Q4; ByteDance seed-oss README (LCB 67.4) and 2xH200 hosting recommendation; cometapi/datacamp DeepSeek V4 sizes; xigh/open-weight-models list (GLM-5.3-Flash ~176GB); Ollama deepseek-coder-v2:16b legacy guides.",
+   "source_url": "https://docs.mistral.ai/models",
+   "confidence": "high",
+   "load_bearing": false,
+   "source_date": "2026-09"
+  },
+  {
+   "claim": "Aider Polyglot leaderboard (open-weight, as of Oct 2026 trackers): DeepSeek V3.2-Exp 74.2 (thinking), DeepSeek R1-0528 71.4, Qwen3-235B-A22B ~59, gpt-oss-120b 41.8, Qwen3-32B 40.0, gpt-oss-20b 34.2 (high); no Aider Polyglot score is published for Qwen3.6-35B-A3B, Qwen3.5-9B, Gemma 4 or GLM-4.7-Flash, so small-model comparisons must rely on SWE-bench Verified/LiveCodeBench vendor numbers.",
+   "evidence": "llm-stats and benchleader Aider-Polyglot pages (top open DeepSeek V3.2 Exp 74.2; gpt-oss-120b 41.8; Qwen3 32B 40.0); OpenAI gpt-oss card 34.2; searches for the four small models returned only DataLearner/BenchLM aggregates with no Aider entry.",
+   "source_url": "https://llm-stats.com/benchmarks/aider-polyglot",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2026-10"
+  },
+  {
+   "claim": "Qwen3.6-35B-A3B tool-call looping in agents (empty-argument calls after a few turns) is traced to the chat template dropping prior-turn <think> blocks unless `preserve_thinking=true` is passed in chat_template_kwargs, and to context bloat; users report clean runs to 110k context on IQ4_XS and TBLite 0.62 in OpenCode once the template/provider settings are right; Unsloth's GGUF includes a fix for nested-object tool-call parsing.",
+   "evidence": "earendil-works/pi issue #3325 (preserve_thinking root cause, LM Studio); Reddit snapshot reports of same loop in llama.cpp with Pi/Hermes and counter-reports of no loops to 110k ctx; OpenCode user TBLite 0.62; HF unsloth/Qwen3.6-35B-A3B-GGUF card notes tool-calling parsing improvement.",
+   "source_url": "https://github.com/earendil-works/pi/issues/3325",
+   "confidence": "medium",
+   "load_bearing": true,
+   "why_load_bearing": "The agent runtime must pass preserve_thinking / use a recent GGUF + llama.cpp build and cap context per turn; otherwise the workhorse tier will loop and burn tokens, defeating the cost goal.",
+   "source_date": "2026-07"
+  },
+  {
+   "claim": "Ollama's current release line is v0.40.x (v0.40.5 2026-10-14 stable; v0.40.11-rc0 2026-10-24 adds 'Qwen3 Coder and OpenCode improvements' and a llama.cpp update); default context is auto-picked from VRAM (4k below 24GiB), so num_ctx must be set explicitly on a 12GB card.",
+   "evidence": "Releasebot/releases.sh Ollama October 2026 changelog entries (v0.40.4 llama.cpp b11521, v0.40.9/0.40.10 model additions, v0.40.11-rc0); promptquorum names v0.40.5; agenticwire: Ollama default context 4k below 24GiB, 32k 24-48GiB, 256k >=48GiB.",
+   "source_url": "https://releasebot.io/updates/ollama",
+   "confidence": "medium",
+   "load_bearing": false,
+   "source_date": "2026-10-24"
+  }
+ ],
+ "recommendations": [
+  "Tier 1 (autocomplete/FIM): keep `qwen2.5-coder:1.5b-base` on Ollama (~1GB) permanently resident with num_ctx 2048-4096 and Continue's Qwen2.5 FIM template; do not promote to the 3B (non-commercial license) unless the owner accepts it. Budget ~1.3GB VRAM for it so it coexists with the workhorse.",
+  "Tier 2 (workhorse chat + agent, all department agents' default): Qwen3.6-35B-A3B, Unsloth UD-Q4_K_XL (or bartowski IQ4_XS) GGUF served by llama.cpp `llama-server` in its own container: `-ngl 99 --n-cpu-moe 20 -fa on -np 1 -c 32768 --cache-type-k q8_0 --cache-type-v q8_0 -b 2048 -ub 1024 --jinja`, thinking disabled for routine tasks, temp 0.7/top_p 0.8 (non-thinking) ; pass `preserve_thinking=true` when thinking is on. Sweep --n-cpu-moe 16-26 once with llama-bench on the real box (expect ~40 tok/s, ~10GB VRAM). Requires >=32GB system RAM; if the host has 16GB, fall back to Ollama `qwen3.5:9b` (num_ctx 32768) and route more aggressively to cloud.",
+  "Tier 3 (local-heavy reasoning / code review / security): the same Qwen3.6-35B-A3B weights with thinking enabled, temp 1.0/top_p 0.95, context 64k+ (no extra VRAM, no model swap, just a request-level flag), plus `gpt-oss:20b` on Ollama at reasoning_effort=high as a second-opinion reviewer from a different model family (accept ~30-50 tok/s partial offload). Drop deepseek-r1:14b and qwen2.5-coder:14b from the stack.",
+  "Stretch option: Bonsai 2 27B (ternary Qwen3.8-27B, 5.95GB PTQ1_0) via PrismML's llama.cpp fork on port 8080 as an experimental dense-27B-class reviewer that fits entirely in VRAM; treat vendor's 98.2% quality claim as unverified and gate it behind an eval. If the host has 64GB RAM, the alternative stretch is Qwen3-Coder-Next 80B-A3B (~49GB Q4, mostly in RAM) via llama.cpp --n-cpu-moe.",
+  "Architecture: add a llama.cpp (llama-server, optionally llama-swap) service to docker-compose alongside Ollama, and have the FastAPI router treat it as the primary local OpenAI-compatible backend for the MoE; keep Ollama for the FIM model, Qwen3.5-9B/Gemma 4 12B fallbacks and Open WebUI. Do not rely on Ollama's layer split for any 19-24GB MoE.",
+  "Routing policy: local-first for everything the 35B-A3B handles (edits, tests, docs, devops boilerplate, first-pass review); escalate to claude-sonnet-5-5 on explicit tool-loop failure (>=2 malformed/empty tool calls), on context >64k, or on task classes tagged architecture/security-deep; use claude-opus-5-5 only for the security and code-review departments' 'deep' mode; use claude-haiku-4-5-20251001 for cheap cloud classification/summaries. Replace all claude-sonnet-4-6 / claude-opus-4-8 / claude-opus-4-5 strings in router/agents.yaml, infrastructure/.env.example, config/vscode/continue.config.json and README.md.",
+  "Self-development loop: log per-task (model, tok/s, tool-call failures, escalation, pass/fail) and run a small nightly local eval (e.g. 20 repo-specific tasks + a tool-call smoke test) so the router can learn per-department local-vs-cloud thresholds and so model swaps (e.g. a future official Qwen3.8 small or Qwen3.6-Coder) can be adopted on evidence.",
+  "Before implementation, verify on the owner's Windows machine: `ollama pull qwen3.5:9b`, `ollama pull gpt-oss:20b`, `ollama pull qwen2.5-coder:1.5b-base`, `ollama show qwen3.6:35b-a3b` (tag spelling), free RAM >= 32GB, and a 60-second llama-bench of Qwen3.6-35B-A3B with --n-cpu-moe 20 at -c 32768; also confirm nvidia-smi shows ~1.3GB used by the FIM model so it coexists with the ~10GB workhorse (if not, run the FIM model on CPU)."
+ ],
+ "open_questions": [
+  "Exact official Ollama tag spelling and size for Qwen3.6 35B (`qwen3.6:35b` vs `qwen3.6:35b-a3b`, 23 vs 24GB) and whether Ollama's bundled llama.cpp applies any expert-aware placement on 12GB (one unverified blog claims 'since 0.30 the fit step can park experts in RAM'); ollama.com was unreachable from the sandbox.",
+  "Owner's actual system RAM and CPU (DDR4 vs DDR5, core count): expert offload speed is memory-bandwidth bound; the 39-47 tok/s measurements used 32GB DDR4/DDR5 with 8-9 threads. With 16GB RAM the 35B-A3B tier is not viable.",
+  "Does the owner accept the Qwen Research non-commercial license for qwen2.5-coder:3b, or is the stack personal-use only (irrelevant then)?",
+  "Whether running the FIM model under Ollama concurrently with llama-server on the same GPU leaves enough headroom at 32k context (estimated ~1.3GB + ~10GB = ~11.3GB, tight); may require q8 KV cache or --n-cpu-moe 24-26.",
+  "Independent (non-vendor) SWE-bench/Aider numbers for Qwen3.6-35B-A3B at Q4 quantization: all 73.4-class figures are vendor, full-precision, internal-scaffold results; third-party reruns shift 3-8 points and Q4 adds further loss.",
+  "Current state of Qwen3.6 tool-call template handling in the latest llama.cpp/Ollama builds (preserve_thinking kwarg, nested-object parsing) and in the chosen agent frontends (Continue, OpenCode, Open WebUI).",
+  "Whether Nemotron 3.5 Bolt E4B (released 2026-10-23) or the rumoured next Qwen3-Coder small release changes the FIM/small-agent tiers; neither has coding benchmarks yet.",
+  "Gemma 4 12B license discrepancy (Apache-2.0 per most sources vs 'Gemma license' per one) and its exact Ollama tag/size, if it is kept as a vision-capable fallback."
+ ]
+}
