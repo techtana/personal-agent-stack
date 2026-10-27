@@ -4,7 +4,8 @@
 Commands
   doctor        detect hardware/tools/ports; --write-profile [--refresh] writes machines/<HOST>.yaml
   profile       print the resolved profile (hardware class, models, Ollama env, cloud on/off)
-  build         regenerate .claude/agents, .opencode/agents, config/openwebui, evals, infrastructure/litellm/config.yaml
+  build         regenerate .claude/agents, .opencode/agents, config/openwebui, evals, infrastructure/litellm/config.yaml,
+                winget/configuration*.winget
   setup         profile + .env secrets + Ollama env + uv tools + build + settings.local.json (+ pull core models unless --no-pull)
   pull          pull the profile's models (--all includes the reviewer)
   up/down/status  manage native services: phoenix, litellm, orchestrator, open_webui
@@ -13,6 +14,9 @@ Commands
   claude-env    print the env for Claude Code profile B (--shell powershell|bash)
   why-routed    show recent gateway routing decisions
   retro         run scripts/retro.py (arguments pass through)
+  tasks         edge-mode supervision: install|remove|start|stop|status|xml one scheduled task per service
+                (Windows Task Scheduler, --trigger startup|logon; systemd user units on Linux)
+  run           run one service in the foreground and restart it when it exits (what each task runs)
   tray          background tray app: runs the services, shows status, links to the UIs
                 (--foreground, --status, --stop, --install-startup, --remove-startup)
 """
@@ -27,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stacklib import ENV_FILE, REPO, die, info, load_dotenv, warn, which  # noqa: E402
-from stacklib import agents_build, claude_env, litellm_build, ollama, services, smoke, traces  # noqa: E402
+from stacklib import agents_build, claude_env, litellm_build, ollama, services, smoke, tasks, traces, winget_build  # noqa: E402
 from stacklib import profile as prof  # noqa: E402
 
 
@@ -64,6 +68,7 @@ def cmd_build(a):
     p = prof.resolve_profile(getattr(a, "machine", None))
     agents_build.build_all(p)
     litellm_build.build(p)
+    winget_build.build()
     info(f"build: machine={p['name']} class={p['hardware_class']} primary={p['models'].get('primary')} cloud={'on' if p['cloud_enabled'] else 'off'}")
 
 
@@ -150,6 +155,30 @@ def cmd_status(a):
         info(f"{r['service']:<13} {'UP  ' if r['healthy'] else 'down'}  pid={str(r['pid'] or '-'):<7} {r['url']}")
 
 
+def cmd_run(a):
+    raise SystemExit(tasks.main_run(prof.resolve_profile(), a.service))
+
+
+def cmd_tasks(a):
+    p = prof.resolve_profile()
+    names = a.services or None
+    if a.action in ("install", "xml"):
+        ok = tasks.install(p, names, a.trigger, write_only=a.action == "xml")
+        raise SystemExit(0 if ok else 1)
+    if a.action == "remove":
+        tasks.remove(p, names)
+    elif a.action == "start":
+        tasks.start(p, names)
+    elif a.action == "stop":
+        tasks.stop(p, names)
+    else:
+        rows = tasks.status(p)
+        if not rows:
+            info("tasks: none registered (`stack.py tasks install` creates them)")
+        for r in rows:
+            info(f"{r['service']:<13} {'UP  ' if r['healthy'] else 'down'}  task={r['state']:<9} last={r['last_result']:<11} {r['trigger']}")
+
+
 def cmd_bench(a):
     p = prof.resolve_profile()
     base = f"http://127.0.0.1:{p['ports']['ollama']}"
@@ -221,6 +250,9 @@ def main(argv=None):
     s = sub.add_parser("up"); s.add_argument("services", nargs="*"); s.add_argument("--wait", type=float, default=150); s.set_defaults(f=cmd_up)
     s = sub.add_parser("down"); s.add_argument("services", nargs="*"); s.set_defaults(f=cmd_down)
     s = sub.add_parser("status"); s.set_defaults(f=cmd_status)
+    s = sub.add_parser("run"); s.add_argument("service", choices=services.SERVICE_ORDER); s.set_defaults(f=cmd_run)
+    s = sub.add_parser("tasks"); s.add_argument("action", choices=["install", "remove", "start", "stop", "status", "xml"])
+    s.add_argument("services", nargs="*"); s.add_argument("--trigger", choices=["startup", "logon"], default="startup"); s.set_defaults(f=cmd_tasks)
     s = sub.add_parser("bench"); s.add_argument("--model", action="append"); s.add_argument("--num-ctx", type=int); s.add_argument("--tokens", type=int, default=256); s.add_argument("--runs", type=int, default=1); s.add_argument("--use-mmap", choices=["profile", "true", "false"], default="profile"); s.set_defaults(f=cmd_bench)
     s = sub.add_parser("smoke"); s.add_argument("--dept", default="docs"); s.add_argument("--skip-mcp", action="store_true"); s.set_defaults(f=cmd_smoke)
     s = sub.add_parser("claude-env"); s.add_argument("--shell", choices=["powershell", "bash"], default="bash"); s.set_defaults(f=cmd_claude_env)

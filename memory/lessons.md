@@ -27,3 +27,7 @@
 - [2026-10-26] A LiteLLM pre-call hook that raises a plain exception yields HTTP 500, which the router retries (three attempts) and may answer from a fallback. Gate refusals must raise a non-retryable 4xx.
 - [2026-10-26] Check model licences before naming a tool in a plan: NudeNet looked like the obvious nudity detector but is AGPL-3.0, weights included.
 - [2026-10-26] Long scratch or install paths on Windows break spaCy DLL loads and the Hugging Face cache past 260 characters; keep Python environments for ML models on short paths.
+- [2026-10-26] Task Scheduler's "restart on failure" does not restart a task whose process exits non-zero or is killed. Add a repeating time trigger with MultipleInstancesPolicy IgnoreNew as a watchdog, and disable the task on a deliberate stop so the watchdog does not revive it.
+- [2026-10-26] A supervisor that puts itself in a kill-on-close job object before spawning takes the whole service tree down when it dies; children inherit the job, so there is no spawn-to-assign race.
+- [2026-10-26] Smart App Control judges compiled Python extensions (.pyd) one by one, not only executables: it blocked pyarrow, sqlalchemy and pandas modules inside the Phoenix tool env after they had run the day before.
+- [2026-10-26] Keycloak's `kc.bat` caps the heap at 512 MB by default; a small realm stays near 0.5 GB working set, well under the 1.25 GB sizing-guide baseline written for production load.

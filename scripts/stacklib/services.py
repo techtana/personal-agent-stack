@@ -305,11 +305,22 @@ def _write_pidfile(pf: Path, pid: int, exe: str, started: str | None) -> None:
     pf.write_text(f"{pid}\n{exe}\n{started or ''}\n", encoding="utf-8")
 
 
+def _task_managed() -> set[str]:
+    """Services supervised by Task Scheduler or systemd (`stack.py tasks install`); `up`, `down` and the tray leave them alone."""
+    from . import tasks
+
+    return tasks.registered()
+
+
 def start(profile: dict, services: list[str] | None = None) -> None:
     cmds = commands(profile)
+    managed = _task_managed()
     for svc in services or [s for s in SERVICE_ORDER if s in cmds]:
         if svc not in cmds:
             warn(f"{svc}: not configured on this profile")
+            continue
+        if svc in managed:
+            info(f"{svc}: supervised by a scheduled task; use `stack.py tasks start {svc}`")
             continue
         pf = _pid_file(profile, svc)
         if pf.exists():
@@ -366,9 +377,12 @@ def wait_healthy(profile: dict, services: list[str], timeout: float = 120.0) -> 
 
 
 def stop(profile: dict, services: list[str] | None = None) -> None:
+    managed = _task_managed()
     for svc in services or list(reversed(SERVICE_ORDER)):
         pf = _pid_file(profile, svc)
         if not pf.exists():
+            if svc in managed and services:
+                info(f"{svc}: supervised by a scheduled task; use `stack.py tasks stop {svc}`")
             continue
         pid, started = _read_pidfile(pf)
         if pid and not _owned(pid, svc, started):

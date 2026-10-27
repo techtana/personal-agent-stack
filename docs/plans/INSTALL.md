@@ -33,8 +33,11 @@ System packages are declared in one WinGet Configuration file, `winget/configura
 `stack.py build`), and installed with the tool built into Windows 11:
 
 ```powershell
+winget configure --enable    # once per machine; turns on winget's configuration feature
 winget configure --file winget\configuration.winget --accept-configuration-agreements
 ```
+
+`edge` mode uses `winget\configuration.edge.winget`, which adds OpenJDK and Caddy.
 
 | # | Dependency | Source | Configure |
 |---|---|---|---|
@@ -51,7 +54,7 @@ winget configure --file winget\configuration.winget --accept-configuration-agree
 | 11 | LiteLLM, Open WebUI | `uv tool install` by setup (pinned); LiteLLM `--with-editable packages/privacy-gate` | started through each environment's python.exe (Smart App Control) |
 | 12 | Presidio, detect-secrets, deface, fastembed | dependencies of `packages/privacy-gate`, installed by uv; models downloaded on first start into `.run/models/` | spaCy or transformers NER model per G1/G2 |
 | 13 | Claude Code (optional, owner development only) | `Anthropic.ClaudeCode` | use profile B (`scripts/claude-local.ps1`) for anything private; profile A and Claude Desktop are outside the privacy boundary and get no integration |
-| 14 | Start automatically | - | `owner` mode: the tray's Startup shortcut starts every native service at sign-in. `edge` mode: Task Scheduler "at startup" tasks with restart on failure; the tray becomes a status viewer |
+| 14 | Start automatically | - | `owner` mode: the tray's Startup shortcut starts every native service at sign-in. `edge` mode: `stack.py tasks install` (elevated shell) registers one Task Scheduler "at startup" task per service under `\AgentStack\`; each runs `stack.py run <svc>`, which restarts the service with backoff, and a 2-minute repeating trigger restarts the supervisor if it dies (Task Scheduler's own restart on failure does not, V10). `up`, `down` and the tray leave task-supervised services alone; the tray becomes a status viewer |
 
 Whether every package installs unattended and whether Smart App Control allows each binary is item V9.
 

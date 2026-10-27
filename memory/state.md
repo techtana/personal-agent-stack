@@ -1,6 +1,7 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-10-25 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
+Updated: 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
 Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; design in docs/ORCHESTRATOR-DESIGN.md.
@@ -15,6 +16,9 @@ Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; des
   `<uv tool dir>\<env>\Scripts\python.exe -P -c <console-script entry point>`. That python.exe is the same standard venv
   launcher in every environment and has not been blocked (no CodeIntegrity events since the switch).
 - Installed 2026-10-24: Ollama 0.40.11 (native; models on D:\ollama\models), Claude Code CLI 2.1.302 (winget) alongside VS Code extension 2.1.296 and the desktop app, uv 0.12.17, Python 3.14 (system) / 3.12 and 3.11 (uv-managed), Node 24.
+- Installed 2026-10-26 (B-S0): Microsoft OpenJDK 25.0.5 (winget MSI, `C:\Program Files\Microsoft\jdk-25.0.5.21-hotspot`, asked for UAC),
+  Caddy 2.11.7 (winget portable, user scope), Keycloak 26.8.1 unpacked at D:\keycloak\keycloak-26.8.1 (SHA-1 checked; not a service;
+  spike admin credentials in `.run/keycloak-spike.env` of the worktree that ran it). None run as services.
 - uv tools: litellm[proxy] 1.106.3 (+ opentelemetry-sdk, opentelemetry-exporter-otlp), arize-phoenix 20.26, open-webui 0.12.3.
 - NOT installed by choice: Docker Desktop / WSL2 (would reserve RAM the MoE experts need). Compose file kept as an untested optional path.
 - Claude account: Max 5x subscription. No Anthropic API key on this machine; cloud tiers are off (all department tiers resolve to local-primary) until a key is added to .env and `stack.py build` is rerun.
@@ -31,7 +35,7 @@ Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; des
 | service | port | state 2026-10-25 late evening |
 |---|---|---|
 | Ollama | 11434 | up; tray app is a child of Explorer, so it survives Claude Code sessions |
-| Phoenix | 6006 | up via its tool Python; receives LiteLLM spans again |
+| Phoenix | 6006 | down since 2026-10-26: Smart App Control blocks compiled modules in its tool env (pyarrow `_parquet`, sqlalchemy, pandas) |
 | LiteLLM | 4000 | up via its tool Python; 17 model aliases; no OTel or callback errors |
 | Orchestrator MCP | 8765/mcp | up (`uv run`); tools list/delegate/get_job/cancel_job/record_lesson; 401 without bearer |
 | Open WebUI | 3000 | up (started by the tray); first run (admin user, model import, MCP server) not done |
@@ -50,6 +54,9 @@ Before the tray, services started from a Claude Code tool shell stopped once (15
 once across a session restart.
 
 ## Verified on this machine
+- 2026-10-26, B-S0/B2b: Keycloak 26.8.1 `start-dev` 411 MB idle, ~515 MB after 300 logins (512 MB heap cap); Caddy
+  served two internal-CA names over TLS; a `stack.py tasks` logon task restarted Phoenix's supervisor through its 2-minute
+  watchdog trigger after a kill (Task Scheduler's restart on failure did not). Details in docs/plans/SHARED-COMPONENTS.md V7, V9, V10.
 - 2026-10-25 late evening, services launched through the uv tool Pythons: phoenix, litellm and open-webui start
   healthy with no Smart App Control blocks; `stack.py smoke --dept docs` 8/8; Phoenix receives fresh LiteLLM spans;
   `down` stops a service's launcher and its child interpreter; restarting the orchestrator leaves the other `uv.exe`
@@ -89,6 +96,9 @@ once across a session restart.
    automatically, which contradicts the private-first direction.
 5. Run `scripts/claude-local.ps1` once to verify Claude Code profile B end to end (Read/Edit tool round trip through LiteLLM) on the 9B at 32k.
 6. Revisit the 35B as primary after a RAM upgrade; the 9B fits entirely on the GPU and leaves ~17 GB of RAM available.
+11. Elevated steps left from B-S0/B2b (admin terminal, main checkout): `winget configure --enable`; `uv run scripts/stack.py tasks
+   install --trigger startup` once B2 lands; `kc.bat tools windows-service install` in S7. Phoenix is broken by Smart App Control
+   and slated for removal (R); until then LiteLLM's otel callback has no collector.
 9. Direction since 2026-10-26: private first (docs/plans/). Plan A runs on confidential VMs with a confidential model server
    and on-prem fallback; Plan B runs every tier locally. External APIs are off by default and only an explicit, consented,
    gated user choice. Not built yet. The earlier GCP draft is archived in docs/archive/GCP-DESIGN-DRAFT-2026-10-26.md.
