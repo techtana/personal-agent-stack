@@ -49,6 +49,11 @@ Since 2026-10-25 21:34 the services are owned by the tray app (`stack.py tray`, 
 session. Its icon sits in the notification area's hidden icons; clicking it opens a status window with links to Open
 WebUI, Phoenix and the LiteLLM admin UI. Start at login is ON since 2026-10-25 (`stack.py tray --remove-startup` or the tray's
 checkbox removes the Startup-folder shortcut "Agent Stack.lnk"). Log: `.run/logs/tray.log`.
+Since 2026-10-27 the window has three tabs: Overview (services, models loaded in Ollama), Usage (requests, tokens, latency,
+tok/s and cost per gateway alias or served model from traces/litellm, tokens-per-day chart) and Settings (models, contexts,
+tracing, Open WebUI, Ollama runtime; Apply patches machines/<HOST>.yaml in place, rebuilds and restarts what changed).
+Cloud tiers stay read-only there on purpose (open item 4). Verified by screenshots and a headless apply; not yet run as the
+live tray, which still runs the old code until it is restarted from the main checkout.
 
 Before the tray, services started from a Claude Code tool shell stopped once (15:00 to 19:34, no reboot) and survived
 once across a session restart.

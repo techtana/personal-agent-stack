@@ -17,7 +17,7 @@ Commands
   tasks         edge-mode supervision: install|remove|start|stop|status|xml one scheduled task per service
                 (Windows Task Scheduler, --trigger startup|logon; systemd user units on Linux)
   run           run one service in the foreground and restart it when it exits (what each task runs)
-  tray          background tray app: runs the services, shows status, links to the UIs
+  tray          background tray app: runs the services; its window shows status, usage per model and settings
                 (--foreground, --status, --stop, --install-startup, --remove-startup)
 """
 from __future__ import annotations

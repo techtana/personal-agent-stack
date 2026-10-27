@@ -42,7 +42,7 @@ is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `
 ## Everyday commands
 
 ```
-uv run scripts/stack.py tray                      # background tray app that runs the services and shows status
+uv run scripts/stack.py tray                      # tray app: runs the services; window shows status, usage per model, settings
 uv run scripts/stack.py status | up | down        # native services (phoenix, litellm, orchestrator, open_webui)
 uv run scripts/stack.py tasks install|status|stop # edge mode: one Task Scheduler task per service (install: elevated)
 uv run scripts/stack.py smoke                     # gateway + MCP end-to-end checks
