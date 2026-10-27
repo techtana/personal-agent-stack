@@ -45,6 +45,7 @@ Logs:
 | Ollama reloads the model when you switch departments or tiers | Two tiers use the same model with different `num_ctx` or load options. | Give them the same `num_ctx` and options in `machines/<HOST>.yaml`, then rebuild. |
 | Replies are much slower than the benchmark in `memory/state.md` | RAM pressure, or MoE experts placed on the CPU. | Close desktop apps. For the MoE model, try `LLAMA_ARG_N_CPU_MOE=<n>` under `ollama_env` in `machines/<HOST>.yaml`, then rerun setup. |
 | The gateway returns 401 | The client sent the wrong key. | Send `LITELLM_MASTER_KEY` from `.env` as a Bearer token. |
+| Open WebUI shows "Failed to connect to MCP server" above a reply; the orchestrator log shows `401` / `invalid_token` | The tool server was saved with another `.env` value (for example `WEBUI_SECRET_KEY`). | In **Admin > Settings > Integrations > External Tool Servers**, edit the connection and paste `ORCHESTRATOR_BEARER`. |
 | The cloud tier is never used | By design since 2026-10-26: every tier is private and local. | Nothing to fix. External models will be explicit aliases behind the privacy gate (`docs/plans/`). |
 | The Anthropic API returns 400 about `temperature` | Claude models no longer accept `temperature`, `top_p` or `top_k` (since 2026-10-21). | Set these only under `local:` in `agents/<id>.yaml`. |
 | Claude Code does not show the orchestrator, or shows `ECONNREFUSED` | The server is not approved, or it is not running. | Approve the `.mcp.json` server when Claude Code asks. Check that the orchestrator is up in the tray, then restart Claude Code. |

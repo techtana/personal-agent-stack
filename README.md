@@ -92,7 +92,7 @@ Then:
   (`~/.claude-local`) points at LiteLLM, so local models serve `sonnet`/`haiku` aliases and plan quota is untouched.
 - **Open WebUI:** http://127.0.0.1:3000 -> create the admin user -> Workspace -> Models -> Import each
   `config/openwebui/<dept>.json`; Admin -> Integrations -> External Tool Servers -> MCP (Streamable HTTP)
-  `http://127.0.0.1:8765/mcp` with the bearer from `.env`.
+  `http://127.0.0.1:8765/mcp` with `ORCHESTRATOR_BEARER` from `.env` as the bearer (not `WEBUI_SECRET_KEY`).
 - **OpenCode:** `opencode.json` registers the gateway as provider `litellm`; agents are in `.opencode/agents/`.
 - **Autocomplete in VS Code:** `config/continue/config.yaml` (Continue, autocomplete role only).
 
