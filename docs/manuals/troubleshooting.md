@@ -45,7 +45,7 @@ Logs:
 | Ollama reloads the model when you switch departments or tiers | Two tiers use the same model with different `num_ctx` or load options. | Give them the same `num_ctx` and options in `machines/<HOST>.yaml`, then rebuild. |
 | Replies are much slower than the benchmark in `memory/state.md` | RAM pressure, or MoE experts placed on the CPU. | Close desktop apps. For the MoE model, try `LLAMA_ARG_N_CPU_MOE=<n>` under `ollama_env` in `machines/<HOST>.yaml`, then rerun setup. |
 | The gateway returns 401 | The client sent the wrong key. | Send `LITELLM_MASTER_KEY` from `.env` as a Bearer token. |
-| The cloud tier is never used | `ANTHROPIC_API_KEY` is empty, so the build sent every tier to a local model. | Add the key to `.env`, run `stack.py build` and restart LiteLLM. |
+| The cloud tier is never used | By design since 2026-10-26: every tier is private and local. | Nothing to fix. External models will be explicit aliases behind the privacy gate (`docs/plans/`). |
 | The Anthropic API returns 400 about `temperature` | Claude models no longer accept `temperature`, `top_p` or `top_k` (since 2026-10-21). | Set these only under `local:` in `agents/<id>.yaml`. |
 | Claude Code does not show the orchestrator, or shows `ECONNREFUSED` | The server is not approved, or it is not running. | Approve the `.mcp.json` server when Claude Code asks. Check that the orchestrator is up in the tray, then restart Claude Code. |
 | Orchestrator calls fail with 401 | The bearer is empty or does not match. | Make sure the variable is named `ORCHESTRATOR_BEARER`. Claude Code blanks variables named `*_TOKEN` or `*_API_KEY` in `.mcp.json`. Rerun setup to write `.claude/settings.local.json`. |

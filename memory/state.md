@@ -92,8 +92,11 @@ once across a session restart.
    the tray and its services come up on their own.
 8. Linux/macOS service management (tool Python launch, start-time pid matching) is written but untested on those systems.
 3. Open WebUI first run at http://127.0.0.1:3000: create admin; Workspace > Models > Import each config/openwebui/*.json; Admin > Integrations > External Tool Servers > MCP (Streamable HTTP) http://127.0.0.1:8765/mcp with the bearer from .env.
-4. Do not add ANTHROPIC_API_KEY to .env until build change S6 lands: today a key makes complex tiers route to Anthropic
-   automatically, which contradicts the private-first direction.
+4. Done 2026-10-26 (S6/B1 core): the build is private only. `policy/privacy.yaml` holds `external.enabled: false`; every
+   deployment carries `data_class`/`location`; a tier, fallback, default or profile B alias naming a non-private
+   deployment fails the build; `external.enabled: true` is refused until the gate (S1-S3) exists. Profile B sets
+   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and denies WebFetch/WebSearch in `~/.claude-local/settings.json`.
+   Still open from S6: guardrail entry, `database_url`, gate config, Open WebUI assets, compose output.
 5. Run `scripts/claude-local.ps1` once to verify Claude Code profile B end to end (Read/Edit tool round trip through LiteLLM) on the 9B at 32k.
 6. Revisit the 35B as primary after a RAM upgrade; the 9B fits entirely on the GPU and leaves ~17 GB of RAM available.
 11. Elevated steps left from B-S0/B2b (admin terminal, main checkout): `winget configure --enable`; `uv run scripts/stack.py tasks

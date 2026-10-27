@@ -4,7 +4,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import REPO, env_value, load_dotenv
+from . import REPO, die, env_value, load_dotenv
+
+PRIVATE_ALIASES = ("local-small", "local-primary", "local-reviewer")
+DENIED_TOOLS = ["WebFetch", "WebSearch"]
 
 
 def local_profile_env(profile: dict) -> dict[str, str]:
@@ -12,6 +15,9 @@ def local_profile_env(profile: dict) -> dict[str, str]:
     billing for that process, which is the point: this profile spends local tokens, not plan quota."""
     cc = profile["claude_code"]
     lp = cc["local_profile"]
+    for k in ("default_model", "haiku_model", "sonnet_model", "opus_model"):
+        if lp.get(k, "local-primary") not in PRIVATE_ALIASES:
+            die(f"claude_code.local_profile.{k} = {lp[k]!r}: profile B uses private aliases only ({', '.join(PRIVATE_ALIASES)})")
     port = profile["ports"]["litellm"]
     master = env_value("LITELLM_MASTER_KEY", load_dotenv())
     cfg_dir = str(Path(cc.get("local_profile_dir", "~/.claude-local")).expanduser())
@@ -32,7 +38,19 @@ def local_profile_env(profile: dict) -> dict[str, str]:
         "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
         "CLAUDE_CODE_GATEWAY_HINT_HEADERS": "1",
         "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     }
+
+
+def write_local_profile_settings(profile: dict) -> Path:
+    """Deny the web tools in profile B's own settings.json: they would fetch outside the gateway."""
+    p = Path(profile["claude_code"].get("local_profile_dir", "~/.claude-local")).expanduser() / "settings.json"
+    doc = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    deny = doc.setdefault("permissions", {}).setdefault("deny", [])
+    deny += [t for t in DENIED_TOOLS if t not in deny]
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    return p
 
 
 def render(env: dict[str, str], shell: str) -> str:

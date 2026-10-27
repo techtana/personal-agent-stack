@@ -6,7 +6,7 @@ retro/reports/YYYY-MM-DD.md (committed) and retro/reports/YYYY-MM-DD.proposals.j
 branch + PR carrying the report so the owner reviews it in the morning (`/retro` in Claude Code applies approved deltas).
 
   uv run scripts/stack.py retro --days 7                              # local reflection model (local-small)
-  uv run scripts/stack.py retro --days 7 --reflect cloud-cheap --pr   # Haiku 5.5 reflection, open a PR
+  uv run scripts/stack.py retro --days 7 --pr                         # same, and open a PR
 """
 from __future__ import annotations
 
@@ -90,8 +90,8 @@ def reflect(summary: dict, model: str, port: int, cap_tokens: int = 1500) -> dic
         "You are the retrospective for a local-first coding-agent stack. Below are statistics per department "
         "(requests, local vs cloud share, errors, stall/keyword/context escalations, cost, Claude Code test outcomes).\n"
         f"Propose at most 3 small, evidence-backed deltas restricted to these files: {ALLOWLIST}. "
-        "Prefer routing-tier changes when a department runs mostly local with low errors (demote cloud tiers) or mostly "
-        "errors/escalations (promote); prompt bullet changes only when evidence points at output format or escalation behaviour. "
+        "Every tier must stay a private deployment (local-small, local-primary, local-reviewer); prefer moving a "
+        "department between them when its errors or escalations justify it; prompt bullet changes only when evidence points at output format or escalation behaviour. "
         "If the data is too thin, return zero deltas and say so.\n"
         f"Respond with JSON only, matching {SCHEMA_HINT}.\n\nSTATS:\n{json.dumps(summary, indent=1)}"
     )
@@ -164,7 +164,7 @@ def open_pr(report: Path) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--days", type=int, default=7)
-    ap.add_argument("--reflect", default="local-small", help="gateway model alias for the reflection step (local-small | cloud-cheap | none)")
+    ap.add_argument("--reflect", default="local-small", help="gateway model alias for the reflection step (a private alias such as local-small, or none)")
     ap.add_argument("--pr", action="store_true", help="commit the report on retro/<date> and open a PR with gh")
     a = ap.parse_args()
     p = prof.resolve_profile()

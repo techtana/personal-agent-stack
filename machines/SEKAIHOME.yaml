@@ -32,11 +32,7 @@ ollama_env:
   # per-machine additions/overrides to machines/_defaults.yaml:ollama_env
   OLLAMA_MODELS: 'D:\ollama\models'
 
-cloud:
-  enabled: auto
-  # Account: Claude Max 5x subscription (claude_max, default_claude_max_5x). No API key on this machine yet.
-  # Max plans include monthly API credits (research claim, unverified in Console); creating a key in
-  # console.anthropic.com and putting it in .env turns on the cloud tiers.
+# External models are off (policy/privacy.yaml). Account: Claude Max 5x subscription; no API key on this machine.
 
 notes:
   - "Docker Desktop / WSL2 are NOT installed; all services run natively so the WSL2 VM does not take RAM from MoE expert offload."

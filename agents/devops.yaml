@@ -14,8 +14,8 @@ claude:
 routing:
   simple: local-primary
   medium: local-primary
-  complex: cloud-default
-  reasoning: cloud-default
+  complex: local-primary
+  reasoning: local-primary
   plan_mode_min_tier: complex
   keyword_tier_rules:
     - {keywords: ["multi-region", "disaster recovery", "service mesh", "capacity plan"], tier: complex}

@@ -1,0 +1,18 @@
+# Privacy policy read by `uv run scripts/stack.py build` (docs/plans/SHARED-COMPONENTS.md sections 1-2).
+# Every router tier, fallback, default, task model and embedding alias is private; the build fails otherwise.
+
+# Where private deployments run: onprem (hardware we own) or confidential-cloud (Plan A confidential VMs).
+location: onprem
+# any | onprem: keep special-category data on owned hardware even when a confidential cloud host exists (G5).
+special_categories_location: any
+
+external:
+  # Off at install (G3). External models need the privacy guardrail and gate (packages S1-S3); until those exist,
+  # the build refuses `enabled: true`. When enabled, each model becomes an explicit alias
+  # `external/<provider>/<model>` in the LiteLLM access group `external`, never a tier or fallback.
+  enabled: false
+  providers:
+    anthropic:
+      api_key_env: ANTHROPIC_API_KEY
+      models: [claude-haiku-5-5, claude-sonnet-5-5, claude-opus-5-5]
+      # No temperature/top_p/top_k for Anthropic models (HTTP 400 since 2026-10-21).

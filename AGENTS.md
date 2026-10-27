@@ -12,8 +12,8 @@ is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `
 `agents/<id>.yaml` and generated into every surface by `uv run scripts/stack.py build`:
 
 - Claude Code: `.claude/agents/<id>.md` (mention `@<id>`, let Claude delegate, or `claude --agent <id>`).
-- Gateway: model `<id>` (complexity router: local for simple/medium, cloud for complex/reasoning when an
-  API key exists), `<id>-local`, `<id>-cloud`.
+- Gateway: model `<id>` (complexity router over private local deployments only), `<id>-local`. External models
+  are off (`policy/privacy.yaml`); the build fails if a tier, fallback or default names a non-private deployment.
 - OpenCode: `.opencode/agents/<id>.md`; Open WebUI: import `config/openwebui/<id>.json`.
 - Orchestrator MCP (`.mcp.json`): `delegate(department, task, tier)` returns a job handle; `get_job`, `record_lesson`.
 

@@ -2,8 +2,8 @@
 
 **Direction (2026-10-26): private first.** Every request is to be processed by private models, on owned hardware
 or confidential cloud VMs; external model APIs become an optional, explicit, gated user choice. The plans are in
-[docs/plans/](docs/plans/README.md). Until build change S6 lands, the current build still sends complex tiers to
-Anthropic when `ANTHROPIC_API_KEY` is set; SEKAIHOME has no key, so today everything runs locally.
+[docs/plans/](docs/plans/README.md). Since 2026-10-26 the build routes every tier to local models, with or without an
+API key; external models stay off until the privacy gate exists.
 
 A local-first coding-agent stack for one developer on one GPU workstation, composed from open-source
 tools rather than a custom harness. Six department agents (app-dev, testing, security, devops,
@@ -18,10 +18,10 @@ Haiku/Sonnet/Opus 5.5 through the gateway only when complexity, context size or 
             └──────────────┬──────────────────────┴──────────────────┴─────────────────────┘
                            ▼
             LiteLLM gateway :4000  (one model alias per department = complexity router)
-              local-fim · local-small · local-primary · [cloud-cheap · cloud-default · cloud-heavy]
+              local-fim · local-small · local-primary   (private only; external models off: policy/privacy.yaml)
               JSONL traces → traces/litellm/     OTLP → Phoenix :6006
                  │                                              │
-      Ollama (native, GPU) :11434                   Anthropic API (only with ANTHROPIC_API_KEY)
+      Ollama (native, GPU) :11434
       qwen2.5-coder:1.5b-base · qwen3.5:9b · qwen3.6:35b-a3b-coding (MoE, experts in RAM)
 
  Orchestrator MCP :8765  delegate/get_job/record_lesson   ·   hooks → traces/claude/   ·   nightly retro → PR
@@ -35,7 +35,8 @@ Manuals: [installation](docs/manuals/installation.md) · [user guide](docs/manua
 [troubleshooting](docs/manuals/troubleshooting.md).
 
 **When to use it:** you write code with AI agents on your own GPU workstation, and you want routine work to stay
-local and free while cloud models handle only the hard cases. It is not a team or hosted service.
+local, private and free. External models are off; they will only ever be an explicit, gated choice (docs/plans/).
+It is not a team or hosted service yet.
 
 ## Prerequisites
 
@@ -93,11 +94,12 @@ Then:
 
 | Where | What |
 |---|---|
-| `machines/_defaults.yaml` | hardware classes -> model lineup, Ollama env, ports, service modes, cloud model IDs |
-| `machines/<HOST>.yaml` | detected hardware + your overrides (`models.primary`, `model_store`, `cloud.enabled`) |
+| `machines/_defaults.yaml` | hardware classes -> model lineup, Ollama env, ports, service modes |
+| `machines/<HOST>.yaml` | detected hardware + your overrides (`models.primary`, `model_store`) |
+| `policy/privacy.yaml` | private-first policy: deployment location, `external.enabled` (off; the build refuses `true` until the privacy gate exists) |
 | `agents/<id>.yaml` | one department: prompt, tools, Claude Code model alias, routing tiers, evals |
 | `agents/_common.md` | working agreements appended to every department prompt |
-| `.env` | `LITELLM_MASTER_KEY`, `ORCHESTRATOR_BEARER`, `WEBUI_SECRET_KEY`, optional `ANTHROPIC_API_KEY` |
+| `.env` | `LITELLM_MASTER_KEY`, `ORCHESTRATOR_BEARER`, `WEBUI_SECRET_KEY`, `ANTHROPIC_API_KEY` (unused until external models exist) |
 | `.claude/settings.json` | hooks (trace capture), permissions, gateway hint headers |
 | `.claude/settings.local.json` | per-machine: MCP bearer env, `autoMemoryDirectory` -> `memory/claude/` |
 
@@ -106,9 +108,8 @@ After any change: `uv run scripts/stack.py build` (and `up`/`down` to restart th
 ## Cost model
 
 - Autocomplete, embeddings, titles/summaries and the simple/medium tiers are local: $0.
-- With no API key, every tier is local. Adding `ANTHROPIC_API_KEY` turns on `cloud-cheap`
-  (Haiku 5.5, $0.10/$0.50 per MTok), `cloud-default` (Sonnet 5.5, $2/$10) and `cloud-heavy`
-  (Opus 5.5, $4/$20) for the complex/reasoning tiers, stalls and over-long contexts.
+- Every tier is local, with or without an API key in `.env` (private first, since 2026-10-26). External models will be
+  explicit aliases behind the privacy gate, never a tier or fallback (docs/plans/SHARED-COMPONENTS.md section 2).
 - Interactive Claude Code on the subscription costs no API dollars; a credential variable (profile B or
   an API key in the gateway) bills per token. Traces record cost per request; `retro` reports cost per department.
 
@@ -121,7 +122,7 @@ uv run scripts/stack.py up [svc...] | down [svc...] | status
 uv run scripts/stack.py bench [--model m] [--num-ctx n] [--tokens n] [--runs n]
 uv run scripts/stack.py smoke [--dept id] [--skip-mcp]
 uv run scripts/stack.py why-routed [--last n] [--days n]
-uv run scripts/stack.py retro -- --days 7 [--reflect cloud-cheap] [--pr]
+uv run scripts/stack.py retro -- --days 7 [--reflect local-small|none] [--pr]
 npx promptfoo@0.125.0 eval -c evals/<dept>/promptfooconfig.yaml --repeat 3
 ```
 
@@ -156,11 +157,13 @@ Running list. Add new items; don't rewrite old ones.
 - 2026-10-26: tray app design, plus CPU, RAM and GPU use per process (#4).
 - 2026-10-25: confirm that the tray and its services start on their own after a reboot.
 - 2026-10-25: Open WebUI first run (admin user, model import, MCP server).
-- 2026-10-25: add `ANTHROPIC_API_KEY` and verify the cloud tiers.
+- 2026-10-25: add `ANTHROPIC_API_KEY` and verify the cloud tiers. (Superseded 2026-10-26: private first, no cloud tiers.)
 - 2026-10-25: run `scripts/claude-local.ps1` end to end on the 9B at 32k.
 - 2026-10-25: try the 35B as primary again after a RAM upgrade; try tuning `LLAMA_ARG_N_CPU_MOE`.
 - 2026-10-25: first `/retro` after a week of real traces; wire up the Open WebUI thumbs export.
 - 2026-10-25: test service management on Linux and macOS.
+- 2026-10-26: build is private only (S6/B1 core): no automatic cloud tiers. Next: privacy gate S1/S2, guardrail S3,
+  evals S8, then B2 services, R removals and the `stack.py install` installer (B3).
 
 ## Design decisions
 
