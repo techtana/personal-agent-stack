@@ -20,7 +20,7 @@ is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `
 ## Rules for agents working in this repo
 
 1. Never edit generated files (`.claude/agents/*.md`, `.opencode/agents/*.md`, `config/openwebui/*.json`,
-   `evals/*/promptfooconfig.yaml`, `evals/*/prompt.json`, `infrastructure/litellm/config.yaml`). Edit
+   `evals/*/promptfooconfig.yaml`, `evals/*/prompt.json`, `infrastructure/litellm/config.yaml`, `winget/*.winget`). Edit
    `agents/*.yaml`, `machines/*.yaml` or `agents/_common.md`, then run `uv run scripts/stack.py build`.
 2. Hardware-dependent values (models, context sizes, Ollama env, ports) come from `machines/<HOST>.yaml`
    plus `machines/_defaults.yaml`. Adding a machine = `uv run scripts/stack.py doctor --write-profile` on it.
@@ -44,6 +44,7 @@ is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `
 ```
 uv run scripts/stack.py tray                      # background tray app that runs the services and shows status
 uv run scripts/stack.py status | up | down        # native services (phoenix, litellm, orchestrator, open_webui)
+uv run scripts/stack.py tasks install|status|stop # edge mode: one Task Scheduler task per service (install: elevated)
 uv run scripts/stack.py smoke                     # gateway + MCP end-to-end checks
 uv run scripts/stack.py bench                     # tok/s and GPU/CPU split of the primary local model
 uv run scripts/stack.py why-routed --last 20      # routing decisions from traces

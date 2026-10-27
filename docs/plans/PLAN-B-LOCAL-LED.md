@@ -81,6 +81,12 @@ would need TLS at the edge, which this plan avoids.
 | B5 | Tests (section 4) | M | all |
 | B6 | User guide: the privacy boundary, alerts, external consent | S | B5 |
 
+Status 2026-10-26: B-S0 ran (results in `SHARED-COMPONENTS.md` V7, V9, V10). Keycloak fits the RAM budget
+(~0.5 GB working set with a 512 MB heap) and its Windows service install remains an elevated step for S7. Caddy 2.11.7
+issued and served separate certificates for two names from its internal CA; public certificates wait for B-D4.
+B2b's supervisor (`stack.py tasks`, `stack.py run`) is built and tested with a logon trigger; boot tasks need an
+elevated shell, and the privacy-gate and PostgreSQL entries arrive with B2.
+
 Order: B0 -> S1, S1b, S8 -> S2, S3, S6, B1 -> B2 -> R -> S4 (`owner` mode usable here) -> B3 -> B-S0 -> S7, B2b, B4 ->
 B5 -> B6.
 
