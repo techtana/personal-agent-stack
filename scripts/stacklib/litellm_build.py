@@ -22,7 +22,8 @@ def build_config(profile: dict) -> str:
     if policy["external"]["enabled"]:
         die("policy/privacy.yaml: external.enabled is true, but the privacy guardrail and gate (packages S1-S3) are not "
             "built yet; external models stay off until they are")
-    private = {"data_class": "private", "location": policy["location"]}
+    # agent_stack_location feeds the Local/Cloud label of the JSONL trace callback; every deployment is local now.
+    private = {"data_class": "private", "location": policy["location"], "agent_stack_location": "local"}
     model_list: list[dict] = []
     available: set[str] = set()
 
@@ -46,6 +47,7 @@ def build_config(profile: dict) -> str:
     if m.get("reviewer"):
         add("local-reviewer", _ollama(m["reviewer"], base, num_ctx=m["primary_num_ctx"], keep_alive="10m", **(m.get("reviewer_options") or {})),
             {**LOCAL_INFO, "max_input_tokens": m["primary_num_ctx"], "max_output_tokens": 8192})
+
     local_default = "local-primary" if "local-primary" in available else ("local-small" if "local-small" in available else None)
 
     def resolve(aid: str, target: str) -> str | None:

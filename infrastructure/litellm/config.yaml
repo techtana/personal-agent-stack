@@ -15,6 +15,7 @@ model_list:
     max_input_tokens: 4096
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: local-embed
   litellm_params:
     model: ollama/nomic-embed-text
@@ -25,6 +26,7 @@ model_list:
     output_cost_per_token: 0
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: local-small
   litellm_params:
     model: ollama_chat/qwen3.5:9b
@@ -40,6 +42,7 @@ model_list:
     max_output_tokens: 8192
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: local-primary
   litellm_params:
     model: ollama_chat/qwen3.5:9b
@@ -55,6 +58,7 @@ model_list:
     max_output_tokens: 8192
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: local-reviewer
   litellm_params:
     model: ollama_chat/flint:40b-a2b
@@ -71,6 +75,7 @@ model_list:
     max_output_tokens: 8192
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: app-dev-local
   litellm_params:
     model: ollama_chat/qwen3.5:9b
@@ -87,6 +92,7 @@ model_list:
     max_output_tokens: 8192
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: app-dev
   litellm_params:
     model: auto_router/complexity_router
@@ -118,6 +124,7 @@ model_list:
   model_info:
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: code-review-local
   litellm_params:
     model: ollama_chat/qwen3.5:9b
@@ -134,6 +141,7 @@ model_list:
     max_output_tokens: 8192
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: code-review
   litellm_params:
     model: auto_router/complexity_router
@@ -166,6 +174,7 @@ model_list:
   model_info:
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: devops-local
   litellm_params:
     model: ollama_chat/qwen3.5:9b
@@ -182,6 +191,7 @@ model_list:
     max_output_tokens: 8192
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: devops
   litellm_params:
     model: auto_router/complexity_router
@@ -214,6 +224,7 @@ model_list:
   model_info:
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: docs-local
   litellm_params:
     model: ollama_chat/qwen3.5:9b
@@ -230,6 +241,7 @@ model_list:
     max_output_tokens: 8192
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: docs
   litellm_params:
     model: auto_router/complexity_router
@@ -261,6 +273,7 @@ model_list:
   model_info:
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: security-local
   litellm_params:
     model: ollama_chat/qwen3.5:9b
@@ -277,6 +290,7 @@ model_list:
     max_output_tokens: 8192
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: security
   litellm_params:
     model: auto_router/complexity_router
@@ -311,6 +325,7 @@ model_list:
   model_info:
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: testing-local
   litellm_params:
     model: ollama_chat/qwen3.5:9b
@@ -327,6 +342,7 @@ model_list:
     max_output_tokens: 8192
     data_class: private
     location: onprem
+    agent_stack_location: local
 - model_name: testing
   litellm_params:
     model: auto_router/complexity_router
@@ -358,6 +374,7 @@ model_list:
   model_info:
     data_class: private
     location: onprem
+    agent_stack_location: local
 router_settings:
   routing_strategy: simple-shuffle
   num_retries: 1
