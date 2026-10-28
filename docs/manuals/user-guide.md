@@ -21,7 +21,8 @@ Hover over the icon to see `Agent Stack: N/M up`. The tray checks the services e
 
 **Menu** (right-click the icon)
 
-- **Show status**: opens the status window (a left-click does the same).
+- **Show status**: opens the status window on the Overview tab (a left-click does the same).
+- **Usage by model**, **Settings**: open the window on that tab.
 - One line for each service: `● up` or `○ down`.
 - **Open chat (Open WebUI)**, **Open traces (Phoenix)**, **Open gateway admin (LiteLLM)**: open each one in your browser.
 - **Start all services**, **Stop all services**.
@@ -30,12 +31,57 @@ Hover over the icon to see `Agent Stack: N/M up`. The tray checks the services e
 - **Quit (keep services running)**: closes only the tray.
 - **Stop services and quit**: stops the services, then closes the tray.
 
-**Status window**
+**Status window** (since 2026-10-27)
 
-The window shows `N/M running, checked HH:MM:SS` and one row for each service. Each row has its state (`running` or
-`stopped`), an **Open** button for the web UIs and a **Start**/**Stop** button. Ollama has no Start/Stop button
-because the Ollama app runs it. At the bottom are **Open chat**, **Start all**, **Stop all**, **Logs** and
-**Start at login**. Closing the window only hides it.
+The window is titled **Agent Stack** and follows Windows light or dark mode. The header shows the machine name, the
+primary model and its context size, and `cloud tiers on` or `local only`. The pill on the right shows
+`N/M running · checked HH:MM:SS`. Closing the window only hides it. It has three tabs.
+
+*Overview*
+
+- **Services**: one row per service with its role, port and state: `Running (pid N)`, `Stopped`, or
+  `Off in settings` (turned off in the Settings tab). Open WebUI, Phoenix and LiteLLM have an **Open** button. Every
+  service except Ollama has **Start**/**Stop**; the Ollama app runs Ollama.
+- **Loaded in Ollama**: each loaded model with **Size**, **On GPU** (share of the model in VRAM), **Context** and
+  **Unloads** (when Ollama will drop it). "No model is loaded" is normal: the first request loads one.
+- At the bottom: **Open chat**, **Start all**, **Stop all**, **Logs** and the **Start at login** checkbox.
+
+*Usage*
+
+Counts every request that went through the gateway, read from `traces/litellm/<date>.jsonl`.
+
+- **Period**: **Today**, **7 days** (default) or **30 days**.
+- **Group by**: **Gateway alias** (the name the client asked for, such as `local-primary` or `docs`) or
+  **Served model** (the model that answered, such as `qwen3.5:9b`).
+- Tiles: **Requests**, **Input tokens**, **Output tokens**, **Errors** (red when above 0) and **API cost**. Local
+  models cost $0; cost is cloud API spend.
+- The table has **Model**, **Requests**, **Errors**, **Input tok**, **Output tok**, **Avg latency**, **Output tok/s**,
+  **Cost** and **Last used**. Click a heading to sort. A red row means every request in it failed.
+- The chart shows tokens per day. Select a table row to show only that model.
+
+If the table says "No gateway requests in this period", either nothing used the gateway in that period or
+**Write usage traces** is off in Settings.
+
+*Settings*
+
+Changes the most common values in your machine profile, `machines/<HOST>.yaml`, without editing the file.
+
+| Group | Setting | What it does |
+|---|---|---|
+| Models | **Primary model**, **Primary context (tokens)** | The model behind `local-primary` and every `<department>-local`, and its context size. |
+| Models | **Memory-map primary weights** | Needed for the 35B MoE model; leave off for dense models. |
+| Models | **Small model**, **Small context (tokens)** | The model behind `local-small`. Keep the context equal to the primary's when both use the same model. |
+| Tracing and services | **Write usage traces** | Writes `traces/litellm/`. The Usage tab and `retro` need it. |
+| Tracing and services | **Phoenix tracing** | Runs Phoenix. Leave off on SEKAIHOME: Smart App Control blocks it. |
+| Tracing and services | **Open WebUI (chat)** | Runs the chat at http://127.0.0.1:3000. |
+| Ollama runtime | **Keep models loaded for**, **KV cache precision**, **Flash attention**, **Parallel requests per model** | Ollama's memory and speed options. |
+
+A changed row is marked **changed**. The bar at the bottom says what **Apply** will do. **Apply** saves the changed
+lines (comments are kept), rebuilds the configs and restarts only what the change needs. Changing an Ollama runtime
+option asks **Restart Ollama?** first, because requests in progress will fail. **Revert** discards unsaved changes;
+**Open profile file** opens the YAML.
+
+Cloud tiers are shown but cannot be changed here. Turning them on is a deliberate `.env` decision.
 
 ## What normal looks like
 
@@ -77,9 +123,14 @@ your plan quota. Nobody has tried a full live session this way yet (2026-10-26).
 
 - OpenCode: `opencode.json` sets up the gateway as provider `litellm`.
 - VS Code autocomplete: `config/continue/config.yaml` (Continue).
-- Open WebUI: pick a department from the model list.
+- Open WebUI: pick a department or model from the model list at the top of the chat, or type `@` in the input box
+  to pick one for a single message. Writing "use Claude" in a message does not switch models: the message goes to the
+  model you picked, and `local-primary` always answers locally. Only models the gateway offers appear in the list.
 
 ## Changing an agent or a model
+
+To change the primary or small model, a context size, tracing or an Ollama option, use the tray's **Settings** tab.
+For anything else:
 
 1. Edit `agents/<id>.yaml`, `agents/_common.md` or `machines/<HOST>.yaml`. Never edit the generated files.
 2. Regenerate the configs:
@@ -112,4 +163,5 @@ uv run scripts/stack.py bench
 This measures the primary model's speed in tokens per second. Compare the result with the benchmark table in
 `memory/state.md`.
 
-Traces are written to `traces/litellm/` (gateway) and `traces/claude/` (Claude Code hooks), and they also appear in Phoenix.
+Traces are written to `traces/litellm/` (gateway) and `traces/claude/` (Claude Code hooks). The tray's **Usage** tab
+summarises the gateway traces. They also appear in Phoenix when Phoenix runs.
