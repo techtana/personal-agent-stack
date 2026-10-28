@@ -42,6 +42,22 @@ curl -fsSL https://ollama.com/install.sh | sh
 
 Check that Ollama runs: `ollama --version` prints 0.40 or later.
 
+**Alternative on Windows: a winget configuration file.** `stack.py build` generates `winget/configuration.winget`.
+It installs uv, Git, Ollama, PostgreSQL 17, FFmpeg, Tesseract, ExifTool and qpdf in one run, with one UAC prompt.
+Most of these are for the planned privacy gate. `winget/configuration.edge.winget` also adds OpenJDK 25 (for
+Keycloak) and Caddy, for edge mode. Neither file installs the NVIDIA driver, Python, the uv tools or Claude Code. As
+of 2026-10-27 nobody has applied either file end to end on a clean account.
+
+Turn on winget's configuration feature once per machine. Without it, winget reports "Extended features are not enabled":
+
+```powershell
+winget configure --enable
+```
+
+```powershell
+winget configure --file winget\configuration.winget --accept-configuration-agreements
+```
+
 ### 2. Run setup
 
 From the repository root, on Windows:
@@ -112,6 +128,46 @@ uv run scripts/stack.py up
 
 Each service should report `healthy`. Ollama is not started by `up`; the Ollama app runs it.
 
+### Run the services before sign-in (optional)
+
+The tray starts the services only when you sign in. To run them from boot (edge mode), register one Task Scheduler
+task per service. Each task runs a supervisor (`stack.py run <service>`) that restarts its service after a crash,
+waiting 5 s, then longer each time, up to 60 s.
+
+In an **elevated** (Run as administrator) terminal:
+
+```powershell
+uv run scripts/stack.py tasks install
+```
+
+The default trigger is `startup`: the tasks run at boot without your password and reach only local resources. If you
+cannot use an elevated terminal, register tasks that start when you sign in instead:
+
+```powershell
+uv run scripts/stack.py tasks install --trigger logon
+```
+
+You should see the tasks in Task Scheduler under the `AgentStack` folder: `phoenix`, `litellm`, `orchestrator`,
+`open_webui`. Check them:
+
+```powershell
+uv run scripts/stack.py tasks status
+```
+
+Each line shows `<service> UP` or `down`, the task's state and its last result.
+
+Things to know:
+
+- A watchdog trigger runs every 2 minutes and restarts a supervisor that died, because Task Scheduler's own restart
+  on failure does not.
+- To stop a service on purpose, use `uv run scripts/stack.py tasks stop <service>`. It disables the task so the
+  watchdog does not bring it back. `uv run scripts/stack.py tasks start <service>` turns it on again.
+- `up`, `down` and the tray leave task-run services alone. The tray only shows their status.
+- If the tray or `up` already runs a service, its supervisor waits until the port is free instead of starting a second copy.
+- Logs go to the same `.run/logs/<service>.log`, in lines starting `[supervisor ...]`.
+- As of 2026-10-27 only the `logon` trigger has been tested (on Phoenix). The `startup` trigger has not been run yet.
+  Linux gets systemd user units (`agent-stack-<service>.service`), which are untested.
+
 ### 5. Check that it works
 
 ```powershell
@@ -168,6 +224,12 @@ uv run scripts/stack.py doctor --write-profile --refresh
    uv run scripts/stack.py tray --remove-startup
    ```
 
-2. In the tray menu, choose **Stop services and quit**.
-3. Remove the tools: `uv tool uninstall litellm`, `uv tool uninstall arize-phoenix`, `uv tool uninstall open-webui`.
-4. Delete `.run/` (logs, pid files, Phoenix data) and the models in your `model_store` folder.
+2. If you registered scheduled tasks, remove them (elevated terminal for `startup` tasks):
+
+   ```powershell
+   uv run scripts/stack.py tasks remove
+   ```
+
+3. In the tray menu, choose **Stop services and quit**.
+4. Remove the tools: `uv tool uninstall litellm`, `uv tool uninstall arize-phoenix`, `uv tool uninstall open-webui`.
+5. Delete `.run/` (logs, pid files, Phoenix data) and the models in your `model_store` folder.

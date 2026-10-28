@@ -72,16 +72,17 @@ uv run scripts/stack.py tray                    # starts the services and a tray
 uv run scripts/stack.py tray --install-startup  # optional: start the tray at login
 ```
 
-Clicking the icon opens a status window: each service's state, Open buttons for Open WebUI, Phoenix and the LiteLLM
-admin UI, and start/stop controls. The icon is green when everything is up, amber when something is down, red when the
-gateway or Ollama is down. The tray runs outside any terminal or Claude Code session, so its services keep running.
-The window also shows input/output token totals, average operation times per process and model, and cloud cost for a
-selectable period (1 hour, 24 hours, 7 days, 30 days, or all time). Metrics cover requests routed through LiteLLM;
-direct Claude subscription sessions bypass this telemetry. Ollama timings provide local model-load, prompt-evaluation,
-and generation phases when reported; cloud providers expose request duration only. Phoenix receives corresponding
-operation spans for inspection and aggregation. "Quit (keep services running)" closes only the tray; "Stop services and quit" stops everything.
-The window also lists live CPU and RAM usage and driver-reported GPU engine utilization and dedicated memory by process.
-Unavailable GPU readings show as `-`.
+Clicking the icon opens a status window with three tabs (since 2026-10-27): **Overview** (services, start/stop, models
+loaded in Ollama), **Usage** (requests, tokens, latency, tok/s and cost per model, from `traces/litellm/`) and
+**Settings** (models, context sizes, tracing, Open WebUI, Ollama runtime; **Apply** saves to `machines/<HOST>.yaml`,
+rebuilds and restarts what changed) and **Resources** (live CPU, RAM,
+driver-reported GPU engine use and dedicated GPU memory per process; unavailable readings show as `-`). The icon is green when everything is up, amber when something is down, red when
+the gateway or Ollama is down. The tray runs outside any terminal or Claude Code session, so its services keep running.
+"Quit (keep services running)" closes only the tray; "Stop services and quit" stops everything.
+
+For services that must run before anyone signs in (edge mode), register one Task Scheduler task per service instead,
+from an elevated terminal: `uv run scripts/stack.py tasks install`. See the
+[installation manual](docs/manuals/installation.md#run-the-services-before-sign-in-optional).
 
 Then:
 
@@ -125,6 +126,8 @@ After any change: `uv run scripts/stack.py build` (and `up`/`down` to restart th
 uv run scripts/stack.py doctor [--write-profile [--refresh]]   hardware, tools, ports, chosen class
 uv run scripts/stack.py profile | build | setup | pull [--all]
 uv run scripts/stack.py up [svc...] | down [svc...] | status
+uv run scripts/stack.py tray [--foreground | --status | --stop | --install-startup | --remove-startup]
+uv run scripts/stack.py tasks install|remove|start|stop|status|xml [svc...] [--trigger startup|logon]
 uv run scripts/stack.py bench [--model m] [--num-ctx n] [--tokens n] [--runs n]
 uv run scripts/stack.py smoke [--dept id] [--skip-mcp]
 uv run scripts/stack.py why-routed [--last n] [--days n]
@@ -151,16 +154,25 @@ symptom → cause → fix table. Logs are in `.run/logs/<service>.log`; Ollama's
 
 Tracker: https://github.com/techtana/personal-agent-stack/issues
 
-- [#4](https://github.com/techtana/personal-agent-stack/issues/4): improve the tray app's design and show CPU, RAM
-  and GPU use per process.
+- Phoenix does not start on SEKAIHOME since 2026-10-26: Smart App Control blocks compiled modules in its tool
+  environment (pyarrow, sqlalchemy, pandas). The plans remove Phoenix; until then turn **Phoenix tracing** off in the
+  tray's Settings tab. The tray's Usage tab reads the JSONL traces and does not need Phoenix.
 - Smart App Control may also start blocking the uv tool environments' `python.exe` (see the open items in `memory/state.md`).
+- The LiteLLM admin UI (`/ui`, the tray's **Open gateway admin** link) shows "Not connected to DB!" because it needs Postgres.
 - `local-reviewer` points at `flint:40b-a2b`, which is not pulled. No tier routes to it.
+- A chat message cannot switch models. Open WebUI sends each message to the model picked in the chat's model list
+  (or with `@` in the input box), and `local-primary` is always the local model.
 
 ## Path forward
 
 Running list. Add new items; don't rewrite old ones.
 
-- 2026-10-26: tray app design, plus CPU, RAM and GPU use per process (#4).
+- 2026-10-27: elevated steps from B-S0/B2b: `winget configure --enable`, then `stack.py tasks install --trigger startup`
+  once B2 lands.
+- 2026-10-27: apply `winget/configuration.winget` on a clean Windows account (B3).
+- 2026-10-27: remove Phoenix from the stack (plan item R); it no longer starts on SEKAIHOME.
+- 2026-10-26: tray app design, plus CPU, RAM and GPU use per process (#4). Design and usage done 2026-10-27 (PR #9);
+  the per-process view (Resources tab) landed with PR #8.
 - 2026-10-25: confirm that the tray and its services start on their own after a reboot.
 - 2026-10-25: Open WebUI first run (admin user, model import, MCP server).
 - 2026-10-25: add `ANTHROPIC_API_KEY` and verify the cloud tiers. (Superseded 2026-10-26: private first, no cloud tiers.)
@@ -173,8 +185,9 @@ Running list. Add new items; don't rewrite old ones.
 
 ## Design decisions
 
-Running log. Never delete an entry; mark a reversed one as superseded. Details are in [docs/decisions/](docs/decisions/)
-and [memory/lessons.md](memory/lessons.md).
+Running log of the most important decisions. Never delete an entry; mark a reversed one as superseded. The full log,
+with reasons and rejected alternatives, is [docs/design/DECISIONS.md](docs/design/DECISIONS.md); plans and their status
+are indexed in [docs/design/](docs/design/README.md).
 
 - 2026-10-24: Compose existing tools (Claude Code, OpenCode, LiteLLM) instead of building a custom harness. A
   hand-rolled proxy broke tool-using clients.
@@ -190,14 +203,25 @@ and [memory/lessons.md](memory/lessons.md).
 - 2026-10-25: Identify a service by pid plus process start time, because Windows reuses pids.
 - 2026-10-25: Starting services with `CREATE_BREAKAWAY_FROM_JOB` from an agent shell (superseded the same day; it
   was unreliable). The tray app launched through Explorer now owns the services.
+- 2026-10-26: Private first. External model APIs are off at install and become an explicit, gated user choice. This
+  supersedes automatic cloud tiers.
+- 2026-10-26: Build the privacy plans on existing open-source tools (Presidio, detect-secrets, deface, ExifTool,
+  Keycloak/Authentik) and write only glue.
+- 2026-10-26: Edge mode runs each service under a Task Scheduler task with a 2-minute watchdog trigger, because Task
+  Scheduler's restart on failure does not restart a killed process.
+- 2026-10-26: Windows dependencies come from a generated winget configuration file, so the install is unattended and reviewable.
+- 2026-10-27: The tray's Settings tab edits `machines/<HOST>.yaml` and restarts only what changed; cloud tiers stay
+  read-only there, because turning them on is a deliberate `.env` decision.
 
 ## Repository layout
 
 ```
 agents/            department source of truth (+ _common.md)        machines/   hardware profiles
-scripts/           stack.py CLI, stacklib/, retro.py, hooks/        orchestrator/  FastMCP server + job store
+scripts/           stack.py CLI, stacklib/, tray.py, retro.py, hooks/   orchestrator/  FastMCP server + job store
+winget/            configuration.winget, configuration.edge.winget (generated by `stack.py build`)
 infrastructure/    litellm/config.yaml (generated), custom_callbacks.py, docker-compose.yml (optional)
 .claude/           settings, skills (retro, harden, brainstorm, why-routed), agents/ (generated)
 .opencode/ opencode.json  config/openwebui/ config/continue/   evals/ (generated gates)   memory/   traces/   retro/
-docs/              ORCHESTRATOR-DESIGN.md, HANDOFF-2026-10-24.md, research/, archive/DESIGN-2025.md, decisions/
+docs/              ORCHESTRATOR-DESIGN.md, manuals/, plans/ (private-first plans), design/ (decision log, plan index),
+                   decisions/ (ADRs), research/, archive/, HANDOFF-2026-10-24.md
 ```

@@ -18,6 +18,12 @@ uv run scripts/stack.py doctor
 uv run scripts/stack.py smoke
 ```
 
+If you registered scheduled tasks:
+
+```powershell
+uv run scripts/stack.py tasks status
+```
+
 Each service also answers a health URL on 127.0.0.1: Ollama at `:11434/api/version`, LiteLLM at
 `:4000/health/liveliness`, the orchestrator at `:8765/healthz`, Open WebUI at `:3000/health` and Phoenix at `:6006/`.
 
@@ -47,6 +53,16 @@ Logs:
 | The gateway returns 401 | The client sent the wrong key. | Send `LITELLM_MASTER_KEY` from `.env` as a Bearer token. |
 | Open WebUI shows "Failed to connect to MCP server" above a reply; the orchestrator log shows `401` / `invalid_token` | The tool server was saved with another `.env` value (for example `WEBUI_SECRET_KEY`). | In **Admin > Settings > Integrations > External Tool Servers**, edit the connection and paste `ORCHESTRATOR_BEARER`. |
 | The cloud tier is never used | By design since 2026-10-26: every tier is private and local. | Nothing to fix. External models will be explicit aliases behind the privacy gate (`docs/plans/`). |
+| You asked the chat to "use Claude", and the local model replied that it cannot | The message went to the model picked in Open WebUI's model list. A model cannot switch to another model, and `local-primary` is always local. | Pick another model in the list, or with `@` in the input box. Claude models do not appear there while external models are off (see the cloud-tier row above). Claude cannot generate images either way. |
+| Phoenix shows `Stopped`, or `WARN phoenix: ...` in the log | Since 2026-10-26 Smart App Control blocks compiled modules in Phoenix's tool environment (pyarrow, sqlalchemy, pandas). | Turn **Phoenix tracing** off in the tray's Settings tab. The Usage tab reads the JSONL traces and does not need Phoenix. The plans remove Phoenix. |
+| The LiteLLM admin UI (`/ui`) shows "Not connected to DB!" | The admin UI needs Postgres, which is not set up. | Use the tray's Usage tab or `stack.py why-routed` instead. |
+| Usage tab says "No gateway requests in this period" | Nothing used the gateway in that period, or **Write usage traces** is off. | Pick a longer period, or turn **Write usage traces** on in Settings and click **Apply**. |
+| Settings **Apply** says `LiteLLM runs under a scheduled task` or `LiteLLM was started outside this stack` | The tray restarts only a LiteLLM it started itself. | Run `uv run scripts/stack.py tasks stop litellm`, then `tasks start litellm`; or restart that LiteLLM yourself. |
+| Settings **Apply** says `LiteLLM did not come back within 2 minutes` | The new config failed to load. | Read `.run/logs/litellm.log`, fix the setting, then **Apply** again. |
+| `up` or `down` says `<svc>: supervised by a scheduled task` | That service runs under a Task Scheduler task. | Use `uv run scripts/stack.py tasks start <svc>` or `tasks stop <svc>`. |
+| `tasks install` prints `schtasks refused: ...` | `startup` tasks need an elevated terminal to register. | Run it again as administrator, or use `--trigger logon`. |
+| A service you stopped comes back about 2 minutes later | Its task is still enabled, so the watchdog trigger restarted it. | Stop it with `uv run scripts/stack.py tasks stop <svc>`, which disables the task. |
+| `winget configure` says "Extended features are not enabled" | winget's configuration feature is off. | Run `winget configure --enable` once. |
 | The Anthropic API returns 400 about `temperature` | Claude models no longer accept `temperature`, `top_p` or `top_k` (since 2026-10-21). | Set these only under `local:` in `agents/<id>.yaml`. |
 | Claude Code does not show the orchestrator, or shows `ECONNREFUSED` | The server is not approved, or it is not running. | Approve the `.mcp.json` server when Claude Code asks. Check that the orchestrator is up in the tray, then restart Claude Code. |
 | Orchestrator calls fail with 401 | The bearer is empty or does not match. | Make sure the variable is named `ORCHESTRATOR_BEARER`. Claude Code blanks variables named `*_TOKEN` or `*_API_KEY` in `.mcp.json`. Rerun setup to write `.claude/settings.local.json`. |
