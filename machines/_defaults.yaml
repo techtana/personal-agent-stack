@@ -53,12 +53,6 @@ hardware_classes:
     small_num_ctx: 0
     max_loaded_models: 1
 
-cloud_models:
-  cheap:   claude-haiku-5-5     # $0.10/$0.50 per MTok (<=100K prompt)
-  default: claude-sonnet-5-5    # $2/$10
-  heavy:   claude-opus-5-5      # $4/$20
-  # claude-fable-5-1 ($10/$50) is never auto-routed; use it explicitly in Claude Code.
-
 ollama_env:
   # Applied as Windows USER environment variables (or printed for systemd) by `stack.py setup`.
   # Values marked {auto} are derived from the hardware class.
@@ -94,17 +88,15 @@ observability:
   jsonl_traces: true     # LiteLLM custom callback -> traces/litellm/*.jsonl
   gpu_exporter: false    # winget install utkuozdemir.nvidia_gpu_exporter (Prometheus :9835)
 
-cloud:
-  enabled: auto          # auto = enabled when ANTHROPIC_API_KEY is present in .env or the environment
-  api_key_env: ANTHROPIC_API_KEY
+# External models (off by default) and data classes: policy/privacy.yaml.
 
 claude_code:
-  # Profile A (default): Claude Code talks to Anthropic directly on the subscription.
+  # Profile A (default): Claude Code talks to Anthropic directly on the subscription (outside the privacy boundary).
   # Profile B (`scripts/claude-local.ps1|sh`): CLAUDE_CONFIG_DIR=~/.claude-local -> LiteLLM /v1/messages.
   local_profile_dir: ~/.claude-local
   local_profile:
     default_model: local-primary
     haiku_model: local-small
     sonnet_model: local-primary
-    opus_model: local-primary      # set to cloud-default to mix cloud into the local profile (needs API key; bills per token)
+    opus_model: local-primary      # private aliases only; the build refuses anything else
     max_output_tokens: 8192

@@ -14,8 +14,8 @@ claude:
 routing:
   simple: local-primary
   medium: local-primary
-  complex: cloud-cheap
-  reasoning: cloud-default
+  complex: local-primary
+  reasoning: local-primary
   plan_mode_min_tier: medium
   keyword_tier_rules:
     - {keywords: ["architecture document", "onboarding guide", "complete documentation"], tier: complex}

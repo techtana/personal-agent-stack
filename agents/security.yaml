@@ -13,9 +13,9 @@ claude:
   effort: high
 routing:
   simple: local-primary
-  medium: cloud-default
-  complex: cloud-default
-  reasoning: cloud-heavy
+  medium: local-primary
+  complex: local-primary
+  reasoning: local-primary
   plan_mode_min_tier: complex
   keyword_tier_rules:
     - {keywords: ["threat model", "compliance", "SOC2", "cryptograph", "penetration", "red team"], tier: reasoning}

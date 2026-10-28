@@ -50,7 +50,7 @@ def cmd_doctor(a):
         info("services:")
         for r in services.status(p):
             info(f"  {r['service']:<13}: {'UP  ' if r['healthy'] else 'down'}  {r['url']}")
-        info(f"cloud        : {'ON (' + p['cloud_key_env'] + ' present)' if p['cloud_enabled'] else 'OFF (no ' + p['cloud_key_env'] + ' in env/.env)'}")
+        info(f"external     : {'ON' if p['policy']['external']['enabled'] else 'OFF'} (policy/privacy.yaml)")
     except FileNotFoundError as e:
         warn(str(e))
     if a.write_profile:
@@ -69,7 +69,7 @@ def cmd_build(a):
     agents_build.build_all(p)
     litellm_build.build(p)
     winget_build.build()
-    info(f"build: machine={p['name']} class={p['hardware_class']} primary={p['models'].get('primary')} cloud={'on' if p['cloud_enabled'] else 'off'}")
+    info(f"build: machine={p['name']} class={p['hardware_class']} primary={p['models'].get('primary')} external={'on' if p['policy']['external']['enabled'] else 'off'}")
 
 
 def ensure_env_file() -> dict[str, str]:
@@ -204,7 +204,9 @@ def cmd_smoke(a):
 
 
 def cmd_claude_env(a):
-    print(claude_env.render(claude_env.local_profile_env(prof.resolve_profile()), a.shell))
+    p = prof.resolve_profile()
+    claude_env.write_local_profile_settings(p)
+    print(claude_env.render(claude_env.local_profile_env(p), a.shell))
 
 
 def cmd_why_routed(a):

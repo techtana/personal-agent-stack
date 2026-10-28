@@ -7,7 +7,7 @@ Each `agents/<id>.yaml` defines one department once. `uv run scripts/stack.py bu
 | `.claude/agents/<id>.md` | Claude Code subagents (`@<id>` or auto-delegation; `claude --agent <id>`) |
 | `.opencode/agents/<id>.md` + `opencode.json` models | OpenCode |
 | `config/openwebui/<id>.json` | Open WebUI Workspace > Models > Import |
-| `infrastructure/litellm/config.yaml` | LiteLLM model `<id>` (complexity router), `<id>-local`, `<id>-cloud` |
+| `infrastructure/litellm/config.yaml` | LiteLLM model `<id>` (complexity router over private deployments), `<id>-local` |
 | `evals/<id>/promptfooconfig.yaml` | promptfoo regression gate |
 
 Never edit generated files; edit the YAML and rebuild. `agents/_common.md` is appended to every
@@ -30,8 +30,8 @@ claude:
 routing:                    # LiteLLM complexity_router tiers (lowercase here, upper-case in config)
   simple: local-primary
   medium: local-primary
-  complex: cloud-default
-  reasoning: cloud-default
+  complex: local-primary
+  reasoning: local-primary
   plan_mode_min_tier: complex
   keyword_tier_rules:
     - {keywords: ["threat model"], tier: reasoning}
@@ -51,6 +51,6 @@ evals:
       - {type: icontains, value: ...}
 ```
 
-Tier targets: `local-small`, `local-primary`, `cloud-cheap`, `cloud-default`, `cloud-heavy`.
-When the cloud is disabled on a machine (no API key), every cloud target is rewritten to
-`local-primary` at build time.
+Tier targets are private deployments only: `local-small`, `local-primary`, `local-reviewer`. Any other target fails
+the build (private first; external models are explicit aliases, never tiers: `policy/privacy.yaml`). A target this
+machine does not serve is rewritten to its best local deployment at build time.

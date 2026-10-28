@@ -14,8 +14,8 @@ claude:
 routing:
   simple: local-primary
   medium: local-primary
-  complex: cloud-default
-  reasoning: cloud-default
+  complex: local-primary
+  reasoning: local-primary
   plan_mode_min_tier: medium
   keyword_tier_rules:
     - {keywords: ["e2e strategy", "load test", "chaos"], tier: complex}

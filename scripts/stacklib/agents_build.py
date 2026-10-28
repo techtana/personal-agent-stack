@@ -134,9 +134,6 @@ def update_opencode_json(agents: list[dict], profile: dict) -> None:
             "name": f"local small: {profile['models']['small']}",
             "limit": {"context": profile["models"]["small_num_ctx"], "output": 8192},
         }
-    if profile["cloud_enabled"]:
-        for k, v in profile["cloud_models"].items():
-            models[f"cloud-{k}"] = {"name": f"cloud {k}: {v}", "limit": {"context": 200000, "output": 32000}}
     prov["models"] = models
     doc["model"] = "litellm/app-dev"
     doc["small_model"] = "litellm/local-small" if profile["models"].get("small") else "litellm/docs"

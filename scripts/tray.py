@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pystray  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
-from stacklib import IS_WINDOWS, REPO, ollama, profile as prof, services  # noqa: E402
+from stacklib import IS_WINDOWS, REPO, ollama, process_metrics, profile as prof, services  # noqa: E402
 from stacklib import settings as cfg  # noqa: E402
 from stacklib import startup, usage  # noqa: E402
 
@@ -117,6 +117,8 @@ class TrayApp:
         self.usage_data: dict | None = None
         self.usage_days = 7
         self.usage_group = "alias"
+        self.process_sampler = process_metrics.ProcessSampler()
+        self.process_rows: list[dict] = []
         self.busy = ""
         self.checked_at = ""
         self.ui_queue: queue.Queue = queue.Queue()
@@ -137,6 +139,7 @@ class TrayApp:
         with self.refresh_lock:
             self.rows = services.status(self.profile)
             self.loaded = ollama.ps(f"http://127.0.0.1:{self.profile['ports']['ollama']}")
+            self.process_rows = self.process_sampler.sample()
             self.checked_at = datetime.now().strftime("%H:%M:%S")
             up = {r["service"] for r in self.rows if r["healthy"]}
             wanted = ["ollama", *self.managed]
@@ -361,6 +364,7 @@ class TrayApp:
         self._build_overview(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
         self._build_usage(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
         self._build_settings(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
+        self._build_resources(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
 
     # ---------- Overview tab ----------
     def _build_overview(self, tab: ttk.Frame) -> None:
@@ -432,12 +436,13 @@ class TrayApp:
         busy = f"  ·  {self.busy}..." if self.busy else ""
         self.pill_text.configure(text=f"{up}/{total} running  ·  checked {self.checked_at or '...'}{busy}")
         m = self.profile["models"]
-        cloud = "cloud tiers on" if self.profile["cloud_enabled"] else "local only"
+        cloud = "external models allowed" if self.profile["policy"]["external"]["enabled"] else "private only"
         self.head_sub.configure(text=f"{self.profile['name']}  ·  primary {m.get('primary')} @ {compact(m.get('primary_num_ctx', 0))} ctx  ·  {cloud}")
         for b in (self.start_btn, self.stop_btn):
             b.configure(state="disabled" if self.busy else "normal")
         self.startup_var.set(startup.is_installed())
         self._render_loaded()
+        self._render_resources()
 
     def _render_loaded(self) -> None:
         for child in self.loaded_frame.winfo_children():
@@ -460,6 +465,36 @@ class TrayApp:
             vals = (m.get("name", "?"), human_bytes(size), gpu, compact(m.get("context_length") or 0), unloads)
             for c, v in enumerate(vals):
                 ttk.Label(self.loaded_frame, text=v, style="Card.TLabel").grid(row=r, column=c, sticky="w", padx=(0, 24), pady=2)
+
+    # ---------- Resources tab ----------
+    def _build_resources(self, tab: ttk.Frame) -> None:
+        self.tabs.add(tab, text="Resources")
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(0, weight=1)
+        card = self._card(tab, "Live process resources", row=0, column=0)
+        card.columnconfigure(0, weight=1)
+        card.rowconfigure(2, weight=1)
+        ttk.Label(card, text="CPU is measured between refreshes; GPU metrics are reported by the driver. "
+                  "Unavailable readings show as -.", style="Card.Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 8))
+        cols = (("name", "Process", 260, "w"), ("pid", "PID", 80, "e"), ("cpu", "CPU %", 90, "e"),
+                ("memory", "RAM MB", 100, "e"), ("gpu", "GPU engine %", 120, "e"), ("gpu_memory", "GPU dedicated MB", 150, "e"))
+        self.process_tree = ttk.Treeview(card, columns=[c[0] for c in cols], show="headings", height=16)
+        for key, title, width, anchor in cols:
+            self.process_tree.heading(key, text=title)
+            self.process_tree.column(key, width=width, minwidth=60, anchor=anchor)
+        scroll = ttk.Scrollbar(card, orient="vertical", command=self.process_tree.yview)
+        self.process_tree.configure(yscrollcommand=scroll.set)
+        self.process_tree.grid(row=2, column=0, sticky="nsew")
+        scroll.grid(row=2, column=1, sticky="ns")
+
+    def _render_resources(self) -> None:
+        def num(v: float | None) -> str:
+            return f"{v:.1f}" if v is not None else "-"
+
+        self.process_tree.delete(*self.process_tree.get_children())
+        for r in self.process_rows:
+            self.process_tree.insert("", "end", values=(r["name"], r["pid"], num(r["cpu_percent"]), num(r["memory_mb"]),
+                                                         num(r["gpu_percent"]), num(r["gpu_memory_mb"])))
 
     # ---------- Usage tab ----------
     def _build_usage(self, tab: ttk.Frame) -> None:
@@ -722,11 +757,9 @@ class TrayApp:
             if sid.startswith("models.") and isinstance(var, tk.StringVar) and values[sid] and values[sid] not in models:
                 for box in self.model_boxes:  # keep the configured model selectable even when it is not pulled
                     box.configure(values=sorted({*box.cget("values"), values[sid]}))
-        key = self.profile["cloud_key_env"]
         self.cloud_label.configure(text=(
-            f"Cloud tiers: on ({key} is set). Complex requests may leave this machine." if self.profile["cloud_enabled"] else
-            f"Cloud tiers: off. No {key} in .env, so every tier is served locally. This stays a .env decision on purpose "
-            "(private first; see memory/state.md open item 4)."))
+            "External models: off. Every tier runs on local models, whatever .env holds; external models wait for "
+            "the privacy gate and external.enabled in policy/privacy.yaml (docs/plans/)."))
         self._settings_dirty()
 
     def _edits(self) -> dict[str, object]:

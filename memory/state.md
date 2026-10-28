@@ -59,6 +59,10 @@ Before the tray, services started from a Claude Code tool shell stopped once (15
 once across a session restart.
 
 ## Verified on this machine
+- 2026-10-26 late evening, private-only build (S6/B1) merged with the tray/metrics branch and deployed to the main
+  checkout; `setup --no-pull`, tray restart: all five services UP (Phoenix included, receiving spans); 17 aliases, all
+  `data_class: private`; unit tests 11/11. Full `smoke` 6/7 in 28 min (first chat 448 s, OpenAI tool call timed out)
+  while the first requests queued behind warm-up; warm `smoke --dept docs` 8/8 in 72 s (chat 3.4 s); direct Ollama 80 tok/s.
 - 2026-10-26, B-S0/B2b: Keycloak 26.8.1 `start-dev` 411 MB idle, ~515 MB after 300 logins (512 MB heap cap); Caddy
   served two internal-CA names over TLS; a `stack.py tasks` logon task restarted Phoenix's supervisor through its 2-minute
   watchdog trigger after a kill (Task Scheduler's restart on failure did not). Details in docs/plans/SHARED-COMPONENTS.md V7, V9, V10.
@@ -96,9 +100,12 @@ once across a session restart.
 2. Start at login is on; after the next reboot or sign-in, confirm
    the tray and its services come up on their own.
 8. Linux/macOS service management (tool Python launch, start-time pid matching) is written but untested on those systems.
-3. Open WebUI first run at http://127.0.0.1:3000: create admin; Workspace > Models > Import each config/openwebui/*.json; Admin > Integrations > External Tool Servers > MCP (Streamable HTTP) http://127.0.0.1:8765/mcp with the bearer from .env.
-4. Do not add ANTHROPIC_API_KEY to .env until build change S6 lands: today a key makes complex tiers route to Anthropic
-   automatically, which contradicts the private-first direction.
+3. Open WebUI first run at http://127.0.0.1:3000: create admin; Workspace > Models > Import each config/openwebui/*.json; Admin > Integrations > External Tool Servers > MCP (Streamable HTTP) http://127.0.0.1:8765/mcp with ORCHESTRATOR_BEARER from .env (2026-10-27: the connection was saved with WEBUI_SECRET_KEY, so every chat logged "Failed to connect to MCP server" and the orchestrator answered 401 invalid_token; fixed the same day by writing ORCHESTRATOR_BEARER into Open WebUI's `tool_server.connections` row, backup in `.run/open-webui/webui.db.bak-2026-10-27-mcp-key`; an MCP initialize and tools/list with the saved key returned the five tools).
+4. Done 2026-10-26 (S6/B1 core): the build is private only. `policy/privacy.yaml` holds `external.enabled: false`; every
+   deployment carries `data_class`/`location`; a tier, fallback, default or profile B alias naming a non-private
+   deployment fails the build; `external.enabled: true` is refused until the gate (S1-S3) exists. Profile B sets
+   `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and denies WebFetch/WebSearch in `~/.claude-local/settings.json`.
+   Still open from S6: guardrail entry, `database_url`, gate config, Open WebUI assets, compose output.
 5. Run `scripts/claude-local.ps1` once to verify Claude Code profile B end to end (Read/Edit tool round trip through LiteLLM) on the 9B at 32k.
 6. Revisit the 35B as primary after a RAM upgrade; the 9B fits entirely on the GPU and leaves ~17 GB of RAM available.
 11. Elevated steps left from B-S0/B2b (admin terminal, main checkout): `winget configure --enable`; `uv run scripts/stack.py tasks

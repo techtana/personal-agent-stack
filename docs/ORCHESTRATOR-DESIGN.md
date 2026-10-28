@@ -60,7 +60,9 @@ engines      Ollama 0.40.11 native, 127.0.0.1:11434                   Anthropic 
 orchestration  FastMCP 4.1.3 server 127.0.0.1:8765/mcp: list_departments, delegate(dept, task, tier, wait) -> job,
                get_job, cancel_job, record_lesson; SQLite job store; bearer auth; calls the gateway
 observability  traces/litellm/*.jsonl (per request: alias, served model, routing decision, tokens, cost, latency,
-               Claude Code request class) · traces/claude/*.jsonl (Stop/SubagentStop/PostToolUse hooks) · Phoenix :6006
+               Claude Code request class, Ollama load/prompt/generation durations) · traces/claude/*.jsonl
+               (Stop/SubagentStop/PostToolUse hooks) · Phoenix :6006 (operation spans by process/model; tray aggregates
+               token totals, average durations and cloud cost over selectable periods)
 self-dev     scripts/retro.py -> retro/reports/<date>.md (+ proposals) -> /retro skill applies approved deltas ->
              build -> promptfoo gate (evals/<dept>) -> commit/PR. Never auto-merge.
 state        machines/<HOST>.yaml (hardware class, models, Ollama env) · agents/<id>.yaml (single source of truth)
@@ -115,7 +117,9 @@ tiers mapped to the aliases above, `classifier_type: heuristic` (local, <1 ms, n
 `stall_escalation_enabled` (window 6, repeat threshold 2), `enable_context_window_escalation` (buffer 0.9),
 `route_housekeeping_to_cheapest_tier`, `escalation_keywords: [ESCALATE, "use claude"]`, optional
 `plan_mode_min_tier` and `keyword_tier_rules`. Decisions are logged per request (`routing_decision` in the
-JSONL trace) and shown by `why-routed`. The heuristic classifier is deliberately the starting point; the
+JSONL trace), shown by `why-routed`, and appended to routed chat responses in Open WebUI with the concrete
+deployment model and its Local/Cloud location.
+The heuristic classifier is deliberately the starting point; the
 retro proposes tier-boundary or keyword changes from evidence, and `adaptive_router` (Thompson sampling,
 needs Postgres) is the upgrade path once there is enough traffic.
 

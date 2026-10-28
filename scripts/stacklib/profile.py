@@ -12,9 +12,10 @@ from pathlib import Path
 
 import yaml
 
-from . import IS_WINDOWS, MACHINES_DIR, REPO, env_value, load_dotenv, warn
+from . import IS_WINDOWS, MACHINES_DIR, REPO, warn
 
 DEFAULTS_FILE = MACHINES_DIR / "_defaults.yaml"
+POLICY_FILE = REPO / "policy" / "privacy.yaml"
 
 
 def machine_name() -> str:
@@ -23,6 +24,17 @@ def machine_name() -> str:
 
 def load_defaults() -> dict:
     return yaml.safe_load(DEFAULTS_FILE.read_text(encoding="utf-8"))
+
+
+def load_policy() -> dict:
+    """policy/privacy.yaml; a missing file means everything private and external models off."""
+    doc = yaml.safe_load(POLICY_FILE.read_text(encoding="utf-8")) if POLICY_FILE.exists() else {}
+    doc = doc or {}
+    doc.setdefault("location", "onprem")
+    ext = doc.setdefault("external", {})
+    ext.setdefault("enabled", False)
+    ext.setdefault("providers", {})
+    return doc
 
 
 def machine_file(name: str | None = None) -> Path:
@@ -138,11 +150,6 @@ def resolve_profile(name: str | None = None) -> dict:
     models["primary_options"] = dict(cls.get("primary_options") or {})
     models["reviewer_options"] = dict(cls.get("reviewer_options") or {})
     models.update({k: v for k, v in (m.get("models") or {}).items() if v is not None})
-    dotenv = load_dotenv()
-    cloud_cfg = {**(defaults.get("cloud") or {}), **(m.get("cloud") or {})}
-    key_env = cloud_cfg.get("api_key_env", "ANTHROPIC_API_KEY")
-    enabled = cloud_cfg.get("enabled", "auto")
-    cloud_enabled = bool(env_value(key_env, dotenv)) if enabled == "auto" else bool(enabled)
     ollama_env = dict(defaults["ollama_env"])
     ollama_env.update(m.get("ollama_env") or {})
     if m.get("model_store"):
@@ -160,9 +167,7 @@ def resolve_profile(name: str | None = None) -> dict:
         "hardware_class": cls_name,
         "detected": m.get("detected", {}),
         "models": models,
-        "cloud_models": defaults["cloud_models"],
-        "cloud_enabled": cloud_enabled,
-        "cloud_key_env": key_env,
+        "policy": load_policy(),
         "ollama_env": ollama_env,
         "ports": {**defaults["ports"], **(m.get("ports") or {})},
         "services": {**defaults["services"], **(m.get("services") or {})},

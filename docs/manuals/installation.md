@@ -97,7 +97,6 @@ Open `machines/<HOST>.yaml`. The `detected:` block is regenerated on refresh. Yo
 
 - `model_store`: the folder for Ollama models (SEKAIHOME uses `D:\ollama\models`).
 - `models.primary`: replace the class default model. SEKAIHOME uses `qwen3.5:9b`.
-- `cloud.enabled`: `auto` turns cloud tiers on when an API key is present.
 
 After you edit it, run:
 
@@ -185,33 +184,11 @@ SEKAIHOME.
 3. Go to **Admin > Integrations > External Tool Servers**. Add an MCP (Streamable HTTP) server at
    `http://127.0.0.1:8765/mcp`, using the `ORCHESTRATOR_BEARER` value from `.env` as the bearer.
 
-### 7. Turn on cloud tiers (optional)
+### 7. External models
 
-Read this first. The project is private first (2026-10-26), and `memory/state.md` advises against adding a key while
-the build on `main` still routes complex tiers to Anthropic automatically. Once open
-[PR #8](https://github.com/techtana/personal-agent-stack/pull/8) is merged, these steps no longer turn on cloud
-tiers: external models stay off until the privacy gate exists and `external.enabled` is turned on in
-`policy/privacy.yaml` (added by PR #8). Even then, they appear only as explicit aliases (`external/anthropic/<model>`) that you choose
-yourself, never as a tier the gateway switches to on its own.
-
-1. Put your key in `.env` as `ANTHROPIC_API_KEY=<key>`.
-2. Rebuild the configs:
-
-   ```powershell
-   uv run scripts/stack.py build
-   ```
-
-3. Restart the gateway:
-
-   ```powershell
-   uv run scripts/stack.py down litellm
-   ```
-
-   ```powershell
-   uv run scripts/stack.py up litellm
-   ```
-
-4. Run `uv run scripts/stack.py doctor`. It should print `cloud : ON`.
+Off. The project is private first: every tier runs on local models, and an API key in `.env` changes nothing.
+External models will be explicit, gated choices once the privacy gate is built (`docs/plans/`). Until then the build
+refuses `external.enabled: true` in `policy/privacy.yaml`.
 
 ## Adding another machine
 
