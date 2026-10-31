@@ -141,6 +141,27 @@ For anything else:
 
 3. Restart the gateway: in the tray, click **Stop** and then **Start** on the LiteLLM row.
 
+## Your skills library
+
+Skills you write in `~/.claude/skills` or in claude.ai are copied into `skills/` by the weekly `skills-sync`
+scheduled task (set up in the installation manual, step 8). To run it by hand:
+
+```powershell
+uv run scripts/stack.py skills-sync --dry-run   # report only
+uv run scripts/stack.py skills-sync             # copy new and changed skills
+```
+
+The report names each skill as:
+
+- `added`: new, now copied into `skills/`.
+- `updated`: changed at its source; the copy in `skills/` was replaced.
+- `unchanged`: nothing to do.
+- `orphaned`: gone from its source (deleted or renamed). The copy stays until you delete it in a commit.
+- `skipped`: Anthropic's, proprietary, or listed under `exclude` in `skills/sync.yaml`.
+
+Edit a skill at its source, not in `skills/`; the next sync overwrites the copy. The weekly task holds back any skill
+whose new content looks personal and names it in its report. To keep it out for good, add its name to `exclude`.
+
 ## Seeing what happened
 
 ```powershell
