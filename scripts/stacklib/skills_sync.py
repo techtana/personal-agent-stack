@@ -22,13 +22,15 @@ SKIP_NAMES = {"__pycache__", ".git", ".DS_Store", "Thumbs.db"}
 
 
 def _files(root: Path) -> dict[str, str]:
-    """Relative path -> sha256 for every file under root, skipping hidden and cache entries."""
+    """Relative path -> sha256 (line endings ignored) for every file under root, skipping hidden and cache entries."""
     out: dict[str, str] = {}
     for p in sorted(root.rglob("*")):
         rel = p.relative_to(root)
         if any(part in SKIP_NAMES or part.startswith(".") for part in rel.parts) or not p.is_file():
             continue
-        out[rel.as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()
+        out[rel.as_posix()] = hashlib.sha256(p.read_bytes().replace(b"
+", b"
+")).hexdigest()  # git may rewrite line endings
     return out
 
 
