@@ -1,0 +1,11 @@
+{
+  "create-documentation": {
+    "origin": "~/.claude/skills"
+  },
+  "hiring-process-design": {
+    "origin": "claude.ai (plugin)"
+  },
+  "mcu-memory-check": {
+    "origin": "~/.claude/skills"
+  }
+}

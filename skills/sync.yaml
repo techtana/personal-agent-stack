@@ -1,0 +1,14 @@
+# Which skills `uv run scripts/stack.py skills-sync` copies into skills/.
+# This repository is PUBLIC: anything synced here is published once it is committed and pushed.
+
+# Folders whose subfolders each hold one skill (a SKILL.md). `~` is the user's home.
+sources:
+  - ~/.claude/skills            # personal Claude Code skills (the `synced` subfolder is read through its manifest)
+
+# claude.ai-synced skills are copied only when their manifest `source` is listed here. "plugin" covers skills you
+# uploaded or built in claude.ai; "anthropic" and "anthropic-example" are Anthropic's and are never copied.
+synced_sources: [plugin]
+
+# Skill names never copied, whatever their source.
+exclude:
+  - job-search-agent            # personal data (full name, employer, resume claims, OneDrive paths)

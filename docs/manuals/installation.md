@@ -190,6 +190,35 @@ Off. The project is private first: every tier runs on local models, and an API k
 External models will be explicit, gated choices once the privacy gate is built (`docs/plans/`). Until then the build
 refuses `external.enabled: true` in `policy/privacy.yaml`.
 
+### 8. Skills library sync (optional)
+
+`skills/` keeps a copy of the skills you wrote yourself (`~/.claude/skills` and the skills you made in claude.ai), so
+they are versioned with the stack. A weekly Claude Code scheduled task copies new and changed skills and opens a pull
+request for you to review. The repository is public, so read each pull request before merging it.
+
+1. Check what would be copied:
+
+   ```powershell
+   uv run scripts/stack.py skills-sync --dry-run
+   ```
+
+   Anthropic's skills, skills marked `license: Proprietary` and names under `exclude` in `skills/sync.yaml` are
+   skipped. Add any skill that holds personal data to `exclude`.
+2. Make sure `skills-sync` is on `main` (`git log origin/main --oneline -- scripts/stacklib/skills_sync.py` prints a
+   commit). The scheduled task runs the command from `main`.
+3. In the Claude desktop app, open **Scheduled tasks** and create a new task:
+   - Name: `skills-sync`
+   - Folder: `C:\Code\personal-agent-stack`
+   - Schedule: weekly, Monday 09:00
+   - Prompt: everything below the line in [skills/sync-task-prompt.md](../../skills/sync-task-prompt.md)
+4. Click **Run now** once. Expect either "no new or modified skills" or a link to a pull request titled
+   `feat: sync skills (...)`.
+5. Review the pull request and merge it yourself. The task never merges, and it opens no new pull request while one is
+   still open.
+
+Scheduled tasks run only while the Claude desktop app is open. A run missed while the app was closed runs at the next
+launch. `gh` must be signed in (`gh auth status`) for the task to push and open pull requests.
+
 ## Adding another machine
 
 On the new machine, clone the repository and run setup (step 2). It writes that machine's own `machines/<HOST>.yaml`.
