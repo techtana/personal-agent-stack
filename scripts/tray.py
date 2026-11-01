@@ -909,8 +909,14 @@ class TrayApp:
         win = scroll.create_window(0, 0, window=form, anchor="nw")
         form.bind("<Configure>", lambda _e: scroll.configure(scrollregion=scroll.bbox("all")))
         scroll.bind("<Configure>", lambda e: scroll.itemconfigure(win, width=e.width))
-        form.bind_all("<MouseWheel>", lambda e: scroll.yview_scroll(int(-e.delta / 120), "units")
-                      if self.tabs.index("current") == 2 else None, add="+")
+        self.settings_canvas = scroll
+        # Tk 8.6 on X11 reports the wheel as buttons 4 and 5 (on Windows those are the side buttons).
+        wheel = ["<MouseWheel>", *(["<Button-4>", "<Button-5>"] if self.root.tk.call("tk", "windowingsystem") == "x11" else [])]
+        for seq in wheel:
+            form.bind_all(seq, self._settings_wheel, add="+")
+            # Tk's own TCombobox binding steps a read-only box to the next value; scroll the form instead and stop
+            # there, so the "all" binding above does not scroll a second time.
+            self.root.bind_class("TCombobox", seq, lambda e: (self._settings_wheel(e), "break")[1])
         form.columnconfigure(1, weight=1)
         self.form = form
 
@@ -968,6 +974,19 @@ class TrayApp:
         self.apply_log = ttk.Label(bar, text="", style="HeadSub.TLabel", wraplength=820, justify="left")
         self.apply_log.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
         self._load_settings()
+
+    def _settings_wheel(self, e) -> None:
+        """Scroll the Settings form while its tab is showing. Windows sends 120 per notch; touchpads and macOS send
+        smaller steps, which still scroll one unit instead of rounding to none."""
+        if self.tabs.index("current") != 2:
+            return
+        if e.num in (4, 5):
+            units = -1 if e.num == 4 else 1
+        elif e.delta:
+            units = -round(e.delta / 120) or (-1 if e.delta > 0 else 1)
+        else:
+            return
+        self.settings_canvas.yview_scroll(units, "units")
 
     def _load_settings(self) -> None:
         self.profile = prof.resolve_profile(self.profile["name"])
