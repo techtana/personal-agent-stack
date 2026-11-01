@@ -43,7 +43,7 @@ Every feature runs on the owner's own hardware. That is the private-first rule (
 | C2 | A cold load of the 9B from the USB SSD took 130-161 s (`memory/state.md`). | Many separate "expert" LLMs would mean minutes of waiting at each switch. The experts are prompts on one shared model (section 8). |
 | C3 | Smart App Control blocks unsigned compiled modules file by file. It broke Phoenix (`memory/lessons.md`, 2026-10-26). | Each new PyTorch service (ComfyUI, Kokoro, custom nodes) must pass a spike before anything depends on it. |
 | C4 | 32 GB DDR4. The usual desktop load leaves about 11-12 GB free. Wan 2.2 with offload wants 24-32 GB of system RAM. | Video runs with desktop apps closed, or not at all. Keep the 9B as primary; the 35B MoE leaves no RAM for media. |
-| C5 | C: has about 36 GB free. The media models in section 5 add roughly 40-60 GB. The model drive is the owner's choice. **Agent sessions never read, write or stage anything on D: or in OneDrive.** | The owner sets model paths in `machines/SEKAIHOME.yaml` and copies model files himself. The build reads the paths; agents do not touch those folders. |
+| C5 | C: has about 36 GB free. The media models in section 5 add roughly 40-60 GB. **The owner selects which drives and folders agent sessions may work on; everything else is off-limits.** | Each session asks for the selection first. Model, cache and output paths are set explicitly inside it (`machines/<HOST>.yaml`). Anything outside it, the owner adds to the selection or copies himself. The stack's own tools enforce the list (task T08). |
 | C6 | Native services only, no Docker or WSL2 (ADR 2026-10-24). | Each service runs as a uv environment or a vendor installer, managed by `stack.py` and the tray. |
 | C7 | Licences must be checked before a model is named (lesson 2026-10-26). | Section 5 lists each licence. Non-commercial weights need an owner decision (D-M3). |
 | C8 | Ollama's image generation runs on macOS and Linux with CUDA only. | Images come from ComfyUI on this Windows machine. |
@@ -291,6 +291,7 @@ three days, L more.
 
 | File | Change |
 |---|---|
+| `machines/<HOST>.yaml` (`agent_access`) | `allowed_roots`: the drives and folders the owner selected; empty means "ask"; checked by `stacklib/paths.py` (T08) |
 | `machines/_defaults.yaml` | ports `comfyui: 8188`, `kokoro: 8880`; `services.comfyui` and `services.kokoro` (`native` or `off`, default `off`); a `media:` section (install dir, models dir, ComfyUI flags); `vision` in `model_catalog` |
 | `machines/SEKAIHOME.yaml` | the owner fills in `media:` paths himself (C5) |
 | `scripts/stacklib/services.py` | `SERVICE_ORDER`, `commands()`, `health_url()` (ComfyUI `/system_stats`; Kokoro health route to confirm), `EXPECTED_IMAGES`; Open WebUI env for audio and image generation |
@@ -318,7 +319,7 @@ change only through `uv run scripts/stack.py build`.
 | D-M3 | Non-commercial or custom-licence weights (MMAudio, FLUX.2 klein 9B, HunyuanVideo-Foley, LTX-2) | Allowed for personal use only, and marked "(NC)" or "(custom licence)" in the model or workflow name |
 | D-M4 | Speech through LiteLLM or direct to Kokoro and Whisper | Direct first; through LiteLLM if the Usage tab should count it |
 | D-M5 | Web search | Off |
-| D-M6 | Where media models live | Owner's choice; the owner copies files and sets the paths |
+| D-M6 | Which drives and folders agents may use, and where media models, caches and outputs live | Owner selects; recorded as `agent_access.allowed_roots` in `machines/<HOST>.yaml`; paths outside it are refused |
 | D-M7 | GPU sharing | G1 tray switch plus G2 `--lowvram` |
 | D-M8 | New departments | `writer`, `scientist`, `architect`, `art-critic` |
 
@@ -341,7 +342,7 @@ on another machine, so they can start while the spike waits.
 
 ```mermaid
 flowchart LR
-  S0["M-S0 spike<br/>T01-T07"] --> M1["M1 vision and departments<br/>T10-T14"]
+  S0["M-S0 spike and path guard<br/>T01-T08"] --> M1["M1 vision and departments<br/>T10-T14"]
   S0 --> M2["M2 speech<br/>T20-T25"]
   M1 --> M3["M3 Auto router<br/>T30-T34"]
   S0 --> M4["M4 ComfyUI, images, GPU mode<br/>T40-T46"]
@@ -354,7 +355,7 @@ flowchart LR
   M6 --> M7
 ```
 
-### M-S0: spike (SEKAIHOME, owner present)
+### M-S0: spike (SEKAIHOME, owner present) and path guard
 
 | ID | Task | Size | Depends | Done when |
 |---|---|---|---|---|
@@ -365,6 +366,7 @@ flowchart LR
 | T05 | Wan 2.2 5B 5 s 720p clip; both Foley candidates on it; a 30 s ACE-Step track; desktop apps closed | M | T02 | minutes per clip, peak RAM and VRAM, owner's Foley choice recorded |
 | T06 | Route B: one LTX-2.x GGUF clip, one-hour cap | S | T02 | finished or not, and time, recorded |
 | T07 | Write the spike results into `memory/state.md`, `memory/lessons.md` and sections 5-6 of this plan | S | T01-T06 | pull request merged |
+| T08 | Path guard: `agent_access.allowed_roots` in the machine profile; `stacklib/paths.py` refuses any media, model, cache or output path outside it; `media:` paths and tool caches (`HF_HOME`, ComfyUI paths) are set from it; unit tests (can be built on any machine) | S | D-M6 | a path outside the list fails the build with a clear message; tests cover drive letters, symlinks and `..` |
 
 ### M1: vision and new departments
 
@@ -433,7 +435,7 @@ flowchart LR
 | T81 | Troubleshooting rows: Smart App Control blocks, out of memory at decode, workflow rejected, slow reload | any | S | each package | rows added |
 | T82 | Close the plan: Outcome note here, design index status, `memory/state.md` | any | S | all | plan marked done |
 
-Tasks that can start now, without SEKAIHOME: T11, T30 (after T12's ids are fixed), T44 (structure), T50, T51, T54.
+Tasks that can start now, without SEKAIHOME: T08, T11, T30 (after T12's ids are fixed), T44 (structure), T50, T51, T54.
 
 ## 15. Sources (read 2026-11-01)
 

@@ -143,4 +143,5 @@ once across a session restart.
    `uv run --with pytest pytest` until pytest is a dev dependency. Restart the tray from the main checkout after merging.
 14. Multimodal stack (2026-11-01): plan in docs/design/plans/2026-11-01-multimodal-stack.md, handoff in
    docs/HANDOFF-2026-11-01-multimodal.md. Nothing installed or measured yet; spike M-S0 runs on this machine with the
-   owner present. Agent sessions must not touch D: or OneDrive; the owner places media model files himself.
+   owner present. Agent sessions work only on the drives and folders the owner selects at the start of each session;
+   everything else is off-limits (plan C5, D-M6, task T08).

@@ -29,9 +29,17 @@ Then work through section 4 below.
 
 - Follow `AGENTS.md`. In particular: never edit generated files (rule 1); private first (rule 9); one bounded task
   per pull request, with a checkpoint (rule 5).
-- **Never read, write, list or stage anything on the D: drive or in the owner's OneDrive folders**, even though
-  model files live on D: today. When a step needs a file there (a model download, a model path), stop, tell the owner
-  exactly what to copy where, and let him do it. Paths go into `machines/SEKAIHOME.yaml` only as values he gives you.
+- **Work only on the drives and folders the owner selects.** At the start of every session, before any file
+  command, ask the owner which drives and folders this session may use, and repeat the list back. Everything else is
+  off-limits: do not read, list, write, stage or search it, and do not run commands that touch it (a recursive search
+  from a drive root, a model download to a default cache, a tool that scans the profile). Never assume a drive is
+  allowed because the repo, a config value or an earlier session mentions it; the owner may change the selection at
+  any time.
+- When a step needs a path outside the selection (a model download folder, a ComfyUI models folder, a cache), stop.
+  Either the owner adds that folder to the selection, or you tell him exactly what to copy where and he does it.
+  Paths go into `machines/<HOST>.yaml` only as values he gives you.
+- Point every tool's cache and output at a selected folder explicitly (for example `HF_HOME`, ComfyUI's model and
+  output paths), so nothing lands in a default location outside it.
 - The repository is public. Do not commit personal data, file names from personal folders, or secrets.
 - Do not start or stop the stack's services from your tool shell to keep them running; the tray owns them
   (`memory/lessons.md`, 2026-10-25). Short test runs are fine; say what you started and stop it again.
@@ -66,6 +74,7 @@ that branch. Check and correct the state file.
 
 ### Session 1: deep planning (no machine changes)
 
+0. Ask the owner which drives and folders this session may use (section 2). Work only there.
 1. Run `uv run scripts/stack.py doctor` and `status`. Note anything that contradicts section 3.
 2. Read the plan end to end. Check its claims against the code paths it names (`litellm_build.py`, `agents_build.py`,
    `services.py`, `settings.py`, `smoke.py`), and against the installed Open WebUI 0.12.3 for the audio, image and
@@ -78,12 +87,13 @@ that branch. Check and correct the state file.
    the "Auto" pipe and the GPU mode.
 6. Open a pull request with the planning changes. Stop for review.
 
-Tasks marked **any** in plan section 14 (T11, T30, T44, T50, T51, T54) need no GPU. They can be built in a
+Tasks marked **any** in plan section 14 (T08, T11, T30, T44, T50, T51, T54) need no GPU. They can be built in a
 separate session while the spike waits for the owner.
 
 ### Session 2: spike M-S0 (owner present; changes the machine)
 
-Run tasks T01-T07 (checks S0a-S0f) from the plan. Ask before each install. Record every time, VRAM and RAM figure in `memory/state.md`, and
+Run tasks T01-T07 (checks S0a-S0f) from the plan, inside the selected drives and folders only. Build T08
+(the path guard) before or alongside them, so the stack's own tools enforce the selection. Ask before each install. Record every time, VRAM and RAM figure in `memory/state.md`, and
 every surprise in `memory/lessons.md`. Update the plan's model choices from the results. One pull request.
 
 ### Sessions 3 onward: build, one package per pull request
@@ -119,6 +129,7 @@ Paste this into Claude Code opened on this repository on SEKAIHOME:
 Read docs/HANDOFF-2026-11-01-multimodal.md and follow it. Start with Session 1 (deep planning, no machine
 changes): check the plan in docs/design/plans/2026-11-01-multimodal-stack.md and the four knowledge chapters it
 links against the code and the installed versions, then walk me through decisions D-M1 to D-M8 a few at a time, then
-review the task breakdown T01-T82 and the routing decision trees. Never touch the D: drive or my OneDrive folders; tell me what to copy instead. Open a pull request at the
-end and stop.
+review the task breakdown T01-T82 and the routing decision trees. Before any file command, ask me which drives and
+folders you may use, and work strictly inside them; for anything outside, tell me what to copy where instead. Open a
+pull request at the end and stop.
 ```

@@ -187,8 +187,8 @@ The plan uses 1 as a tray switch ("GPU mode") with 2 as a safety net. A 32 GB ca
   ([atlas wiki note](https://github.com/thekaveh/atlas/wiki/Service-Open-Webui)).
 - Saved workflows live in `config/comfyui/workflows/`; licences and versions in `config/comfyui/MODELS.md`.
 - The tray gains a GPU mode switch; ComfyUI starts with `--lowvram --reserve-vram 1.0`.
-- Model files: the owner chooses where they live and copies them himself. Agent sessions never read or write the D:
-  drive or OneDrive.
+- Model files, caches and outputs: only on the drives and folders the owner selects (`agent_access.allowed_roots`).
+  Every tool's cache path is set explicitly, so nothing lands in a default folder outside the selection.
 
 ## What we found
 
