@@ -149,7 +149,11 @@ symptom → cause → fix table. Logs are in `.run/logs/<service>.log`; Ollama's
   against about 52 for the dense 9B (SEKAIHOME, 2026-10-25).
 - Only Windows is verified (2026-10-26). Service management on Linux and macOS is written but untested, and so is the Docker compose path.
 - Cloud tiers have not been exercised yet, because no API key is on the reference machine. Claude Code profile B has
-  not been run as a live session yet.
+  not been run as a live session yet. Since 2026-10-28 the build is private only, so no tier can reach an external
+  model at all (`policy/privacy.yaml`, `external.enabled: false`).
+- AI agents on the machine run as the owner's own account, so nothing at the operating-system level stops them reading
+  personal files. A plan to fix that exists ([AGENT-FILE-ISOLATION.md](docs/plans/AGENT-FILE-ISOLATION.md)); nothing
+  is applied yet.
 - Routing budgets and LiteLLM's adaptive router need Postgres, so they are not in use.
 
 ## Known issues
@@ -164,6 +168,16 @@ Tracker: https://github.com/techtana/personal-agent-stack/issues
 - `local-reviewer` points at `flint:40b-a2b`, which is not pulled. No tier routes to it.
 - A chat message cannot switch models. Open WebUI sends each message to the model picked in the chat's model list
   (or with `@` in the input box), and `local-primary` is always the local model.
+- `/ux-rules` lives in `.claude/skills/ux-rules/`, not in the `skills/` library. The commit that moves it (`a8400c9`)
+  landed on the PR branch after PR #13 merged (2026-11-01).
+- D: on SEKAIHOME is exFAT, which has no file permissions, so any account can read everything on it (found
+  2026-10-30). Personal data there must move, or the drive must be reformatted to NTFS, before the agent account split
+  can protect it.
+- An empty Open WebUI database (`litellm.db`, `litellm.db-shm`, `litellm.db-wal`) has been committed at the repository
+  root since 2026-10-26 (`d93211b`). Its tables hold no rows; it is not used by the stack.
+- The Claude Code hook log (`scripts/hooks/log_turn.py`, `traces/claude/`) keeps the first 200 characters of the last
+  assistant message and the first 300 characters of each Bash command, although its docstring says no prompt or file
+  contents are stored (found 2026-11-01).
 
 ## Path forward
 
@@ -183,7 +197,13 @@ Running list. Add new items; don't rewrite old ones.
 - 2026-10-25: first `/retro` after a week of real traces; wire up the Open WebUI thumbs export.
 - 2026-10-25: test service management on Linux and macOS.
 - 2026-10-26: build is private only (S6/B1 core): no automatic cloud tiers. Next: privacy gate S1/S2, guardrail S3,
-  evals S8, then B2 services, R removals and the `stack.py install` installer (B3).
+  evals S8, then B2 services, R removals and the `stack.py install` installer (B3). Merged to `main` 2026-10-28 (PR #8).
+- 2026-10-31: create the weekly `skills-sync` scheduled task from `skills/sync-task-prompt.md` and click **Run now** once.
+- 2026-11-01: hard block on AI agents reading personal files: decide D1-D4, deal with the exFAT D: drive, finish the
+  V-F checks, then build `stack.py isolate` (I2) ([plan](docs/plans/AGENT-FILE-ISOLATION.md)).
+- 2026-11-01: merge `a8400c9` to move `/ux-rules` into `skills/`; run the second `ux-rules` eval round with the
+  sharper assertions.
+- 2026-11-01: remove the stray `litellm.db*` files from the repository root and ignore them.
 
 ## Design decisions
 
@@ -214,6 +234,21 @@ are indexed in [docs/design/](docs/design/README.md).
 - 2026-10-26: Windows dependencies come from a generated winget configuration file, so the install is unattended and reviewable.
 - 2026-10-27: The tray's Settings tab edits `machines/<HOST>.yaml` and restarts only what changed; cloud tiers stay
   read-only there, because turning them on is a deliberate `.env` decision.
+- 2026-10-28: The private-only build is on `main` (PR #8): a tier, fallback, default or profile B alias that names an
+  external model fails the build.
+- 2026-10-29: Proposed, not decided: block AI agents from personal files with a separate standard Windows account and
+  NTFS deny entries, because every agent's own settings are advisory on native Windows.
+- 2026-10-31: Version the owner's own skills in `skills/` with a one-way `skills-sync`; never sync Anthropic's,
+  proprietary or personal-data skills, because the repository is public.
+- 2026-11-01: UX reviews use `/ux-rules`, a catalog of 122 researched rules with evidence grades; it will not help
+  A/B-test deceptive patterns.
+
+## Background knowledge
+
+The stack rests on a few domains a newcomer may not know: how local models use GPU memory, how a gateway routes
+requests, how privacy is enforced rather than advised, how Windows keeps background services alive, and how coding
+agents improve from traces. Start with [docs/knowledge/README.md](docs/knowledge/README.md), which gives a reading
+order and a glossary.
 
 ## Repository layout
 
@@ -221,10 +256,11 @@ are indexed in [docs/design/](docs/design/README.md).
 agents/            department source of truth (+ _common.md)        machines/   hardware profiles
 scripts/           stack.py CLI, stacklib/, tray.py, retro.py, hooks/   orchestrator/  FastMCP server + job store
 winget/            configuration.winget, configuration.edge.winget (generated by `stack.py build`)
-infrastructure/    litellm/config.yaml (generated), custom_callbacks.py, docker-compose.yml (optional)
+infrastructure/    litellm/ (config.yaml generated, custom_callbacks.py), docker-compose.yml (optional)
 .claude/           settings, skills (retro, harden, brainstorm, why-routed, ux-rules), agents/ (generated)
 skills/            your own skills library, synced weekly by a scheduled task (README, sync.yaml, sync-task-prompt.md)
 .opencode/ opencode.json  config/openwebui/ config/continue/   evals/ (generated gates)   memory/   traces/   retro/
 docs/              ORCHESTRATOR-DESIGN.md, manuals/, plans/ (private-first plans), design/ (decision log, plan index),
-                   decisions/ (ADRs), research/, archive/, HANDOFF-2026-10-24.md
+                   knowledge/ (domain background for newcomers), decisions/ (ADRs), research/, archive/,
+                   HANDOFF-2026-10-24.md
 ```

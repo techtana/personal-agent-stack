@@ -4,7 +4,53 @@ Running log, newest first. Never delete an entry; mark a reversed one "Supersede
 date, the decision, why, the alternatives turned down, and where it came from. Decisions recorded in more detail
 elsewhere link there. Architecture decision records (ADR format) live in [../decisions/](../decisions/README.md).
 
-"Pending" marks a decision made in an open pull request that is not on `main` yet.
+"Pending" marks a decision made in an open pull request that is not on `main` yet. When the pull request merges, the
+entry stays and gets a "Done <date>" note.
+
+## 2026-11-01
+
+- **UX reviews use a researched rule catalog packaged as a skill (`/ux-rules`).** 122 rules in 14 categories plus 15
+  contested or debunked ones; each rule carries an evidence grade, limits, how to detect it, how to build it and how
+  to measure it. The skill refuses to A/B-test deceptive patterns. Why: the owner asked for proven UX rules, organised
+  by category, and a way to check a UI against them. Source: [PR #13](https://github.com/techtana/personal-agent-stack/pull/13),
+  [.claude/skills/ux-rules/references/](../../.claude/skills/ux-rules/references/README.md).
+- **Pending: `ux-rules` belongs in the `skills/` library** (convention of 2026-10-31). The commit that moves it
+  (`a8400c9`) is on the PR branch but landed after PR #13 merged, so on `main` the skill is still in `.claude/skills/`.
+  Source: PR #13 reviewer notes.
+- **Run fewer research subagents, or stagger them.** Why: ten parallel agents shared one WebSearch budget, ran it out
+  and hit the plan's session limit. Source: `memory/lessons.md`, `7773047`.
+
+## 2026-10-31
+
+- **The owner's own skills are versioned in `skills/`, copied by `stack.py skills-sync`.** One way: a skill deleted
+  at its source is reported `orphaned` and removed only in a reviewed commit. Files compare by sha256 with line
+  endings ignored. Why: keep skills versioned and reusable by the stack's other clients. Source:
+  [PR #11](https://github.com/techtana/personal-agent-stack/pull/11), [skills/README.md](../../skills/README.md).
+- **Never sync Anthropic's skills, `license: Proprietary` skills, or names under `exclude`.** `job-search-agent` is
+  excluded because it holds personal data and the repository is public. Source: PR #11, `skills/sync.yaml`.
+- **A weekly Claude desktop scheduled task runs the sync in a throwaway worktree, scans for personal data, runs the
+  tests and opens a pull request; it never merges.** Why: human-gated changes, same as the retro loop. Source: PR #11,
+  [skills/sync-task-prompt.md](../../skills/sync-task-prompt.md).
+
+## 2026-10-29
+
+- **Proposed: the hard block on AI agents reading personal files is a separate standard Windows account** (`ai-agent`,
+  group `AI-Agents`) with NTFS deny entries on personal folders, not any agent's own settings. Why: deny rules,
+  hooks and app sandboxes are advisory or off by default on native Windows (`python -c` reads a denied file).
+  Rejected: app deny rules as the boundary; WSL2 with the Claude Code sandbox (RAM); a Hyper-V VM per agent (2-4 GB
+  RAM, no GPU) except for untrusted one-off runs. Open: D1-D4. The 2026-10-30 checks found D: is exFAT with no
+  permissions, so personal data there must move or the drive be reformatted first. Source:
+  [PR #12](https://github.com/techtana/personal-agent-stack/pull/12), [AGENT-FILE-ISOLATION.md](../plans/AGENT-FILE-ISOLATION.md).
+
+## 2026-10-28
+
+- **PR #8 merged:** the private-only gateway build, the per-process view and the hidden-console service start below
+  are on `main` since 2026-10-28. The build also checks Claude Code profile B aliases, and profile B sets
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and denies WebFetch and WebSearch. Source:
+  [PR #8](https://github.com/techtana/personal-agent-stack/pull/8).
+- **`stack.py down` leaves Task Scheduler-supervised services to `stack.py tasks stop`.** Source: PR #8 (merge
+  conflict resolution); the reason is not recorded there (the 2026-10-26 entry says `tasks stop` disables the task so
+  the watchdog does not revive it).
 
 ## 2026-10-27
 
@@ -24,7 +70,7 @@ elsewhere link there. Architecture decision records (ADR format) live in [../dec
   are off at install and become an explicit, consented, gated user choice. Why: the provider must not be able to
   read the data. Rejected: automatic Claude escalation by token count or keyword; `cloud.enabled: auto`. Source:
   `be3d566`, [SHARED-COMPONENTS.md section 0](../plans/SHARED-COMPONENTS.md). Supersedes the cloud-tier entries of 2026-10-24.
-- **Pending (PR #8): the gateway build is private only.** Routers, fallbacks and defaults name private deployments
+- **Pending (PR #8; done 2026-10-28): the gateway build is private only.** Routers, fallbacks and defaults name private deployments
   only; the build fails on an external target and refuses `external.enabled: true` until the privacy gate exists.
   Why: enforce private first in generated config, not only in docs. Rejected: `cloud.enabled: auto` (PR #2).
   Source: [PR #8](https://github.com/techtana/personal-agent-stack/pull/8), SHARED-COMPONENTS S6.
@@ -74,7 +120,7 @@ elsewhere link there. Architecture decision records (ADR format) live in [../dec
   it and there is no spawn-to-assign race. Source: `459904b`, `memory/lessons.md`.
 - **Windows dependencies come from a generated winget configuration file**, not from `stack.py setup`. Why:
   unattended, reviewable install. Source: PR #7, SHARED-COMPONENTS V9.
-- **Pending (PR #8): per-process CPU, RAM and GPU in the tray** (issue #4, part 2). Source: `28262a1`.
+- **Pending (PR #8; done 2026-10-28): per-process CPU, RAM and GPU in the tray** (issue #4, part 2). Source: `28262a1`.
 
 ## 2026-10-25
 
@@ -82,7 +128,7 @@ elsewhere link there. Architecture decision records (ADR format) live in [../dec
   Why: services must outlive any terminal or agent session. Rejected: starting services from an agent shell with
   `CREATE_BREAKAWAY_FROM_JOB` (tried the same day, unreliable). Source: [PR #3](https://github.com/techtana/personal-agent-stack/pull/3),
   [plan](plans/2026-10-25-tray-app.md).
-- **Pending (PR #8): services run in a hidden console (`CREATE_NO_WINDOW`).** Why: closing a visible console killed a
+- **Pending (PR #8; done 2026-10-28): services run in a hidden console (`CREATE_NO_WINDOW`).** Why: closing a visible console killed a
   server. Source: `d259e76`.
 - **Start uv tools through their environment's `python.exe`**, not the `~/.local/bin` launchers; a blocked service
   warns and the batch continues. Why: Smart App Control blocks each unsigned launcher. Source: `memory/lessons.md`.
