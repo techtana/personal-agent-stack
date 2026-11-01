@@ -204,6 +204,8 @@ Running list. Add new items; don't rewrite old ones.
 - 2026-11-01: merge `a8400c9` to move `/ux-rules` into `skills/`; run the second `ux-rules` eval round with the
   sharper assertions.
 - 2026-11-01: remove the stray `litellm.db*` files from the repository root and ignore them.
+- 2026-11-01: multimodal stack (vision, speech, images, style transfer, video with audio, music, web search, routing
+  per message): plan proposed, nothing built. Start from [docs/HANDOFF-2026-11-01-multimodal.md](docs/HANDOFF-2026-11-01-multimodal.md).
 
 ## Design decisions
 
