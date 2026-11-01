@@ -53,6 +53,41 @@ class LaunchFlags(unittest.TestCase):
         self.assertFalse(services.WINDOWS_FLAGS & subprocess.DETACHED_PROCESS)
 
 
+class Problems(unittest.TestCase):
+    """start() and stop() say why they left a service alone, so the tray can show it on the service's row."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.profile = {"data_dir": self.tmp.name, "ports": {"orchestrator": _free_port()}}
+        missing = str(Path(self.tmp.name) / "no-such-program.exe")
+        cmds = {"orchestrator": {"cmd": [missing], "cwd": self.tmp.name, "env": None}}
+        for p in (mock.patch.object(services, "commands", return_value=cmds),
+                  mock.patch.object(services, "health_url", side_effect=lambda p, s: f"http://127.0.0.1:{self.profile['ports']['orchestrator']}/")):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_missing_program_is_reported_and_logged(self):
+        with mock.patch.object(services, "_task_managed", return_value=set()):
+            problems = services.start(self.profile, ["orchestrator"])
+        self.assertIn("program not found", problems["orchestrator"])
+        self.assertIn("could not start: program not found", services.last_log_line(self.profile, "orchestrator"))
+
+    def test_task_managed_service_is_left_to_its_task(self):
+        with mock.patch.object(services, "_task_managed", return_value={"orchestrator"}):
+            self.assertIn("tasks start orchestrator", services.start(self.profile, ["orchestrator"])["orchestrator"])
+            self.assertIn("tasks stop orchestrator", services.stop(self.profile, ["orchestrator"])["orchestrator"])
+
+    def test_last_log_line_reads_only_what_was_written_since(self):
+        log = services.log_file(self.profile, "orchestrator")
+        log.write_text("ValueError: an old crash\n", encoding="utf-8")
+        offset = log.stat().st_size
+        with open(log, "a", encoding="utf-8") as f:
+            f.write("INFO starting\nImportError: DLL load failed\n\n")
+        self.assertEqual(services.last_log_line(self.profile, "orchestrator", since=offset), "ImportError: DLL load failed")
+        self.assertEqual(services.last_log_line(self.profile, "orchestrator", since=log.stat().st_size), "")
+
+
 class Lifecycle(unittest.TestCase):
     """Start a real HTTP server as a service through start(), find it through status(), stop its tree."""
 

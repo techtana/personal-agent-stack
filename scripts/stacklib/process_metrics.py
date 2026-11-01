@@ -84,6 +84,9 @@ def _windows_gpu_usage() -> dict[int, dict[str, float]]:
             check=True,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or "").strip().splitlines()
+        raise GpuUnavailable(f"Get-Counter exited with code {exc.returncode}" + (f" ({detail[0][:160]})" if detail else "")) from exc
     except (OSError, subprocess.SubprocessError) as exc:
         raise GpuUnavailable(f"Windows GPU counters unavailable: {exc}") from exc
     try:

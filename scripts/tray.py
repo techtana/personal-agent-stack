@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import traceback
 import webbrowser
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -38,6 +39,7 @@ POLL_SECONDS = 10
 START_TIMEOUT = 180  # seconds a started service gets to answer its health check
 RESOURCE_SECONDS = 5  # pause between process samples while the Resources tab is on screen
 RESOURCES_TAB = 3
+TRAY_LOG = REPO / ".run" / "logs" / "tray.log"
 LABELS = {
     "ollama": "Ollama",
     "phoenix": "Phoenix",
@@ -140,6 +142,7 @@ class TrayApp:
         self.service_locks = {s: threading.Lock() for s in services.SERVICE_ORDER}
         self.tick_job: str | None = None
         self.created: dict[int, float] = {}  # pid -> process creation time, for "Starting... N s"
+        self.problems: dict[str, tuple[str, str, Path]] = {}  # service -> (action, reason shown on its row, log file)
         self.busy = ""  # set while settings are applied; every service control waits for it
         self.checked_at = ""
         self.ui_queue: queue.Queue = queue.Queue()
@@ -226,6 +229,7 @@ class TrayApp:
                 continue
             entry = (action, now)
             self.pending[svc] = entry
+            self.problems.pop(svc, None)
             threading.Thread(target=self._run_action, args=(svc, entry), daemon=True).start()
         self._render_services()
         self._tick_soon()
@@ -234,28 +238,46 @@ class TrayApp:
 
     def _run_action(self, svc: str, entry: tuple[str, float]) -> None:
         action = entry[0]
+        log = services.log_file(self.profile, svc)
+        problem = None  # (what to show on the row, log to open)
         try:
+            offset = log.stat().st_size if log.exists() else 0
             # A Stop clicked during a start waits here until the start has launched the process, then stops it.
             with self.service_locks[svc]:
                 if self.pending.get(svc) is not entry:
                     return
-                services.start(self.profile, [svc]) if action == "start" else services.stop(self.profile, [svc])
+                reasons = (services.start if action == "start" else services.stop)(self.profile, [svc])
+            if svc in reasons:
+                problem = (f"Not {'started' if action == 'start' else 'stopped'}: {reasons[svc]}.", log)
             deadline = time.monotonic() + START_TIMEOUT
-            while action == "start" and self.pending.get(svc) is entry and time.monotonic() < deadline:
+            while action == "start" and not problem and self.pending.get(svc) is entry:
                 row = services.probe(self.profile, svc)
-                if row["healthy"] or row["state"] == "stopped":
+                if row["healthy"]:
                     break
-                time.sleep(1)
-        except Exception as e:  # noqa: BLE001
-            print(f"[tray] {action} {svc} failed: {e}")
+                if row["state"] == "stopped":
+                    last = services.last_log_line(self.profile, svc, since=offset)
+                    problem = (f"Stopped while starting. Last log line: {last}" if last else "Stopped while starting, without writing to its log.", log)
+                elif time.monotonic() > deadline:
+                    problem = (f"No answer from its health check after {START_TIMEOUT // 60} minutes; it may still be loading.", log)
+                else:
+                    time.sleep(1)
+                    continue
+                break
+        except Exception as e:  # noqa: BLE001 - the row says what failed; the traceback goes to tray.log
+            traceback.print_exc()
+            problem = (f"Could not {action}: {e}", TRAY_LOG)
         checked = time.monotonic()
         row = services.probe(self.profile, svc)
-        self.ui_queue.put(lambda: self._action_done(svc, entry, row, checked))
+        if problem:
+            print(f"[tray] {svc}: {problem[0]}")
+        self.ui_queue.put(lambda: self._action_done(svc, entry, row, checked, problem))
 
-    def _action_done(self, svc: str, entry: tuple[str, float], row: dict, checked: float) -> None:
+    def _action_done(self, svc: str, entry: tuple[str, float], row: dict, checked: float, problem) -> None:
         if self.pending.get(svc) is not entry:
             return  # a newer click took over this row
         del self.pending[svc]
+        if problem:
+            self.problems[svc] = (entry[0], *problem)
         self._store_rows([row], checked)
         self._render_services()
         if not self.pending and self._window_built():
@@ -306,6 +328,10 @@ class TrayApp:
 
     def open_logs(self, *_):
         self.open_path(Path(self.profile["data_dir"]) / "logs")
+
+    def show_log(self, svc: str) -> None:
+        log = self.problems.get(svc, ("", "", services.log_file(self.profile, svc)))[2]
+        self.open_path(log if log.exists() else log.parent)
 
     def quit(self, stop_services: bool) -> None:
         def run() -> None:
@@ -386,6 +412,7 @@ class TrayApp:
         s.configure("Head.TLabel", background=t["page"], foreground=t["ink"], font=(FONT, 16, "bold"))
         s.configure("HeadSub.TLabel", background=t["page"], foreground=t["ink2"])
         s.configure("Warn.TLabel", background=t["card"], foreground=t["warn"])
+        s.configure("Bad.TLabel", background=t["card"], foreground=t["bad"])
         s.configure("TButton", background=t["card"], foreground=t["ink"], padding=(10, 4), relief="flat", borderwidth=1)
         s.map("TButton", background=[("disabled", t["page"]), ("active", t["hover"])], foreground=[("disabled", t["muted"])])
         s.configure("Accent.TButton", background=t["accent"], foreground=t["accent_ink"], bordercolor=t["accent"])
@@ -472,15 +499,17 @@ class TrayApp:
         card = self._card(tab, "Services", row=0, column=0)
         card.columnconfigure(1, weight=1)
         self.row_widgets: dict[str, tuple] = {}
+        self.reason_widgets: dict[str, tuple] = {}
         links = ui_links(self.profile)
-        for i, svc in enumerate(["ollama", *services.SERVICE_ORDER], start=1):
+        for n, svc in enumerate(["ollama", *services.SERVICE_ORDER]):
+            i = 2 * n + 1  # each service has a second grid row for the reason a start or stop failed
             dot = tk.Label(card, text="●", font=(FONT, 12), bg=self.t["card"])
             dot.grid(row=i, column=0, padx=(0, 10), pady=5)
             names = ttk.Frame(card, style="Card.TFrame")
             names.grid(row=i, column=1, sticky="w")
             ttk.Label(names, text=LABELS[svc], style="Card.TLabel", font=(FONT, 10, "bold")).pack(anchor="w")
             ttk.Label(names, text=f"{ROLES[svc]}  ·  port {self.profile['ports'][svc]}", style="Card.Muted.TLabel").pack(anchor="w")
-            state = ttk.Label(card, text="", style="Card.Sub.TLabel", width=16)
+            state = ttk.Label(card, text="", style="Card.Sub.TLabel", width=-18)  # at least 18 characters, grows to fit
             state.grid(row=i, column=2, sticky="w", padx=8)
             buttons = ttk.Frame(card, style="Card.TFrame")
             buttons.grid(row=i, column=3, sticky="e")
@@ -490,6 +519,13 @@ class TrayApp:
             if svc != "ollama":
                 toggle.pack(side="left", padx=2)
             self.row_widgets[svc] = (dot, state, toggle)
+            reason = ttk.Label(card, text="", style="Bad.TLabel", wraplength=560, justify="left")
+            reason.grid(row=i + 1, column=1, columnspan=2, sticky="w", pady=(0, 6))
+            show = ttk.Button(card, text="Show log", width=9, command=lambda s=svc: self.show_log(s))
+            show.grid(row=i + 1, column=3, sticky="e", padx=2, pady=(0, 6))
+            reason.grid_remove()
+            show.grid_remove()
+            self.reason_widgets[svc] = (reason, show)
 
         models = self._card(tab, "Loaded in Ollama", row=1, column=0, pady=(12, 0))
         models.columnconfigure(0, weight=1)
@@ -566,6 +602,18 @@ class TrayApp:
             stopping = bool(pending) and pending[0] == "stop"
             toggle.configure(text="Stop" if self._running(svc) else "Start",
                              state="disabled" if self.busy or stopping or not (enabled or healthy) else "normal")
+            problem = self.problems.get(svc)
+            if problem and (problem[0] == "start") == healthy:
+                del self.problems[svc]  # it came up (or went down) after all
+                problem = None
+            reason, show = self.reason_widgets[svc]
+            if problem and not pending:
+                reason.configure(text=problem[1])
+                reason.grid()
+                show.grid()
+            else:
+                reason.grid_remove()
+                show.grid_remove()
         total = sum(1 for s in self.row_widgets if s == "ollama" or s in self.managed)
         self.pill_dot.configure(fg=t["good"] if up == total else (t["warn"] if up else t["bad"]))
         activity = self._activity()
