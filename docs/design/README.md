@@ -11,6 +11,7 @@ today's code; it gets a dated "Outcome" note instead.
 
 | Date | Plan | Status |
 |---|---|---|
+| 2026-11-01 | [Multimodal stack: vision, speech, images, video with audio, music, routing per message](plans/2026-11-01-multimodal-stack.md) | proposed; nothing built; next session starts from the [handoff](../HANDOFF-2026-11-01-multimodal.md) |
 | 2026-11-01 | [`/ux-rules` UX rule catalog skill](plans/2026-11-01-ux-rules-skill.md) | done 2026-11-01 ([PR #13](https://github.com/techtana/personal-agent-stack/pull/13)); move into `skills/` and second eval round open |
 | 2026-10-31 | [Skills library and `skills-sync`](plans/2026-10-31-skills-library.md) | done 2026-10-31 ([PR #11](https://github.com/techtana/personal-agent-stack/pull/11)); weekly scheduled task not created |
 | 2026-10-29 | [Hard block on AI agents reading personal files](../plans/AGENT-FILE-ISOLATION.md) | proposed ([PR #12](https://github.com/techtana/personal-agent-stack/pull/12)); V-F1 checks run 2026-10-30; decisions D1-D4 open; nothing applied |

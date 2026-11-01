@@ -141,3 +141,6 @@ once across a session restart.
    labels (VIS-03), and selected rows in the Usage table and combobox lists marked only by the `select` background
    (1.21:1 light, 1.51:1 dark). Bare `uv run pytest` picks up a global pytest outside the project environment; use
    `uv run --with pytest pytest` until pytest is a dev dependency. Restart the tray from the main checkout after merging.
+14. Multimodal stack (2026-11-01): plan in docs/design/plans/2026-11-01-multimodal-stack.md, handoff in
+   docs/HANDOFF-2026-11-01-multimodal.md. Nothing installed or measured yet; spike M-S0 runs on this machine with the
+   owner present. Agent sessions must not touch D: or OneDrive; the owner places media model files himself.
