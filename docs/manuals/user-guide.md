@@ -106,7 +106,8 @@ There are six department agents: `app-dev`, `testing`, `security`, `devops`, `co
 
 - Open this repository in Claude Code. The departments appear as subagents. Mention one by name: `@security review src/auth.py`.
 - Run one department as the main agent: `claude --agent docs`.
-- Skills: `/retro`, `/harden`, `/brainstorm`, `/why-routed`.
+- Skills: `/retro`, `/harden`, `/brainstorm`, `/why-routed`, and `/ux-rules` to review a screen, page or flow against
+  a researched catalog of UX rules (for example `/ux-rules scripts/tray.py`).
 - The orchestrator MCP server provides `delegate(department, task, tier)`, `get_job`, `cancel_job`, `list_departments` and
   `record_lesson`. Approve the server the first time Claude Code asks.
 
