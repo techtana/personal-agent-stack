@@ -1,7 +1,7 @@
 schema_version: "1.1"
 name: tray-app-review
 expected_outcome: |
-  Runs inside the personal-agent-stack repository (it reads scripts/tray.py, which is not copied into files/).
+  Runs inside the personal-agent-stack repository (it reads scripts/tray.py, which is not copied into files/), whichever folder the skill is installed in.
   A proportionate review of a single-owner developer tool: it states the context, skips consumer-growth categories
   as not applicable, credits what the window already does well with code evidence, reports real problems with
   scripts/tray.py locations (for example theme contrast pairs, 8 pt chart labels, stock OK/Cancel restart dialog,

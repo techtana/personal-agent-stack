@@ -7,5 +7,8 @@
   },
   "mcu-memory-check": {
     "origin": "~/.claude/skills"
+  },
+  "ux-rules": {
+    "origin": "~/.claude/skills"
   }
 }

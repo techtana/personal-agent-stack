@@ -2,7 +2,7 @@
 name: ux-rules
 description: Audit and improve a UI against a research-backed catalog of about 120 proven UX rules from industry and academic research (Nielsen heuristics, Fitts and Hick, WCAG 2.2, forms, feedback and latency, errors and undo, navigation and search, onboarding, AI and agent UX, deceptive patterns and the consumer-protection rules against them). Detects which rules a screen, flow, codebase, screenshot or live app applies or violates, with evidence; then decides whether each missing rule is worth applying here, how to build it in the actual stack, and how to measure the effect. Use whenever the user asks to review, critique, audit or improve the UX, UI, usability, accessibility, conversion, onboarding, forms or design of something they built or are building, including "is this good UX?", "why do users drop off here?", "check my sign-up flow", "make this page better", a design review before shipping, or choosing which UX practices a new feature should follow, even if they never say "UX".
 argument-hint: "[path | URL | screenshot | flow] [focus]"
-allowed-tools: Read, Grep, Glob, Bash(python .claude/skills/ux-rules/scripts/*), Bash(uv run python .claude/skills/ux-rules/scripts/*)
+allowed-tools: Read, Grep, Glob, Bash(python ~/.claude/skills/ux-rules/scripts/*), Bash(uv run python ~/.claude/skills/ux-rules/scripts/*)
 ---
 
 # UX rules: detect, judge, recommend
