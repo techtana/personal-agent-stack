@@ -8,6 +8,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import IS_WINDOWS, LITELLM_DIR, REPO, TRACES_DIR, env_value, info, load_dotenv, warn, which
@@ -460,22 +461,25 @@ def stop(profile: dict, services: list[str] | None = None) -> None:
             time.sleep(0.5)
 
 
+def probe(profile: dict, svc: str) -> dict:
+    """Status row of one service. `state` comes from the system, not from any handle held by the caller: "running"
+    when the health check answers, "starting" when the recorded process is alive but not answering yet, else "stopped"."""
+    pf = _pid_file(profile, svc)
+    pid, started = _read_pidfile(pf) if pf.exists() else (0, None)
+    pid = pid if pid and _owned(pid, svc, started) else None
+    healthy = _http_ok(health_url(profile, svc))
+    return {
+        "service": svc,
+        "pid": pid,
+        "healthy": healthy,
+        "state": "running" if healthy else "starting" if pid else "stopped",
+        "url": health_url(profile, svc) if svc == "ollama" else health_url(profile, svc).rsplit("/", 1)[0],
+    }
+
+
 def status(profile: dict) -> list[dict]:
-    """One row per service. `state` comes from the system, not from any handle held by the caller: "running" when
-    the health check answers, "starting" when the recorded process is alive but not answering yet, else "stopped"."""
-    rows = []
-    for svc in ["ollama", *SERVICE_ORDER]:
-        pf = _pid_file(profile, svc)
-        pid, started = _read_pidfile(pf) if pf.exists() else (0, None)
-        pid = pid if pid and _owned(pid, svc, started) else None
-        healthy = _http_ok(health_url(profile, svc))
-        rows.append(
-            {
-                "service": svc,
-                "pid": pid,
-                "healthy": healthy,
-                "state": "running" if healthy else "starting" if pid else "stopped",
-                "url": health_url(profile, svc) if svc == "ollama" else health_url(profile, svc).rsplit("/", 1)[0],
-            }
-        )
-    return rows
+    """One row per service (see probe()). The checks run in parallel: on Windows a refused connection to a local port
+    takes about 2 s, so checking four stopped services one after another took 8 s."""
+    names = ["ollama", *SERVICE_ORDER]
+    with ThreadPoolExecutor(max_workers=len(names)) as pool:
+        return list(pool.map(lambda svc: probe(profile, svc), names))
