@@ -91,7 +91,6 @@ POLL_SECONDS = 10
 START_TIMEOUT = 180  # seconds a started service gets to answer its health check
 RESOURCE_SECONDS = 5  # pause between process samples while the Resources tab is on screen
 RESOURCES_TAB = 3
-TRAY_LOG = REPO / ".run" / "logs" / "tray.log"
 LABELS = {
     "ollama": "Ollama",
     "phoenix": "Phoenix",
@@ -319,7 +318,7 @@ class TrayApp:
                 break
         except Exception as e:  # noqa: BLE001 - the row says what failed; the traceback goes to tray.log
             traceback.print_exc()
-            problem = (f"Could not {action}: {e}", TRAY_LOG)
+            problem = (f"Could not {action}: {e}", LOG_FILE)
         checked = time.monotonic()
         row = services.probe(self.profile, svc)
         if problem:
