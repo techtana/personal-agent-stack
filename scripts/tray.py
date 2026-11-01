@@ -415,21 +415,34 @@ class TrayApp:
         s.configure("HeadSub.TLabel", background=t["page"], foreground=t["ink2"])
         s.configure("Warn.TLabel", background=t["card"], foreground=t["warn"])
         s.configure("Bad.TLabel", background=t["card"], foreground=t["bad"])
+        # Keyboard focus: clam's dotted ring inside, plus a 2 px solid ring (clam draws a border only for a solid or
+        # raised relief). Rings are accent on surfaces and ink or accent-ink on accent fills, 3:1 or more either way.
         s.configure("TButton", background=t["card"], foreground=t["ink"], padding=(10, 4), relief="flat", borderwidth=1)
-        s.map("TButton", background=[("disabled", t["page"]), ("active", t["hover"])], foreground=[("disabled", t["muted"])])
-        s.configure("Accent.TButton", background=t["accent"], foreground=t["accent_ink"], bordercolor=t["accent"])
-        s.map("Accent.TButton", background=[("disabled", t["border"]), ("active", t["accent"])])
-        s.configure("Seg.TRadiobutton", background=t["card"], foreground=t["ink2"], padding=(10, 3), indicatorrelief="flat")
-        s.layout("Seg.TRadiobutton", [("Radiobutton.padding", {"sticky": "nswe", "children": [("Radiobutton.label", {"sticky": "nswe"})]})])
-        s.map("Seg.TRadiobutton", background=[("selected", t["accent"]), ("active", t["hover"])], foreground=[("selected", t["accent_ink"])])
+        s.map("TButton", background=[("disabled", t["page"]), ("active", t["hover"])], foreground=[("disabled", t["muted"])],
+              relief=[("focus", "solid")], bordercolor=[("focus", t["accent"])])
+        s.configure("Accent.TButton", background=t["accent"], foreground=t["accent_ink"], bordercolor=t["accent"], focuscolor=t["accent_ink"])
+        s.map("Accent.TButton", background=[("disabled", t["border"]), ("active", t["accent"])], bordercolor=[("focus", t["ink"])])
+        s.configure("Seg.TRadiobutton", background=t["card"], foreground=t["ink2"], padding=(10, 3), indicatorrelief="flat", relief="flat")
+        s.layout("Seg.TRadiobutton", [("Radiobutton.border", {"sticky": "nswe", "children": [("Radiobutton.padding", {"sticky": "nswe", "children": [
+            ("Radiobutton.focus", {"sticky": "nswe", "children": [("Radiobutton.label", {"sticky": "nswe"})]})]})]})])
+        s.map("Seg.TRadiobutton", background=[("selected", t["accent"]), ("active", t["hover"])], foreground=[("selected", t["accent_ink"])],
+              relief=[("focus", "solid")], bordercolor=[("focus", "selected", t["ink"]), ("focus", t["accent"])],
+              focuscolor=[("selected", t["accent_ink"])])
         for w in ("TCheckbutton",):
-            s.configure(w, background=t["card"], foreground=t["ink"], indicatorbackground=t["card"], indicatorforeground=t["accent"])
-            s.map(w, background=[("active", t["card"])], indicatorbackground=[("selected", t["card"])])
+            s.configure(w, background=t["card"], foreground=t["ink"], indicatorbackground=t["card"], indicatorforeground=t["accent"], relief="flat")
+            s.layout(w, [("Checkbutton.border", {"sticky": "nswe", "children": [("Checkbutton.padding", {"sticky": "nswe", "children": [
+                ("Checkbutton.indicator", {"side": "left", "sticky": ""}),
+                ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [("Checkbutton.label", {"sticky": "nswe"})]})]})]})])
+            s.map(w, background=[("active", t["card"])], indicatorbackground=[("selected", t["card"])],
+                  relief=[("focus", "solid")], bordercolor=[("focus", t["accent"])])
         s.configure("Page.TCheckbutton", background=t["page"])
         s.map("Page.TCheckbutton", background=[("active", t["page"])])
         s.configure("TCombobox", fieldbackground=t["card"], background=t["card"], foreground=t["ink"], arrowcolor=t["ink2"], padding=3)
+        # The field draws bordercolor outside and lightcolor inside: both on focus make the 2 px ring, since these
+        # maps hide clam's own cue for a focused read-only box (its selected text).
         s.map("TCombobox", fieldbackground=[("readonly", t["card"])], foreground=[("readonly", t["ink"])],
-              selectbackground=[("readonly", t["card"])], selectforeground=[("readonly", t["ink"])])
+              selectbackground=[("readonly", t["card"])], selectforeground=[("readonly", t["ink"])],
+              bordercolor=[("focus", t["accent"])], lightcolor=[("focus", t["accent"])])
         self.root.option_add("*TCombobox*Listbox.background", t["card"])
         self.root.option_add("*TCombobox*Listbox.foreground", t["ink"])
         self.root.option_add("*TCombobox*Listbox.selectBackground", t["select"])
@@ -437,7 +450,8 @@ class TrayApp:
         s.configure("TNotebook", background=t["page"], borderwidth=0, tabmargins=(0, 0, 0, 0))
         s.configure("TNotebook.Tab", background=t["page"], foreground=t["ink2"], padding=(16, 7), borderwidth=0, font=(FONT, 10))
         s.map("TNotebook.Tab", background=[("selected", t["card"])], foreground=[("selected", t["ink"])],
-              lightcolor=[("selected", t["card"])], bordercolor=[("selected", t["border"])], expand=[("selected", (0, 0, 0, 0))])
+              lightcolor=[("focus", "selected", t["accent"]), ("selected", t["card"])],
+              bordercolor=[("focus", "selected", t["accent"]), ("selected", t["border"])], expand=[("selected", (0, 0, 0, 0))])
         s.configure("Treeview", background=t["card"], fieldbackground=t["card"], foreground=t["ink"], rowheight=26, borderwidth=0)
         s.map("Treeview", background=[("selected", t["select"])], foreground=[("selected", t["ink"])])
         s.configure("Treeview.Heading", background=t["card"], foreground=t["ink2"], relief="flat", font=(FONT, 9, "bold"), padding=(6, 4))
