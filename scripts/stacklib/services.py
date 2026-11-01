@@ -8,6 +8,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import IS_WINDOWS, LITELLM_DIR, REPO, TRACES_DIR, env_value, info, load_dotenv, warn, which
@@ -318,15 +319,36 @@ def _task_managed() -> set[str]:
     return tasks.registered()
 
 
-def start(profile: dict, services: list[str] | None = None) -> None:
+def log_file(profile: dict, svc: str) -> Path:
+    return run_dir(profile) / "logs" / f"{svc}.log"
+
+
+def last_log_line(profile: dict, svc: str, since: int = 0) -> str:
+    """Last non-empty line a service wrote to its log after byte offset `since` (a crash ends with the exception)."""
+    try:
+        with open(log_file(profile, svc), "rb") as f:
+            size = f.seek(0, os.SEEK_END)
+            f.seek(max(since, size - 8192))
+            lines = [ln.strip() for ln in f.read().decode("utf-8", "replace").splitlines() if ln.strip()]
+    except OSError:
+        return ""
+    return lines[-1][:300] if lines else ""
+
+
+def start(profile: dict, services: list[str] | None = None) -> dict[str, str]:
+    """Start the services that are not running. Returns, for each service it did not start, the reason in a sentence
+    the tray window can show; the command line gets the same text."""
     cmds = commands(profile)
     managed = _task_managed()
+    problems: dict[str, str] = {}
     for svc in services or [s for s in SERVICE_ORDER if s in cmds]:
         if svc not in cmds:
-            warn(f"{svc}: not configured on this profile")
+            problems[svc] = "not configured on this profile"
+            warn(f"{svc}: {problems[svc]}")
             continue
         if svc in managed:
-            info(f"{svc}: supervised by a scheduled task; use `stack.py tasks start {svc}`")
+            problems[svc] = f"run by a scheduled task; start it with `uv run scripts/stack.py tasks start {svc}`"
+            info(f"{svc}: {problems[svc]}")
             continue
         pf = _pid_file(profile, svc)
         if pf.exists():
@@ -339,7 +361,7 @@ def start(profile: dict, services: list[str] | None = None) -> None:
             info(f"{svc}: something already answers on its port; not starting a second copy")
             continue
         c = cmds[svc]
-        log = open(run_dir(profile) / "logs" / f"{svc}.log", "ab")
+        log = open(log_file(profile, svc), "ab")
         kwargs: dict = {"cwd": c["cwd"], "env": c["env"], "stdout": log, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL}
         if IS_WINDOWS:
             kwargs["creationflags"] = WINDOWS_FLAGS
@@ -355,12 +377,15 @@ def start(profile: dict, services: list[str] | None = None) -> None:
                 kwargs["creationflags"] &= ~CREATE_BREAKAWAY_FROM_JOB
                 proc = subprocess.Popen(c["cmd"], **kwargs)
                 warn(f"{svc}: could not leave the launching shell's job; it stops when that shell exits")
-        except FileNotFoundError:
-            warn(f"{svc}: executable not found ({c['cmd'][0]}); run `uv run scripts/stack.py setup` to install tools")
-            continue
         except OSError as e:
-            # e.g. WinError 4551: Smart App Control / App Control blocked the executable.
-            warn(f"{svc}: Windows refused to start {c['cmd'][0]}: {e}. Other services still start; see memory/state.md")
+            if isinstance(e, FileNotFoundError):
+                problems[svc] = f"program not found ({c['cmd'][0]}); run `uv run scripts/stack.py setup` to install the tools"
+            elif getattr(e, "winerror", None) == 4551:
+                problems[svc] = f"Smart App Control (or an App Control policy) blocked {c['cmd'][0]}: {e.strerror or e}"
+            else:
+                problems[svc] = f"the system refused to start {c['cmd'][0]}: {e}"
+            warn(f"{svc}: {problems[svc]}")
+            log.write(f"[stack {time.strftime('%Y-%m-%d %H:%M:%S')}] could not start: {problems[svc]}\n".encode("utf-8"))
             continue
         finally:
             log.close()  # the service holds its own inherited handle
@@ -368,7 +393,8 @@ def start(profile: dict, services: list[str] | None = None) -> None:
         if not started:
             warn(f"{svc}: could not read the process start time; `down` will match it by launcher name only")
         _write_pidfile(pf, proc.pid, exe or os.path.abspath(which(c["cmd"][0]) or c["cmd"][0]), started)
-        info(f"{svc}: started pid {proc.pid}  (log: {run_dir(profile) / 'logs' / (svc + '.log')})")
+        info(f"{svc}: started pid {proc.pid}  (log: {log_file(profile, svc)})")
+    return problems
 
 
 def wait_healthy(profile: dict, services: list[str], timeout: float = 120.0) -> dict[str, bool]:
@@ -428,16 +454,19 @@ def _kill_tree(pid: int) -> None:
             pass  # already gone
 
 
-def stop(profile: dict, services: list[str] | None = None) -> None:
+def stop(profile: dict, services: list[str] | None = None) -> dict[str, str]:
     """Stop each service's whole process tree: the recorded launcher and its children, then whatever still listens
     on the service's port (a copy started outside this tool, or a child orphaned when its launcher died).
-    A service supervised by a scheduled task is left to `stack.py tasks stop`, or its watchdog would restart it."""
+    A service supervised by a scheduled task is left to `stack.py tasks stop`, or its watchdog would restart it.
+    Returns, for each service asked for by name that was left running on purpose, the reason (as start() does)."""
     managed = _task_managed()
+    problems: dict[str, str] = {}
     for svc in services or list(reversed(SERVICE_ORDER)):
         pf = _pid_file(profile, svc)
         if svc in managed and not pf.exists():
             if services:
-                info(f"{svc}: supervised by a scheduled task; use `stack.py tasks stop {svc}`")
+                problems[svc] = f"run by a scheduled task; stop it with `uv run scripts/stack.py tasks stop {svc}`"
+                info(f"{svc}: {problems[svc]}")
             continue
         if pf.exists():
             pid, started = _read_pidfile(pf)
@@ -458,24 +487,28 @@ def stop(profile: dict, services: list[str] | None = None) -> None:
                 _kill_tree(lp)
                 info(f"{svc}: stopped pid {lp} (listening on port {_port(profile, svc)})")
             time.sleep(0.5)
+    return problems
+
+
+def probe(profile: dict, svc: str) -> dict:
+    """Status row of one service. `state` comes from the system, not from any handle held by the caller: "running"
+    when the health check answers, "starting" when the recorded process is alive but not answering yet, else "stopped"."""
+    pf = _pid_file(profile, svc)
+    pid, started = _read_pidfile(pf) if pf.exists() else (0, None)
+    pid = pid if pid and _owned(pid, svc, started) else None
+    healthy = _http_ok(health_url(profile, svc))
+    return {
+        "service": svc,
+        "pid": pid,
+        "healthy": healthy,
+        "state": "running" if healthy else "starting" if pid else "stopped",
+        "url": health_url(profile, svc) if svc == "ollama" else health_url(profile, svc).rsplit("/", 1)[0],
+    }
 
 
 def status(profile: dict) -> list[dict]:
-    """One row per service. `state` comes from the system, not from any handle held by the caller: "running" when
-    the health check answers, "starting" when the recorded process is alive but not answering yet, else "stopped"."""
-    rows = []
-    for svc in ["ollama", *SERVICE_ORDER]:
-        pf = _pid_file(profile, svc)
-        pid, started = _read_pidfile(pf) if pf.exists() else (0, None)
-        pid = pid if pid and _owned(pid, svc, started) else None
-        healthy = _http_ok(health_url(profile, svc))
-        rows.append(
-            {
-                "service": svc,
-                "pid": pid,
-                "healthy": healthy,
-                "state": "running" if healthy else "starting" if pid else "stopped",
-                "url": health_url(profile, svc) if svc == "ollama" else health_url(profile, svc).rsplit("/", 1)[0],
-            }
-        )
-    return rows
+    """One row per service (see probe()). The checks run in parallel: on Windows a refused connection to a local port
+    takes about 2 s, so checking four stopped services one after another took 8 s."""
+    names = ["ollama", *SERVICE_ORDER]
+    with ThreadPoolExecutor(max_workers=len(names)) as pool:
+        return list(pool.map(lambda svc: probe(profile, svc), names))

@@ -16,23 +16,81 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import sys
 import threading
+import time
 import tkinter as tk
+import traceback
 import webbrowser
 from datetime import date, datetime, timezone
 from pathlib import Path
 from tkinter import messagebox, ttk
 
+LOG_FILE = Path(__file__).resolve().parents[1] / ".run" / "logs" / "tray.log"
+# `stack.py tray` watches the log for these lines (stacklib/startup.py), so keep the two in step.
+READY = "[tray] ready"
+FAILED = "[tray] start-up failed:"
+
+
+def startup_failure_text(exc: BaseException) -> str:
+    """Why the tray could not start and what to do about it, for the message box shown under pythonw."""
+    repo = LOG_FILE.parents[2]
+    text = " ".join(str(exc).split()) or type(exc).__name__
+    missing = re.search(r"no machine profile at (.+?);", text)
+    if missing:
+        reason = f"This computer has no machine profile: {missing.group(1)} does not exist."
+        todo = f"Open a terminal in {repo} and run\n    uv run scripts/stack.py doctor --write-profile\nthen start the tray again."
+    elif isinstance(exc, ImportError):
+        reason = f"A Python package the tray needs could not be loaded: {text}"
+        todo = (f"Open a terminal in {repo} and run\n    uv sync\nthen start the tray again. If the message mentions an "
+                "Application Control policy, Windows Smart App Control blocked the file.")
+    else:
+        reason = f"{type(exc).__name__}: {text}"
+        todo = f"Start it again from a terminal in {repo} with\n    uv run scripts/stack.py tray"
+    return f"{reason}\n\n{todo}\n\nDetails are in {LOG_FILE}"
+
+
+def _report_startup_failure(exc_type, exc, tb) -> None:
+    """An uncaught error under pythonw: nobody sees the traceback, so log it and say on screen why the tray stopped."""
+    traceback.print_exception(exc_type, exc, tb)
+    print(f"{FAILED} {type(exc).__name__}: {' '.join(str(exc).split())}")
+    if issubclass(exc_type, KeyboardInterrupt):
+        return
+    pidfile = LOG_FILE.parents[1] / "pids" / "tray.pid"
+    try:  # give up the single-instance claim now, so a retry works while the message is still open
+        if pidfile.read_text(encoding="utf-8").split()[0] == str(os.getpid()):
+            pidfile.unlink()
+    except (OSError, IndexError):
+        pass
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("Agent Stack could not start", startup_failure_text(exc), parent=root)
+        root.destroy()
+    except tk.TclError:  # no display to show it on; the log has it
+        pass
+
+
+if __name__ == "__main__" and (sys.stdout is None or not sys.stdout.isatty()):
+    # pythonw has no console: keep a log instead, opened before the imports below so an import error lands in it too.
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    sys.stdout = sys.stderr = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
+    sys.excepthook = _report_startup_failure
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import psutil  # noqa: E402
 import pystray  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
-from stacklib import IS_WINDOWS, REPO, ollama, process_metrics, profile as prof, services  # noqa: E402
+from stacklib import IS_WINDOWS, ollama, process_metrics, profile as prof, services  # noqa: E402
 from stacklib import settings as cfg  # noqa: E402
 from stacklib import startup, usage  # noqa: E402
 
 POLL_SECONDS = 10
+START_TIMEOUT = 180  # seconds a started service gets to answer its health check
+RESOURCE_SECONDS = 5  # pause between process samples while the Resources tab is on screen
+RESOURCES_TAB = 3
 LABELS = {
     "ollama": "Ollama",
     "phoenix": "Phoenix",
@@ -51,15 +109,17 @@ COLORS = {"ok": "#2e9d57", "warn": "#d99a1e", "bad": "#c94a3d", "idle": "#8a8f98
 FONT = "Segoe UI" if IS_WINDOWS else "TkDefaultFont"
 
 # Window palette (light / dark): neutral surfaces, one blue accent for data, status colours only for state.
+# Every colour used for text (ink2, muted, accent, good, warn, bad) is at least 4.5:1 on page and card, and accent_ink
+# at least 4.5:1 on accent (WCAG AA); check changes with .claude/skills/ux-rules/scripts/contrast.py.
 THEMES = {
     "light": {
-        "page": "#f3f3f1", "card": "#fcfcfb", "ink": "#0b0b0b", "ink2": "#52514e", "muted": "#898781",
-        "grid": "#e1e0d9", "border": "#dcdbd4", "accent": "#2a78d6", "accent_ink": "#ffffff", "hover": "#ebeae5",
-        "good": "#0ca30c", "warn": "#b07a00", "bad": "#d03b3b", "select": "#dbe8f8",
+        "page": "#f3f3f1", "card": "#fcfcfb", "ink": "#0b0b0b", "ink2": "#52514e", "muted": "#6b6a65",
+        "grid": "#e1e0d9", "border": "#dcdbd4", "accent": "#2368c0", "accent_ink": "#ffffff", "hover": "#ebeae5",
+        "good": "#087a08", "warn": "#8a5f00", "bad": "#c03535", "select": "#dbe8f8",
     },
     "dark": {
         "page": "#111110", "card": "#1a1a19", "ink": "#f0efec", "ink2": "#c3c2b7", "muted": "#898781",
-        "grid": "#2c2c2a", "border": "#33332f", "accent": "#3987e5", "accent_ink": "#ffffff", "hover": "#252523",
+        "grid": "#2c2c2a", "border": "#33332f", "accent": "#3987e5", "accent_ink": "#0b0b0b", "hover": "#252523",
         "good": "#0ca30c", "warn": "#fab219", "bad": "#e05252", "select": "#1f3a5c",
     },
 }
@@ -108,18 +168,35 @@ def human_bytes(n: int) -> str:
     return f"{n / 2**30:.1f} GB" if n >= 2**30 else f"{n / 2**20:.0f} MB"
 
 
+def waited(seconds: float | None) -> str:
+    """'... 12 s'; just '...' in the first second or when the time is unknown."""
+    return f"... {int(seconds)} s" if seconds and seconds >= 1 else "..."
+
+
 class TrayApp:
     def __init__(self, autostart: bool = True) -> None:
         self.profile = prof.resolve_profile()
         self.managed = [s for s in services.SERVICE_ORDER if s in services.commands(self.profile)]
-        self.rows: list[dict] = []
+        self.rows: dict[str, dict] = {}  # service -> newest status row
+        self.row_checked: dict[str, float] = {}  # service -> when the check behind its row began (monotonic)
+        self.rows_lock = threading.Lock()
         self.loaded: list[dict] = []
         self.usage_data: dict | None = None
         self.usage_days = 7
         self.usage_group = "alias"
         self.process_sampler = process_metrics.ProcessSampler()
         self.process_rows: list[dict] = []
-        self.busy = ""
+        self.sampling = False
+        self.sample_job: str | None = None
+        self.sample_failures = 0
+        # service -> ("start" | "stop", monotonic start time) while that action runs; the tuple's identity tells a
+        # worker whether a newer click (Stop during a start) has taken over its row. Changed on the Tk thread only.
+        self.pending: dict[str, tuple[str, float]] = {}
+        self.service_locks = {s: threading.Lock() for s in services.SERVICE_ORDER}
+        self.tick_job: str | None = None
+        self.created: dict[int, float] = {}  # pid -> process creation time, for "Starting... N s"
+        self.problems: dict[str, tuple[str, str, Path]] = {}  # service -> (action, reason shown on its row, log file)
+        self.busy = ""  # set while settings are applied; every service control waits for it
         self.checked_at = ""
         self.ui_queue: queue.Queue = queue.Queue()
         self.stop_event = threading.Event()
@@ -130,18 +207,19 @@ class TrayApp:
         self.icon_color = COLORS["idle"]
         self.icon = pystray.Icon("agent-stack", make_icon(COLORS["idle"]), "Agent Stack: starting", menu=self._menu())
         if autostart:
-            self._in_background("Starting services", lambda: services.start(self.profile, self.managed))
+            self._act("start", self.managed)
 
     # ---------- state ----------
     def refresh(self) -> None:
+        checked = time.monotonic()
+        rows = services.status(self.profile)
+        self.loaded = ollama.ps(f"http://127.0.0.1:{self.profile['ports']['ollama']}")
+        self._store_rows(rows, checked)
+        self.checked_at = datetime.now().strftime("%H:%M:%S")
         # Refreshes come from the poller and from start/stop threads; pystray's Windows backend frees the old icon
         # handle on every swap, so two concurrent swaps fail with WinError 1402. Serialise, and swap only on change.
         with self.refresh_lock:
-            self.rows = services.status(self.profile)
-            self.loaded = ollama.ps(f"http://127.0.0.1:{self.profile['ports']['ollama']}")
-            self.process_rows = self.process_sampler.sample()
-            self.checked_at = datetime.now().strftime("%H:%M:%S")
-            up = {r["service"] for r in self.rows if r["healthy"]}
+            up = {s for s, r in self.rows.items() if r["healthy"]}
             wanted = ["ollama", *self.managed]
             n_up = sum(1 for s in wanted if s in up)
             if "litellm" not in up or "ollama" not in up:
@@ -153,10 +231,31 @@ class TrayApp:
             if color != self.icon_color:
                 self.icon.icon = make_icon(color)
                 self.icon_color = color
-            self.icon.title = f"Agent Stack: {n_up}/{len(wanted)} up" + (f" ({self.busy})" if self.busy else "")
+            activity = self._activity()
+            self.icon.title = f"Agent Stack: {n_up}/{len(wanted)} up" + (f" ({activity})" if activity else "")
             self.icon.update_menu()
         self.ui_queue.put(self._render_window)
         self.refresh_usage()
+
+    def _store_rows(self, rows: list[dict], checked: float) -> None:
+        """Keep each service's newest reading, so a slow poll that began before an action finished cannot undo it."""
+        with self.rows_lock:
+            new = dict(self.rows)
+            for r in rows:
+                if checked >= self.row_checked.get(r["service"], 0.0):
+                    new[r["service"]] = r
+                    self.row_checked[r["service"]] = checked
+            self.rows = new  # replaced, never changed in place: other threads read it without the lock
+
+    def _activity(self) -> str:
+        if self.busy:
+            return self.busy
+        pending = dict(self.pending)
+        if not pending:
+            return ""
+        verbs = {a for a, _ in pending.values()}
+        verb = "starting" if verbs == {"start"} else "stopping" if verbs == {"stop"} else "changing"
+        return f"{verb} {next(iter(pending)) if len(pending) == 1 else f'{len(pending)} services'}"
 
     def refresh_usage(self) -> None:
         try:
@@ -174,37 +273,105 @@ class TrayApp:
                 print(f"[tray] refresh failed: {e}")
             self.stop_event.wait(POLL_SECONDS)
 
-    def _in_background(self, what: str, fn) -> None:
-        def run() -> None:
-            self.busy = what.lower()
-            self.refresh_soon()
-            try:
-                fn()
-                services.wait_healthy(self.profile, self.managed, timeout=180) if what.startswith("Start") else None
-            except Exception as e:  # noqa: BLE001
-                print(f"[tray] {what} failed: {e}")
-            finally:
-                self.busy = ""
-                self.refresh_soon()
+    def _act(self, action: str, svcs: list[str]) -> None:
+        """Start or stop services. Runs on the Tk thread: the rows change at once, each service's work runs in its own
+        thread, and a start waits only for the service it started."""
+        now = time.monotonic()
+        for svc in svcs:
+            if self.pending.get(svc, ("",))[0] == action:
+                continue
+            entry = (action, now)
+            self.pending[svc] = entry
+            self.problems.pop(svc, None)
+            threading.Thread(target=self._run_action, args=(svc, entry), daemon=True).start()
+        self._render_services()
+        self._tick_soon()
+        if self._window_built():
+            self._settings_dirty()
 
-        threading.Thread(target=run, daemon=True).start()
+    def _run_action(self, svc: str, entry: tuple[str, float]) -> None:
+        action = entry[0]
+        log = services.log_file(self.profile, svc)
+        problem = None  # (what to show on the row, log to open)
+        try:
+            offset = log.stat().st_size if log.exists() else 0
+            # A Stop clicked during a start waits here until the start has launched the process, then stops it.
+            with self.service_locks[svc]:
+                if self.pending.get(svc) is not entry:
+                    return
+                reasons = (services.start if action == "start" else services.stop)(self.profile, [svc])
+            if svc in reasons:
+                problem = (f"Not {'started' if action == 'start' else 'stopped'}: {reasons[svc]}.", log)
+            deadline = time.monotonic() + START_TIMEOUT
+            while action == "start" and not problem and self.pending.get(svc) is entry:
+                row = services.probe(self.profile, svc)
+                if row["healthy"]:
+                    break
+                if row["state"] == "stopped":
+                    last = services.last_log_line(self.profile, svc, since=offset)
+                    problem = (f"Stopped while starting. Last log line: {last}" if last else "Stopped while starting, without writing to its log.", log)
+                elif time.monotonic() > deadline:
+                    problem = (f"No answer from its health check after {START_TIMEOUT // 60} minutes; it may still be loading.", log)
+                else:
+                    time.sleep(1)
+                    continue
+                break
+        except Exception as e:  # noqa: BLE001 - the row says what failed; the traceback goes to tray.log
+            traceback.print_exc()
+            problem = (f"Could not {action}: {e}", LOG_FILE)
+        checked = time.monotonic()
+        row = services.probe(self.profile, svc)
+        if problem:
+            print(f"[tray] {svc}: {problem[0]}")
+        self.ui_queue.put(lambda: self._action_done(svc, entry, row, checked, problem))
+
+    def _action_done(self, svc: str, entry: tuple[str, float], row: dict, checked: float, problem) -> None:
+        if self.pending.get(svc) is not entry:
+            return  # a newer click took over this row
+        del self.pending[svc]
+        if problem:
+            self.problems[svc] = (entry[0], *problem)
+        self._store_rows([row], checked)
+        self._render_services()
+        if not self.pending and self._window_built():
+            self._settings_dirty()  # Apply and Revert wait for service changes to finish
+        self.refresh_soon()
+
+    def _tick_soon(self) -> None:
+        if self.tick_job is None:
+            self.tick_job = self.root.after(1000, self._tick)
+
+    def _tick(self) -> None:
+        """Advance the seconds shown on starting and stopping rows, once a second while there are any."""
+        self.tick_job = None
+        self._render_services()
+        if self.pending or any(r["state"] == "starting" for r in self.rows.values()):
+            self._tick_soon()
+
+    def _on_ui(self, fn) -> None:
+        """Run fn on the Tk thread: at once for a window click, through the UI queue for the tray menu's thread."""
+        if threading.current_thread() is threading.main_thread():
+            fn()
+        else:
+            self.ui_queue.put(fn)
 
     def refresh_soon(self) -> None:
         threading.Thread(target=self.refresh, daemon=True).start()
 
     # ---------- actions ----------
+    def _running(self, svc: str) -> bool:
+        """Running, starting, or being started: what Stop applies to."""
+        pending = self.pending.get(svc)
+        return pending[0] == "start" if pending else self.rows.get(svc, {}).get("state", "stopped") != "stopped"
+
     def start_all(self, *_):
-        self._in_background("Starting services", lambda: services.start(self.profile, self.managed))
+        self._on_ui(lambda: self._act("start", [s for s in self.managed if not self._running(s) and s not in self.pending]))
 
     def stop_all(self, *_):
-        self._in_background("Stopping services", lambda: services.stop(self.profile, self.managed))
+        self._on_ui(lambda: self._act("stop", [s for s in self.managed if self._running(s)]))
 
     def toggle(self, svc: str) -> None:
-        healthy = any(r["service"] == svc and r["healthy"] for r in self.rows)
-        if healthy:
-            self._in_background(f"Stopping {svc}", lambda: services.stop(self.profile, [svc]))
-        else:
-            self._in_background(f"Starting {svc}", lambda: services.start(self.profile, [svc]))
+        self._act("stop" if self._running(svc) else "start", [svc])
 
     def open_url(self, svc: str) -> None:
         webbrowser.open(ui_links(self.profile)[svc])
@@ -214,6 +381,10 @@ class TrayApp:
 
     def open_logs(self, *_):
         self.open_path(Path(self.profile["data_dir"]) / "logs")
+
+    def show_log(self, svc: str) -> None:
+        log = self.problems.get(svc, ("", "", services.log_file(self.profile, svc)))[2]
+        self.open_path(log if log.exists() else log.parent)
 
     def quit(self, stop_services: bool) -> None:
         def run() -> None:
@@ -228,8 +399,13 @@ class TrayApp:
     # ---------- tray menu ----------
     def _status_text(self, svc: str):
         def text(_item) -> str:
-            row = next((r for r in self.rows if r["service"] == svc), None)
-            mark = "● up" if row and row["healthy"] else "○ down"
+            row, pending = self.rows.get(svc), self.pending.get(svc)
+            if pending:
+                mark = "starting..." if pending[0] == "start" else "stopping..."
+            elif row and row["state"] == "starting":
+                mark = "◐ starting"
+            else:
+                mark = "● up" if row and row["healthy"] else "○ down"
             return f"{LABELS[svc]}: {mark}"
 
         return text
@@ -272,6 +448,7 @@ class TrayApp:
         self.window.deiconify()
         self.window.lift()
         self.window.focus_force()
+        self._sample_resources()
 
     def _style(self) -> None:
         t = self.t = THEMES[system_theme()]
@@ -288,21 +465,35 @@ class TrayApp:
         s.configure("Head.TLabel", background=t["page"], foreground=t["ink"], font=(FONT, 16, "bold"))
         s.configure("HeadSub.TLabel", background=t["page"], foreground=t["ink2"])
         s.configure("Warn.TLabel", background=t["card"], foreground=t["warn"])
+        s.configure("Bad.TLabel", background=t["card"], foreground=t["bad"])
+        # Keyboard focus: clam's dotted ring inside, plus a 2 px solid ring (clam draws a border only for a solid or
+        # raised relief). Rings are accent on surfaces and ink or accent-ink on accent fills, 3:1 or more either way.
         s.configure("TButton", background=t["card"], foreground=t["ink"], padding=(10, 4), relief="flat", borderwidth=1)
-        s.map("TButton", background=[("disabled", t["page"]), ("active", t["hover"])], foreground=[("disabled", t["muted"])])
-        s.configure("Accent.TButton", background=t["accent"], foreground=t["accent_ink"], bordercolor=t["accent"])
-        s.map("Accent.TButton", background=[("disabled", t["border"]), ("active", t["accent"])])
-        s.configure("Seg.TRadiobutton", background=t["card"], foreground=t["ink2"], padding=(10, 3), indicatorrelief="flat")
-        s.layout("Seg.TRadiobutton", [("Radiobutton.padding", {"sticky": "nswe", "children": [("Radiobutton.label", {"sticky": "nswe"})]})])
-        s.map("Seg.TRadiobutton", background=[("selected", t["select"]), ("active", t["hover"])], foreground=[("selected", t["ink"])])
+        s.map("TButton", background=[("disabled", t["page"]), ("active", t["hover"])], foreground=[("disabled", t["muted"])],
+              relief=[("focus", "solid")], bordercolor=[("focus", t["accent"])])
+        s.configure("Accent.TButton", background=t["accent"], foreground=t["accent_ink"], bordercolor=t["accent"], focuscolor=t["accent_ink"])
+        s.map("Accent.TButton", background=[("disabled", t["border"]), ("active", t["accent"])], bordercolor=[("focus", t["ink"])])
+        s.configure("Seg.TRadiobutton", background=t["card"], foreground=t["ink2"], padding=(10, 3), indicatorrelief="flat", relief="flat")
+        s.layout("Seg.TRadiobutton", [("Radiobutton.border", {"sticky": "nswe", "children": [("Radiobutton.padding", {"sticky": "nswe", "children": [
+            ("Radiobutton.focus", {"sticky": "nswe", "children": [("Radiobutton.label", {"sticky": "nswe"})]})]})]})])
+        s.map("Seg.TRadiobutton", background=[("selected", t["accent"]), ("active", t["hover"])], foreground=[("selected", t["accent_ink"])],
+              relief=[("focus", "solid")], bordercolor=[("focus", "selected", t["ink"]), ("focus", t["accent"])],
+              focuscolor=[("selected", t["accent_ink"])])
         for w in ("TCheckbutton",):
-            s.configure(w, background=t["card"], foreground=t["ink"], indicatorbackground=t["card"], indicatorforeground=t["accent"])
-            s.map(w, background=[("active", t["card"])], indicatorbackground=[("selected", t["card"])])
+            s.configure(w, background=t["card"], foreground=t["ink"], indicatorbackground=t["card"], indicatorforeground=t["accent"], relief="flat")
+            s.layout(w, [("Checkbutton.border", {"sticky": "nswe", "children": [("Checkbutton.padding", {"sticky": "nswe", "children": [
+                ("Checkbutton.indicator", {"side": "left", "sticky": ""}),
+                ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [("Checkbutton.label", {"sticky": "nswe"})]})]})]})])
+            s.map(w, background=[("active", t["card"])], indicatorbackground=[("selected", t["card"])],
+                  relief=[("focus", "solid")], bordercolor=[("focus", t["accent"])])
         s.configure("Page.TCheckbutton", background=t["page"])
         s.map("Page.TCheckbutton", background=[("active", t["page"])])
         s.configure("TCombobox", fieldbackground=t["card"], background=t["card"], foreground=t["ink"], arrowcolor=t["ink2"], padding=3)
+        # The field draws bordercolor outside and lightcolor inside: both on focus make the 2 px ring, since these
+        # maps hide clam's own cue for a focused read-only box (its selected text).
         s.map("TCombobox", fieldbackground=[("readonly", t["card"])], foreground=[("readonly", t["ink"])],
-              selectbackground=[("readonly", t["card"])], selectforeground=[("readonly", t["ink"])])
+              selectbackground=[("readonly", t["card"])], selectforeground=[("readonly", t["ink"])],
+              bordercolor=[("focus", t["accent"])], lightcolor=[("focus", t["accent"])])
         self.root.option_add("*TCombobox*Listbox.background", t["card"])
         self.root.option_add("*TCombobox*Listbox.foreground", t["ink"])
         self.root.option_add("*TCombobox*Listbox.selectBackground", t["select"])
@@ -310,7 +501,8 @@ class TrayApp:
         s.configure("TNotebook", background=t["page"], borderwidth=0, tabmargins=(0, 0, 0, 0))
         s.configure("TNotebook.Tab", background=t["page"], foreground=t["ink2"], padding=(16, 7), borderwidth=0, font=(FONT, 10))
         s.map("TNotebook.Tab", background=[("selected", t["card"])], foreground=[("selected", t["ink"])],
-              lightcolor=[("selected", t["card"])], bordercolor=[("selected", t["border"])], expand=[("selected", (0, 0, 0, 0))])
+              lightcolor=[("focus", "selected", t["accent"]), ("selected", t["card"])],
+              bordercolor=[("focus", "selected", t["accent"]), ("selected", t["border"])], expand=[("selected", (0, 0, 0, 0))])
         s.configure("Treeview", background=t["card"], fieldbackground=t["card"], foreground=t["ink"], rowheight=26, borderwidth=0)
         s.map("Treeview", background=[("selected", t["select"])], foreground=[("selected", t["ink"])])
         s.configure("Treeview.Heading", background=t["card"], foreground=t["ink2"], relief="flat", font=(FONT, 9, "bold"), padding=(6, 4))
@@ -344,6 +536,7 @@ class TrayApp:
             except (OSError, AttributeError):
                 pass
         self.window = w
+        w.bind("<Map>", lambda e: self._sample_resources() if e.widget is w else None)  # restored from the taskbar
 
         head = ttk.Frame(w, padding=(18, 14, 18, 8))
         head.pack(fill="x")
@@ -360,7 +553,7 @@ class TrayApp:
 
         self.tabs = ttk.Notebook(w)
         self.tabs.pack(fill="both", expand=True, padx=18, pady=(4, 18))
-        self.tabs.bind("<<NotebookTabChanged>>", lambda _e: self._render_usage())
+        self.tabs.bind("<<NotebookTabChanged>>", lambda _e: (self._render_usage(), self._sample_resources()))
         self._build_overview(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
         self._build_usage(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
         self._build_settings(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
@@ -373,15 +566,17 @@ class TrayApp:
         card = self._card(tab, "Services", row=0, column=0)
         card.columnconfigure(1, weight=1)
         self.row_widgets: dict[str, tuple] = {}
+        self.reason_widgets: dict[str, tuple] = {}
         links = ui_links(self.profile)
-        for i, svc in enumerate(["ollama", *services.SERVICE_ORDER], start=1):
+        for n, svc in enumerate(["ollama", *services.SERVICE_ORDER]):
+            i = 2 * n + 1  # each service has a second grid row for the reason a start or stop failed
             dot = tk.Label(card, text="●", font=(FONT, 12), bg=self.t["card"])
             dot.grid(row=i, column=0, padx=(0, 10), pady=5)
             names = ttk.Frame(card, style="Card.TFrame")
             names.grid(row=i, column=1, sticky="w")
             ttk.Label(names, text=LABELS[svc], style="Card.TLabel", font=(FONT, 10, "bold")).pack(anchor="w")
             ttk.Label(names, text=f"{ROLES[svc]}  ·  port {self.profile['ports'][svc]}", style="Card.Muted.TLabel").pack(anchor="w")
-            state = ttk.Label(card, text="", style="Card.Sub.TLabel", width=16)
+            state = ttk.Label(card, text="", style="Card.Sub.TLabel", width=-18)  # at least 18 characters, grows to fit
             state.grid(row=i, column=2, sticky="w", padx=8)
             buttons = ttk.Frame(card, style="Card.TFrame")
             buttons.grid(row=i, column=3, sticky="e")
@@ -391,6 +586,13 @@ class TrayApp:
             if svc != "ollama":
                 toggle.pack(side="left", padx=2)
             self.row_widgets[svc] = (dot, state, toggle)
+            reason = ttk.Label(card, text="", style="Bad.TLabel", wraplength=560, justify="left")
+            reason.grid(row=i + 1, column=1, columnspan=2, sticky="w", pady=(0, 6))
+            show = ttk.Button(card, text="Show log", width=9, command=lambda s=svc: self.show_log(s))
+            show.grid(row=i + 1, column=3, sticky="e", padx=2, pady=(0, 6))
+            reason.grid_remove()
+            show.grid_remove()
+            self.reason_widgets[svc] = (reason, show)
 
         models = self._card(tab, "Loaded in Ollama", row=1, column=0, pady=(12, 0))
         models.columnconfigure(0, weight=1)
@@ -409,40 +611,85 @@ class TrayApp:
         ttk.Checkbutton(bar, text="Start at login", style="Page.TCheckbutton", variable=self.startup_var,
                         command=self._toggle_startup).pack(side="right")
 
+    def _window_built(self) -> bool:
+        return self.window is not None and self.window.winfo_exists()
+
+    def _created(self, pid: int | None) -> float | None:
+        """When a service process was created (epoch seconds), cached per pid."""
+        if pid and pid not in self.created:
+            try:
+                self.created[pid] = psutil.Process(pid).create_time()
+            except (psutil.Error, OSError):
+                return None
+        return self.created.get(pid) if pid else None
+
     def _render_window(self) -> None:
-        if self.window is None or not self.window.winfo_exists():
+        if not self._window_built():
             return
-        t = self.t
-        rows = {r["service"]: r for r in self.rows}
-        up = 0
-        for svc, (dot, state, toggle) in self.row_widgets.items():
-            healthy = bool(rows.get(svc, {}).get("healthy"))
-            enabled = svc == "ollama" or svc in self.managed
-            up += healthy and enabled
-            pid = rows.get(svc, {}).get("pid")
-            if healthy:
-                dot.configure(fg=t["good"])
-                state.configure(text=f"Running{f'  (pid {pid})' if pid else ''}")
-            elif enabled:
-                dot.configure(fg=t["bad"])
-                state.configure(text="Stopped")
-            else:
-                dot.configure(fg=t["muted"])
-                state.configure(text="Off in settings")
-            toggle.configure(text="Stop" if healthy else "Start",
-                             state="disabled" if self.busy or not (enabled or healthy) else "normal")
-        total = sum(1 for s in self.row_widgets if s == "ollama" or s in self.managed)
-        self.pill_dot.configure(fg=t["good"] if up == total else (t["warn"] if up else t["bad"]))
-        busy = f"  ·  {self.busy}..." if self.busy else ""
-        self.pill_text.configure(text=f"{up}/{total} running  ·  checked {self.checked_at or '...'}{busy}")
+        self._render_services()
         m = self.profile["models"]
         cloud = "external models allowed" if self.profile["policy"]["external"]["enabled"] else "private only"
         self.head_sub.configure(text=f"{self.profile['name']}  ·  primary {m.get('primary')} @ {compact(m.get('primary_num_ctx', 0))} ctx  ·  {cloud}")
-        for b in (self.start_btn, self.stop_btn):
-            b.configure(state="disabled" if self.busy else "normal")
         self.startup_var.set(startup.is_installed())
         self._render_loaded()
-        self._render_resources()
+        if any(r["state"] == "starting" for r in self.rows.values()):
+            self._tick_soon()
+
+    def _render_services(self) -> None:
+        """Service rows, the status pill and Start all / Stop all, from cached state only (no I/O): runs on every
+        click and once a second while something is starting or stopping."""
+        if not self._window_built():
+            return
+        t = self.t
+        up = 0
+        for svc, (dot, state, toggle) in self.row_widgets.items():
+            row = self.rows.get(svc, {})
+            healthy = bool(row.get("healthy"))
+            enabled = svc == "ollama" or svc in self.managed
+            up += healthy and enabled
+            pid = row.get("pid")
+            pending = self.pending.get(svc)
+            if pending:
+                dot.configure(fg=t["warn"])
+                verb = "Starting" if pending[0] == "start" else "Stopping"
+                state.configure(text=verb + waited(time.monotonic() - pending[1]), style="Warn.TLabel")
+            elif healthy:
+                dot.configure(fg=t["good"])
+                state.configure(text=f"Running{f'  (pid {pid})' if pid else ''}", style="Card.Sub.TLabel")
+            elif row.get("state") == "starting":  # the process is alive but does not answer yet
+                created = self._created(pid)
+                dot.configure(fg=t["warn"])
+                state.configure(text="Starting" + waited(created and time.time() - created), style="Warn.TLabel")
+            elif enabled:
+                dot.configure(fg=t["bad"])
+                state.configure(text="Stopped", style="Card.Sub.TLabel")
+            else:
+                dot.configure(fg=t["muted"])
+                state.configure(text="Off in settings", style="Card.Sub.TLabel")
+            stopping = bool(pending) and pending[0] == "stop"
+            toggle.configure(text="Stop" if self._running(svc) else "Start",
+                             state="disabled" if self.busy or stopping or not (enabled or healthy) else "normal")
+            problem = self.problems.get(svc)
+            if problem and (problem[0] == "start") == healthy:
+                del self.problems[svc]  # it came up (or went down) after all
+                problem = None
+            reason, show = self.reason_widgets[svc]
+            if problem and not pending:
+                reason.configure(text=problem[1])
+                reason.grid()
+                show.grid()
+            else:
+                reason.grid_remove()
+                show.grid_remove()
+        total = sum(1 for s in self.row_widgets if s == "ollama" or s in self.managed)
+        self.pill_dot.configure(fg=t["good"] if up == total else (t["warn"] if up else t["bad"]))
+        activity = self._activity()
+        busy = f"  ·  {activity}..." if activity else ""
+        self.pill_text.configure(text=f"{up}/{total} running  ·  checked {self.checked_at or '...'}{busy}")
+        can_start = any(not self._running(s) and s not in self.pending for s in self.managed)
+        can_stop = any(self._running(s) and self.pending.get(s, ("",))[0] != "stop" for s in self.managed)
+        self.start_btn.configure(state="normal" if can_start and not self.busy else "disabled")
+        self.stop_btn.configure(state="normal" if can_stop and not self.busy else "disabled")
 
     def _render_loaded(self) -> None:
         for child in self.loaded_frame.winfo_children():
@@ -474,9 +721,10 @@ class TrayApp:
         card = self._card(tab, "Live process resources", row=0, column=0)
         card.columnconfigure(0, weight=1)
         card.rowconfigure(2, weight=1)
-        ttk.Label(card, text="CPU is measured between refreshes; GPU metrics are reported by the driver. "
-                  "Unavailable readings show as -.", style="Card.Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 8))
-        cols = (("name", "Process", 260, "w"), ("pid", "PID", 80, "e"), ("cpu", "CPU %", 90, "e"),
+        ttk.Label(card, text=f"CPU is the share of all {process_metrics.CPU_COUNT} logical processors (100% is the whole machine), "
+                  "measured since the previous sample; GPU metrics are reported by the driver. Unavailable readings show as -.",
+                  style="Card.Muted.TLabel", wraplength=820, justify="left").grid(row=1, column=0, sticky="w", pady=(0, 8))
+        cols = (("name", "Process", 260, "w"), ("pid", "PID", 80, "e"), ("cpu", "CPU % (all cores)", 130, "e"),
                 ("memory", "RAM MB", 100, "e"), ("gpu", "GPU engine %", 120, "e"), ("gpu_memory", "GPU dedicated MB", 150, "e"))
         self.process_tree = ttk.Treeview(card, columns=[c[0] for c in cols], show="headings", height=16)
         for key, title, width, anchor in cols:
@@ -486,15 +734,67 @@ class TrayApp:
         self.process_tree.configure(yscrollcommand=scroll.set)
         self.process_tree.grid(row=2, column=0, sticky="nsew")
         scroll.grid(row=2, column=1, sticky="ns")
+        self.resources_note = ttk.Label(card, text="Reading processes...", style="Card.Muted.TLabel")
+        self.resources_note.grid(row=3, column=0, sticky="w", pady=(8, 0))
+
+    def _resources_visible(self) -> bool:
+        w = self.window
+        return bool(w is not None and w.winfo_exists() and w.state() == "normal" and self.tabs.index("current") == RESOURCES_TAB)
+
+    def _sample_resources(self) -> None:
+        """Sample processes while the Resources tab is on screen. A sample takes about 3 s (the GPU counters start
+        PowerShell), so it runs off the Tk thread, one at a time, and never holds up the status poll."""
+        if self.sample_job:
+            self.root.after_cancel(self.sample_job)
+            self.sample_job = None
+        if self.sampling or not self._resources_visible():
+            return
+        self.sampling = True
+
+        def run() -> None:
+            try:
+                rows, error = self.process_sampler.sample(), ""
+            except Exception as e:  # noqa: BLE001 - shown in the tab and retried with backoff
+                rows, error = [], str(e)
+            self.ui_queue.put(lambda: self._resources_sampled(rows, error))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _resources_sampled(self, rows: list[dict], error: str) -> None:
+        self.sampling = False
+        if self.window is None or not self.window.winfo_exists():
+            return
+        if error:
+            self.sample_failures += 1
+            wait = min(300, RESOURCE_SECONDS * 2 ** self.sample_failures)
+            print(f"[tray] process sample failed: {error}")
+            note = f"Could not read the process list: {error}. Next try in {wait} s."
+        else:
+            self.sample_failures, wait = 0, RESOURCE_SECONDS
+            self.process_rows = rows
+            self._render_resources()
+            gpu = self.process_sampler.gpu_problem
+            note = f"GPU columns are empty: {gpu}." if gpu else f"Updated {datetime.now():%H:%M:%S}, every {RESOURCE_SECONDS} s while this tab is open."
+        self.resources_note.configure(text=note)
+        self.sample_job = self.root.after(wait * 1000, self._sample_resources)
 
     def _render_resources(self) -> None:
+        """Update the rows in place, keyed by pid, so the selection and the scroll position survive each sample."""
         def num(v: float | None) -> str:
             return f"{v:.1f}" if v is not None else "-"
 
-        self.process_tree.delete(*self.process_tree.get_children())
-        for r in self.process_rows:
-            self.process_tree.insert("", "end", values=(r["name"], r["pid"], num(r["cpu_percent"]), num(r["memory_mb"]),
-                                                         num(r["gpu_percent"]), num(r["gpu_memory_mb"])))
+        tree = self.process_tree
+        rows = {str(r["pid"]): r for r in self.process_rows}
+        gone = [iid for iid in tree.get_children() if iid not in rows]
+        if gone:
+            tree.delete(*gone)
+        for index, (iid, r) in enumerate(rows.items()):
+            values = (r["name"], r["pid"], num(r["cpu_percent"]), num(r["memory_mb"]), num(r["gpu_percent"]), num(r["gpu_memory_mb"]))
+            if tree.exists(iid):
+                tree.item(iid, values=values)
+                tree.move(iid, "", index)
+            else:
+                tree.insert("", index, iid=iid, values=values)
 
     # ---------- Usage tab ----------
     def _build_usage(self, tab: ttk.Frame) -> None:
@@ -686,8 +986,14 @@ class TrayApp:
         win = scroll.create_window(0, 0, window=form, anchor="nw")
         form.bind("<Configure>", lambda _e: scroll.configure(scrollregion=scroll.bbox("all")))
         scroll.bind("<Configure>", lambda e: scroll.itemconfigure(win, width=e.width))
-        form.bind_all("<MouseWheel>", lambda e: scroll.yview_scroll(int(-e.delta / 120), "units")
-                      if self.tabs.index("current") == 2 else None, add="+")
+        self.settings_canvas = scroll
+        # Tk 8.6 on X11 reports the wheel as buttons 4 and 5 (on Windows those are the side buttons).
+        wheel = ["<MouseWheel>", *(["<Button-4>", "<Button-5>"] if self.root.tk.call("tk", "windowingsystem") == "x11" else [])]
+        for seq in wheel:
+            form.bind_all(seq, self._settings_wheel, add="+")
+            # Tk's own TCombobox binding steps a read-only box to the next value; scroll the form instead and stop
+            # there, so the "all" binding above does not scroll a second time.
+            self.root.bind_class("TCombobox", seq, lambda e: (self._settings_wheel(e), "break")[1])
         form.columnconfigure(1, weight=1)
         self.form = form
 
@@ -746,6 +1052,19 @@ class TrayApp:
         self.apply_log.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
         self._load_settings()
 
+    def _settings_wheel(self, e) -> None:
+        """Scroll the Settings form while its tab is showing. Windows sends 120 per notch; touchpads and macOS send
+        smaller steps, which still scroll one unit instead of rounding to none."""
+        if self.tabs.index("current") != 2:
+            return
+        if e.num in (4, 5):
+            units = -1 if e.num == 4 else 1
+        elif e.delta:
+            units = -round(e.delta / 120) or (-1 if e.delta > 0 else 1)
+        else:
+            return
+        self.settings_canvas.yview_scroll(units, "units")
+
     def _load_settings(self) -> None:
         self.profile = prof.resolve_profile(self.profile["name"])
         values = cfg.current_values(self.profile)
@@ -782,7 +1101,7 @@ class TrayApp:
             self.pending_label.configure(text=f"{len(todo)} unsaved change{'s' if len(todo) > 1 else ''}. Apply will: " + "; ".join(effects) + ".")
         else:
             self.pending_label.configure(text=f"Saved in machines/{self.profile['name']}.yaml. Defaults come from machines/_defaults.yaml.")
-        state = "normal" if todo and not self.busy else "disabled"
+        state = "normal" if todo and not self.busy and not self.pending else "disabled"
         self.apply_btn.configure(state=state)
         self.revert_btn.configure(state=state)
 
@@ -803,9 +1122,6 @@ class TrayApp:
             self.ui_queue.put(lambda text="  ·  ".join(lines[-4:]): self.apply_log.configure(text=text))
 
         def run() -> None:
-            self.busy = "applying settings"
-            self.ui_queue.put(self._settings_dirty)
-            self.refresh_soon()
             try:
                 new = cfg.apply(self.profile, edits, log=log)
                 self.profile = new
@@ -818,6 +1134,9 @@ class TrayApp:
                 self.ui_queue.put(self._load_settings)
                 self.refresh_soon()
 
+        self.busy = "applying settings"
+        self._settings_dirty()
+        self._render_services()
         threading.Thread(target=run, daemon=True).start()
 
     def _drain_ui_queue(self) -> None:
@@ -831,28 +1150,25 @@ class TrayApp:
         except queue.Empty:
             pass
         if not self.stop_event.is_set():
-            self.root.after(200, self._drain_ui_queue)
+            self.root.after(100, self._drain_ui_queue)
 
     def run(self) -> None:
         threading.Thread(target=self._poll, daemon=True).start()
         self.icon.run_detached()
-        self.root.after(200, self._drain_ui_queue)
+        self.root.after(100, self._drain_ui_queue)
         if "--show" in sys.argv:
             self.ui_queue.put(lambda: self.show_window(0))
         self.root.mainloop()
 
 
 def main() -> int:
-    log_dir = REPO / ".run" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    if sys.stdout is None or not sys.stdout.isatty():  # pythonw has no console: keep a log instead
-        log = open(log_dir / "tray.log", "a", encoding="utf-8", buffering=1)
-        sys.stdout = sys.stderr = log
     print(f"[tray] {datetime.now().isoformat(timespec='seconds')} starting pid {os.getpid()}")
     if not startup.claim_single_instance():
         print("[tray] another tray instance is running; exiting")
         return 0
-    TrayApp(autostart="--no-autostart" not in sys.argv).run()
+    app = TrayApp(autostart="--no-autostart" not in sys.argv)  # an error here reaches _report_startup_failure
+    app.root.after(0, lambda: print(f"{READY} pid {os.getpid()}"))  # runs once the icon is up and the Tk loop turns
+    app.run()
     print("[tray] exited")
     return 0
 
