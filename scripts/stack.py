@@ -14,6 +14,7 @@ Commands
   claude-env    print the env for Claude Code profile B (--shell powershell|bash)
   why-routed    show recent gateway routing decisions
   retro         run scripts/retro.py (arguments pass through)
+  skills-sync   copy new or changed personal skills into skills/ (--dry-run; rules in skills/sync.yaml)
   tasks         edge-mode supervision: install|remove|start|stop|status|xml one scheduled task per service
                 (Windows Task Scheduler, --trigger startup|logon; systemd user units on Linux)
   run           run one service in the foreground and restart it when it exits (what each task runs)
@@ -236,6 +237,12 @@ def cmd_tray(a):
         info("tray: launched; its icon is in the notification area (Windows: under the ^ hidden icons arrow)")
 
 
+def cmd_skills_sync(a):
+    from stacklib import skills_sync
+
+    skills_sync.sync(dry_run=a.dry_run)
+
+
 def cmd_retro(a):
     rest = [x for x in a.rest if x != "--"]
     raise SystemExit(subprocess.run([sys.executable, str(REPO / "scripts" / "retro.py"), *rest], cwd=REPO).returncode)
@@ -259,6 +266,8 @@ def main(argv=None):
     s = sub.add_parser("smoke"); s.add_argument("--dept", default="docs"); s.add_argument("--skip-mcp", action="store_true"); s.set_defaults(f=cmd_smoke)
     s = sub.add_parser("claude-env"); s.add_argument("--shell", choices=["powershell", "bash"], default="bash"); s.set_defaults(f=cmd_claude_env)
     s = sub.add_parser("why-routed"); s.add_argument("--last", type=int, default=10); s.add_argument("--days", type=int, default=7); s.set_defaults(f=cmd_why_routed)
+    s = sub.add_parser("skills-sync", help="copy new or changed personal skills into skills/ (rules: skills/sync.yaml)")
+    s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_skills_sync)
     s = sub.add_parser("retro"); s.add_argument("rest", nargs=argparse.REMAINDER); s.set_defaults(f=cmd_retro)
     s = sub.add_parser("tray", help="background tray app that runs the services and shows their status")
     s.add_argument("--foreground", action="store_true"); s.add_argument("--status", action="store_true"); s.add_argument("--stop", action="store_true")
