@@ -58,15 +58,17 @@ COLORS = {"ok": "#2e9d57", "warn": "#d99a1e", "bad": "#c94a3d", "idle": "#8a8f98
 FONT = "Segoe UI" if IS_WINDOWS else "TkDefaultFont"
 
 # Window palette (light / dark): neutral surfaces, one blue accent for data, status colours only for state.
+# Every colour used for text (ink2, muted, accent, good, warn, bad) is at least 4.5:1 on page and card, and accent_ink
+# at least 4.5:1 on accent (WCAG AA); check changes with .claude/skills/ux-rules/scripts/contrast.py.
 THEMES = {
     "light": {
-        "page": "#f3f3f1", "card": "#fcfcfb", "ink": "#0b0b0b", "ink2": "#52514e", "muted": "#898781",
-        "grid": "#e1e0d9", "border": "#dcdbd4", "accent": "#2a78d6", "accent_ink": "#ffffff", "hover": "#ebeae5",
-        "good": "#0ca30c", "warn": "#b07a00", "bad": "#d03b3b", "select": "#dbe8f8",
+        "page": "#f3f3f1", "card": "#fcfcfb", "ink": "#0b0b0b", "ink2": "#52514e", "muted": "#6b6a65",
+        "grid": "#e1e0d9", "border": "#dcdbd4", "accent": "#2368c0", "accent_ink": "#ffffff", "hover": "#ebeae5",
+        "good": "#087a08", "warn": "#8a5f00", "bad": "#c03535", "select": "#dbe8f8",
     },
     "dark": {
         "page": "#111110", "card": "#1a1a19", "ink": "#f0efec", "ink2": "#c3c2b7", "muted": "#898781",
-        "grid": "#2c2c2a", "border": "#33332f", "accent": "#3987e5", "accent_ink": "#ffffff", "hover": "#252523",
+        "grid": "#2c2c2a", "border": "#33332f", "accent": "#3987e5", "accent_ink": "#0b0b0b", "hover": "#252523",
         "good": "#0ca30c", "warn": "#fab219", "bad": "#e05252", "select": "#1f3a5c",
     },
 }
@@ -419,7 +421,7 @@ class TrayApp:
         s.map("Accent.TButton", background=[("disabled", t["border"]), ("active", t["accent"])])
         s.configure("Seg.TRadiobutton", background=t["card"], foreground=t["ink2"], padding=(10, 3), indicatorrelief="flat")
         s.layout("Seg.TRadiobutton", [("Radiobutton.padding", {"sticky": "nswe", "children": [("Radiobutton.label", {"sticky": "nswe"})]})])
-        s.map("Seg.TRadiobutton", background=[("selected", t["select"]), ("active", t["hover"])], foreground=[("selected", t["ink"])])
+        s.map("Seg.TRadiobutton", background=[("selected", t["accent"]), ("active", t["hover"])], foreground=[("selected", t["accent_ink"])])
         for w in ("TCheckbutton",):
             s.configure(w, background=t["card"], foreground=t["ink"], indicatorbackground=t["card"], indicatorforeground=t["accent"])
             s.map(w, background=[("active", t["card"])], indicatorbackground=[("selected", t["card"])])
