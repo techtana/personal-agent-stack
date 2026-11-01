@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Checkout - Northwind Backup</title>
+<style>
+  body { font-family: system-ui, sans-serif; font-size: 13px; color: #333; background: #fff; margin: 0; }
+  header { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; background: #0b3d91; color: #fff; }
+  .steps { display: flex; gap: 12px; padding: 8px 16px; font-size: 12px; color: #555; }
+  .steps .current { font-weight: 700; color: #0b3d91; }
+  main { max-width: 960px; margin: 0 auto; padding: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  input, button, .btn { outline: none; }
+  input { width: 100%; padding: 6px; border: 1px solid #ddd; margin-bottom: 8px; }
+  input::placeholder { color: #c8c8c8; }
+  input.invalid { border-color: #e00; }
+  .hint { color: #aaaaaa; font-size: 11px; }
+  .btn { display: inline-block; padding: 10px 18px; background: #0b3d91; color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
+  .icon-btn { width: 16px; height: 16px; padding: 0; border: 0; background: none; cursor: pointer; }
+  .timer { color: #d00; font-weight: 700; }
+  .fine-print { font-size: 10px; color: #bbbbbb; }
+  .promo { height: 120px; overflow: hidden; position: relative; background: #f4f6fb; }
+  .promo .slide { position: absolute; inset: 0; padding: 16px; transition: opacity .6s; opacity: 0; }
+  .promo .slide.active { opacity: 1; }
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; }
+  .modal { background: #fff; padding: 24px; max-width: 360px; }
+  .snackbar { position: fixed; bottom: 16px; left: 16px; background: #222; color: #fff; padding: 12px 16px; display: none; }
+  .errors { color: #e00; }
+</style>
+</head>
+<body>
+<header>
+  <img src="logo.svg" width="120" height="28">
+  <nav><a href="/plans">Plans</a> · <a href="/help">Help</a></nav>
+</header>
+
+<div class="steps" aria-label="Checkout progress">
+  <span>1. Plan</span><span class="current">2. Account &amp; payment</span><span>3. Review</span>
+</div>
+
+<div class="promo" id="promo">
+  <div class="slide active">Save 20% on yearly plans</div>
+  <div class="slide">New: ransomware rollback</div>
+  <div class="slide">Refer a friend, get a month free</div>
+</div>
+
+<main>
+  <section>
+    <h2>Your cart</h2>
+    <ul id="cart">
+      <li data-sku="pro">Northwind Pro backup, 2 TB, monthly — $9.99
+        <button class="icon-btn" onclick="removeItem('pro')"><img src="trash.svg" width="16" height="16"></button></li>
+      <li data-sku="addon">Priority support add-on — $4.99
+        <button class="icon-btn" onclick="removeItem('addon')"><img src="trash.svg" width="16" height="16"></button></li>
+    </ul>
+    <p>Offer ends in <span class="timer" id="timer">10:00</span> — only 2 seats left at this price!</p>
+    <p><strong>Total today: $14.98</strong></p>
+
+    <h3>Saved cards</h3>
+    <p>Visa ending 4242 <button class="btn" onclick="deleteCard()">Delete</button></p>
+  </section>
+
+  <section>
+    <h2>Create your account to continue</h2>
+    <p class="hint">An account is required to purchase.</p>
+    <div id="form-errors" class="errors"></div>
+    <form id="signup" novalidate>
+      <input type="text" name="email" placeholder="Email address">
+      <input type="password" name="password" placeholder="Password" onpaste="return false">
+      <p class="hint">8-12 characters, 1 uppercase, 1 number, 1 symbol. No spaces.</p>
+      <input type="text" name="phone1" placeholder="(555)" size="3" maxlength="3">
+      <input type="text" name="phone2" placeholder="555" size="3" maxlength="3">
+      <input type="text" name="phone3" placeholder="5555" size="4" maxlength="4">
+
+      <label for="card">Card number</label>
+      <input id="card" name="cardnumber" inputmode="numeric" autocomplete="cc-number" placeholder="1234 5678 9012 3456">
+
+      <label><input type="checkbox" name="marketing" checked> Send me offers and share my details with trusted partners</label>
+
+      <p class="fine-print">By continuing you agree that your plan renews automatically at $29.99/month after the first month. To cancel, call our support line (Mon–Fri, 9–5 ET).</p>
+
+      <button class="btn" type="submit">Buy now</button>
+      <button class="btn" type="button">Add to cart</button>
+      <button class="btn" type="button">Save for later</button>
+      <div class="btn" onclick="document.getElementById('signup').requestSubmit()">Continue</div>
+      <p><a href="#" onclick="closeOffer()">No thanks, I'd rather pay full price</a></p>
+      <p>Read our terms <a href="/terms">click here</a>.</p>
+    </form>
+  </section>
+</main>
+
+<div class="modal-backdrop" id="newsletter">
+  <div class="modal">
+    <h3>Wait! Get 10% off</h3>
+    <input type="text" name="newsletter_email" placeholder="Your email">
+    <button class="btn" onclick="document.getElementById('newsletter').remove()">Subscribe</button>
+  </div>
+</div>
+
+<div class="snackbar" id="snackbar" role="status">Item removed. <button class="btn" onclick="undoRemove()">Undo</button></div>
+
+<script>
+  // Countdown: always starts at 10 minutes on every page load.
+  const deadline = Date.now() + 10 * 60 * 1000;
+  setInterval(() => {
+    const left = Math.max(0, deadline - Date.now());
+    const m = String(Math.floor(left / 60000)).padStart(2, '0');
+    const s = String(Math.floor(left / 1000) % 60).padStart(2, '0');
+    document.getElementById('timer').textContent = m + ':' + s;
+  }, 1000);
+
+  // Promo carousel advances every 3 seconds, no pause control.
+  let slide = 0;
+  setInterval(() => {
+    const slides = document.querySelectorAll('#promo .slide');
+    slides[slide].classList.remove('active');
+    slide = (slide + 1) % slides.length;
+    slides[slide].classList.add('active');
+  }, 3000);
+
+  let lastRemoved = null;
+  function removeItem(sku) {
+    const li = document.querySelector(`#cart li[data-sku="${sku}"]`);
+    lastRemoved = { li, next: li.nextSibling };
+    li.remove();
+    const bar = document.getElementById('snackbar');
+    bar.style.display = 'block';
+    setTimeout(() => (bar.style.display = 'none'), 8000);
+  }
+  function undoRemove() {
+    if (lastRemoved) document.getElementById('cart').insertBefore(lastRemoved.li, lastRemoved.next);
+    document.getElementById('snackbar').style.display = 'none';
+  }
+
+  function deleteCard() {
+    if (confirm('Are you sure?')) {
+      fetch('/api/cards/4242', { method: 'DELETE' });
+    }
+  }
+
+  function closeOffer() { history.back(); }
+
+  document.getElementById('signup').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const errors = [];
+    if (!form.email.value.includes('@')) errors.push('Invalid input');
+    if (!/^(?=.*[A-Z])(?=.*\d)(?=.*\W)\S{8,12}$/.test(form.password.value)) errors.push('Invalid input');
+    form.querySelectorAll('input').forEach(i => i.classList.toggle('invalid', !i.value));
+    if (errors.length) {
+      form.reset();
+      document.getElementById('form-errors').textContent = errors.join(' ');
+      return;
+    }
+    // Review step adds the service fee.
+    await new Promise(r => setTimeout(r, 3000));
+    location.href = '/review?fee=2.49';
+  });
+</script>
+</body>
+</html>

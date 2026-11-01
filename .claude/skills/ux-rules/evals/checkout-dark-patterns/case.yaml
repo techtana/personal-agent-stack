@@ -1,0 +1,13 @@
+schema_version: "1.1"
+name: checkout-dark-patterns
+expected_outcome: |
+  A prioritized UX review of checkout.html that ties the support complaints to deceptive patterns in the page:
+  the auto-renewal disclosed only in tiny low-contrast fine print, cancellation only by phone, a pre-checked
+  marketing and data-sharing box, a countdown that restarts on every load, a scarcity claim, confirmshaming, and a
+  service fee that appears only at the review step. It recommends removing them despite the conversion lift, and
+  also reports the form, accessibility and feedback problems (placeholder-only labels, blocked paste, composition
+  rules, split phone field, form cleared on error, generic errors, no focus styles, zoom blocked, a div used as a
+  button, an open newsletter modal, no loading state). It credits the undo snackbar for removed cart items as a
+  correctly applied pattern, rates severity, and says how to verify each fix.
+context:
+  scaffold_script: place-files.sh
