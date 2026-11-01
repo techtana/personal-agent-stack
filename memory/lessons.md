@@ -32,3 +32,5 @@
 - [2026-10-26] A supervisor that puts itself in a kill-on-close job object before spawning takes the whole service tree down when it dies; children inherit the job, so there is no spawn-to-assign race.
 - [2026-10-26] Smart App Control judges compiled Python extensions (.pyd) one by one, not only executables: it blocked pyarrow, sqlalchemy and pandas modules inside the Phoenix tool env after they had run the day before.
 - [2026-10-26] Keycloak's `kc.bat` caps the heap at 512 MB by default; a small realm stays near 0.5 GB working set, well under the 1.25 GB sizing-guide baseline written for production load.
+- [2026-11-01] Ten parallel research subagents share one WebSearch budget, which ran out mid-task, and the fan-out (about 400k tokens per agent) hit the plan's session limit. Use fewer agents or stagger them, and tell agents to fetch primary pages directly once search runs out.
+- [2026-11-01] The desktop app's built-in browser reports a 0x0 viewport and records no LCP while its pane is hidden. Set a viewport size (resize_window) before measuring a page, and treat zero-size results as invalid.
