@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from . import IS_WINDOWS, REPO, info
@@ -12,6 +14,11 @@ from . import services
 TRAY_SCRIPT = REPO / "scripts" / "tray.py"
 SHORTCUT_NAME = "Agent Stack.lnk"
 PIDFILE = REPO / ".run" / "pids" / "tray.pid"
+TRAY_LOG = REPO / ".run" / "logs" / "tray.log"
+# Lines the tray writes to its log (READY and FAILED in scripts/tray.py; keep the two in step).
+TRAY_READY = "[tray] ready"
+TRAY_FAILED = "[tray] start-up failed:"
+TRAY_ALREADY = "another tray instance is running"
 
 
 def tray_python() -> Path:
@@ -80,6 +87,56 @@ def launch_detached() -> None:
     else:
         subprocess.Popen([str(python), str(TRAY_SCRIPT)], cwd=REPO, start_new_session=True,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _log_since(log: Path, offset: int) -> str:
+    try:
+        with open(log, "rb") as f:
+            f.seek(offset if offset <= os.fstat(f.fileno()).st_size else 0)  # a log cut shorter starts again
+            return f.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def _verdict(text: str, log: Path) -> tuple[str, str] | None:
+    for line in text.splitlines():
+        if TRAY_READY in line:
+            pid = re.search(r"pid (\d+)", line)
+            return "ready", f"running{f' (pid {pid.group(1)})' if pid else ''}"
+        if TRAY_FAILED in line:
+            return "failed", f"failed to start: {line.split(TRAY_FAILED, 1)[1].strip().rstrip('.')}. Details are in {log}"
+        if TRAY_ALREADY in line:
+            return "ready", "another tray was already running"
+    return None
+
+
+def wait_for_tray(log: Path, offset: int, timeout: float = 20.0, alive=None, poll: float = 0.25) -> tuple[str, str]:
+    """Watch the tray log past `offset` until the new tray reports ready or failed. Returns (state, message): "ready",
+    "failed", or "running" when it is alive but has said nothing by the timeout. `alive` returns the tray's pid."""
+    alive = alive or running_pid
+    deadline = time.monotonic() + timeout
+    seen = None
+    while True:
+        verdict = _verdict(_log_since(log, offset), log)
+        if verdict:
+            return verdict
+        pid = alive()
+        if pid:
+            seen = pid
+        elif seen:  # it was up and is gone: read once more for its last words
+            return _verdict(_log_since(log, offset), log) or ("failed", f"exited during start-up. Details are in {log}")
+        if time.monotonic() >= deadline:
+            if pid:
+                return "running", f"started (pid {pid}) but has not reported ready after {timeout:.0f} s; if no icon appears, see {log}"
+            return "failed", f"did not start within {timeout:.0f} s. Details are in {log}"
+        time.sleep(poll)
+
+
+def launch_and_wait(timeout: float = 20.0) -> tuple[str, str]:
+    """Start the tray detached, then confirm from its log that it came up, or say why it did not."""
+    offset = TRAY_LOG.stat().st_size if TRAY_LOG.exists() else 0
+    launch_detached()
+    return wait_for_tray(TRAY_LOG, offset, timeout)
 
 
 def running_pid() -> int | None:

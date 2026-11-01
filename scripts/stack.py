@@ -233,8 +233,13 @@ def cmd_tray(a):
         if startup.running_pid():
             info(f"tray: already running (pid {startup.running_pid()}); click its icon in the notification area")
             return
-        startup.launch_detached()
-        info("tray: launched; its icon is in the notification area (Windows: under the ^ hidden icons arrow)")
+        state, msg = startup.launch_and_wait()
+        if state == "failed":
+            die(f"tray: {msg}")
+        elif state == "running":
+            warn(f"tray: {msg}")
+        else:
+            info(f"tray: {msg}; its icon is in the notification area (Windows: under the ^ hidden icons arrow)")
 
 
 def cmd_skills_sync(a):
