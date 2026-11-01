@@ -26,6 +26,7 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import psutil  # noqa: E402
 import pystray  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
@@ -112,10 +113,9 @@ def human_bytes(n: int) -> str:
     return f"{n / 2**30:.1f} GB" if n >= 2**30 else f"{n / 2**20:.0f} MB"
 
 
-def since(started: float) -> str:
-    """'... 12 s' after a monotonic start time; just '...' in the first second."""
-    seconds = int(time.monotonic() - started)
-    return f"... {seconds} s" if seconds else "..."
+def waited(seconds: float | None) -> str:
+    """'... 12 s'; just '...' in the first second or when the time is unknown."""
+    return f"... {int(seconds)} s" if seconds and seconds >= 1 else "..."
 
 
 class TrayApp:
@@ -139,6 +139,7 @@ class TrayApp:
         self.pending: dict[str, tuple[str, float]] = {}
         self.service_locks = {s: threading.Lock() for s in services.SERVICE_ORDER}
         self.tick_job: str | None = None
+        self.created: dict[int, float] = {}  # pid -> process creation time, for "Starting... N s"
         self.busy = ""  # set while settings are applied; every service control waits for it
         self.checked_at = ""
         self.ui_queue: queue.Queue = queue.Queue()
@@ -322,6 +323,8 @@ class TrayApp:
             row, pending = self.rows.get(svc), self.pending.get(svc)
             if pending:
                 mark = "starting..." if pending[0] == "start" else "stopping..."
+            elif row and row["state"] == "starting":
+                mark = "◐ starting"
             else:
                 mark = "● up" if row and row["healthy"] else "○ down"
             return f"{LABELS[svc]}: {mark}"
@@ -508,6 +511,15 @@ class TrayApp:
     def _window_built(self) -> bool:
         return self.window is not None and self.window.winfo_exists()
 
+    def _created(self, pid: int | None) -> float | None:
+        """When a service process was created (epoch seconds), cached per pid."""
+        if pid and pid not in self.created:
+            try:
+                self.created[pid] = psutil.Process(pid).create_time()
+            except (psutil.Error, OSError):
+                return None
+        return self.created.get(pid) if pid else None
+
     def _render_window(self) -> None:
         if not self._window_built():
             return
@@ -536,16 +548,21 @@ class TrayApp:
             pending = self.pending.get(svc)
             if pending:
                 dot.configure(fg=t["warn"])
-                state.configure(text=("Starting" if pending[0] == "start" else "Stopping") + since(pending[1]))
+                verb = "Starting" if pending[0] == "start" else "Stopping"
+                state.configure(text=verb + waited(time.monotonic() - pending[1]), style="Warn.TLabel")
             elif healthy:
                 dot.configure(fg=t["good"])
-                state.configure(text=f"Running{f'  (pid {pid})' if pid else ''}")
+                state.configure(text=f"Running{f'  (pid {pid})' if pid else ''}", style="Card.Sub.TLabel")
+            elif row.get("state") == "starting":  # the process is alive but does not answer yet
+                created = self._created(pid)
+                dot.configure(fg=t["warn"])
+                state.configure(text="Starting" + waited(created and time.time() - created), style="Warn.TLabel")
             elif enabled:
                 dot.configure(fg=t["bad"])
-                state.configure(text="Stopped")
+                state.configure(text="Stopped", style="Card.Sub.TLabel")
             else:
                 dot.configure(fg=t["muted"])
-                state.configure(text="Off in settings")
+                state.configure(text="Off in settings", style="Card.Sub.TLabel")
             stopping = bool(pending) and pending[0] == "stop"
             toggle.configure(text="Stop" if self._running(svc) else "Start",
                              state="disabled" if self.busy or stopping or not (enabled or healthy) else "normal")
