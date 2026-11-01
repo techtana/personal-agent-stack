@@ -55,6 +55,23 @@ tracing, Open WebUI, Ollama runtime; Apply patches machines/<HOST>.yaml in place
 Cloud tiers stay read-only there on purpose (open item 4). Verified by screenshots and a headless apply; not yet run as the
 live tray, which still runs the old code until it is restarted from the main checkout.
 
+2026-11-01, tray UX fixes (branch claude/wonderful-hofstadter-9f02ef; not merged, the live tray still runs the old
+code): a Start/Stop click changes its row on the Tk thread at once (measured 6-9 ms); each service has its own pending
+state ("Starting... N s" in amber, Stop cancels a start) and a start waits only for its own service, so one service that
+never answers no longer locks every control for 3 minutes; a service whose process is alive but not answering shows
+as Starting, not Stopped; failures show under the row with Show log (Smart App Control or another refused start, missing
+program, scheduled-task services, exit during start-up with the last log line, 3-minute timeout, exceptions); a
+start-up failure under pythonw shows a message box and `stack.py tray` now waits up to 20 s for "[tray] ready" in
+tray.log; the process sampler runs only while the Resources tab is on screen, backs off after failures, lists CPU as a
+share of all logical processors and no longer lists the System Idle Process; the wheel over a Settings combobox
+scrolls the form; every text colour passes 4.5:1 and every control shows a focus ring. `services.status()` checks
+health in parallel: 2.1 s instead of 8.1 s here, because a refused localhost connection takes about 2 s on Windows.
+Verified with a render harness that stubs the services (no real service started or stopped), `uv run --with pytest
+pytest -q` (27 passed), and the ux-rules lint (no A11Y-01 candidates). Not verified: the launcher's success path through
+Explorer (it would autostart services from a worktree) and the X11 wheel bindings.
+At 03:40 that morning only Ollama answered its health check on this machine; the other services were down and were
+left alone.
+
 Before the tray, services started from a Claude Code tool shell stopped once (15:00 to 19:34, no reboot) and survived
 once across a session restart.
 
@@ -120,3 +137,7 @@ once across a session restart.
 12. Skills library (2026-10-31): `stack.py skills-sync` copies own skills into skills/. The weekly desktop scheduled task
    (prompt in skills/sync-task-prompt.md) is not created yet; it needs the sync merged to main first.
 7. First `/retro` after a week of real traces; wire Open WebUI thumbs export when chat use starts.
+13. Tray UX left after 2026-11-01: the "Restart Ollama?" stock OK/Cancel dialog (ux-rules CON-03), 8 pt chart axis
+   labels (VIS-03), and selected rows in the Usage table and combobox lists marked only by the `select` background
+   (1.21:1 light, 1.51:1 dark). Bare `uv run pytest` picks up a global pytest outside the project environment; use
+   `uv run --with pytest pytest` until pytest is a dev dependency. Restart the tray from the main checkout after merging.
