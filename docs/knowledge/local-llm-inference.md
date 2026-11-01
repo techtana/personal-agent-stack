@@ -49,7 +49,7 @@ bits per weight of each scheme are not recorded in the repo; source not recorded
 
 **GGUF** is the file format llama.cpp (the engine under Ollama) reads. One GGUF file holds the quantized weights, the
 model's settings and its vocabulary, so a single file is enough to run the model. Ollama stores GGUF files as "blobs"
-in the model store (`D:\ollama\models` on this machine).
+in the model store (`C:\ollama\models` on this machine since 2026-11-01; `D:\ollama\models` before).
 
 The analogy stops where accuracy matters: a lower-bit model is not just "slightly blurrier". It can fail in specific
 ways, such as less reliable tool calls. Published benchmark scores are usually for the full-precision model, not the

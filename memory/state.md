@@ -15,14 +15,19 @@ Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; des
   judges every one as a new unsigned file. `stack.py up` no longer uses them: phoenix, litellm and open-webui start as
   `<uv tool dir>\<env>\Scripts\python.exe -P -c <console-script entry point>`. That python.exe is the same standard venv
   launcher in every environment and has not been blocked (no CodeIntegrity events since the switch).
-- Installed 2026-10-24: Ollama 0.40.11 (native; models on D:\ollama\models), Claude Code CLI 2.1.302 (winget) alongside VS Code extension 2.1.296 and the desktop app, uv 0.12.17, Python 3.14 (system) / 3.12 and 3.11 (uv-managed), Node 24.
+- Ollama models moved by the owner from D:\ollama\models to C:\ollama\models on 2026-11-01 (profile updated the same
+  day). C: had ~36 GB free before the move and the pulled models total ~30 GB, so C: free space must be rechecked
+  before any media model lands there (multimodal plan C5). Loads should no longer be USB-bound; cold-load times
+  below were measured from D: and need re-measuring.
+- Installed 2026-10-24: Ollama 0.40.11 (native; models on D:\ollama\models until 2026-11-01), Claude Code CLI 2.1.302 (winget) alongside VS Code extension 2.1.296 and the desktop app, uv 0.12.17, Python 3.14 (system) / 3.12 and 3.11 (uv-managed), Node 24.
 - Installed 2026-10-26 (B-S0): Microsoft OpenJDK 25.0.5 (winget MSI, `C:\Program Files\Microsoft\jdk-25.0.5.21-hotspot`, asked for UAC),
   Caddy 2.11.7 (winget portable, user scope), Keycloak 26.8.1 unpacked at D:\keycloak\keycloak-26.8.1 (SHA-1 checked; not a service;
   spike admin credentials in `.run/keycloak-spike.env` of the worktree that ran it). None run as services.
 - uv tools: litellm[proxy] 1.106.3 (+ opentelemetry-sdk, opentelemetry-exporter-otlp), arize-phoenix 20.26, open-webui 0.12.3.
 - NOT installed by choice: Docker Desktop / WSL2 (would reserve RAM the MoE experts need). Compose file kept as an untested optional path.
 - Claude account: Max 5x subscription. No Anthropic API key on this machine; cloud tiers are off (all department tiers resolve to local-primary) until a key is added to .env and `stack.py build` is rerun.
-- Ollama user env (registry, applied; the app was restarted 2026-10-25 via Explorer): FLASH_ATTENTION=1, KV_CACHE_TYPE=q8_0, NUM_PARALLEL=1, MAX_LOADED_MODELS=2, MAX_QUEUE=32, CONTEXT_LENGTH=32768, KEEP_ALIVE=30m, GPU_OVERHEAD=512 MiB, LOAD_TIMEOUT=15m, MODELS=D:\ollama\models.
+- Ollama user env (registry, applied; the app was restarted 2026-10-25 via Explorer): FLASH_ATTENTION=1, KV_CACHE_TYPE=q8_0, NUM_PARALLEL=1, MAX_LOADED_MODELS=2, MAX_QUEUE=32, CONTEXT_LENGTH=32768, KEEP_ALIVE=30m, GPU_OVERHEAD=512 MiB, LOAD_TIMEOUT=15m, MODELS=D:\ollama\models (still D: in the registry on 2026-11-01 after the folder moved to C:;
+  must become C:\ollama\models, then restart Ollama).
 
 ## Local model roles on this machine (since 2026-10-25 evening)
 - `local-primary` and `local-small` both serve qwen3.5:9b at num_ctx 32768 with Ollama's default load options, so all
@@ -95,7 +100,7 @@ once across a session restart.
   hook script parses Stop/SubagentStop/PostToolUse; `why-routed` and `retro --reflect none` run; promptfoo validates evals/docs.
 - `claude-env` prints profile B; `claude-local.ps1` not yet run as a live session.
 
-## Models pulled (D:\ollama\models)
+## Models pulled (C:\ollama\models since 2026-11-01; D:\ollama\models before)
 - qwen2.5-coder:1.5b-base (986 MB, FIM), nomic-embed-text (274 MB), qwen3.5:9b (6.6 GB), qwen3.6:35b-a3b-coding (22 GB, Q4_K_M, 35.5B total, 256 experts / 8 active).
 - flint:40b-a2b (23 GB): not pulled; `uv run scripts/stack.py pull --all` when wanted.
 

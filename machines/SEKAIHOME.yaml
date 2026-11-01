@@ -16,7 +16,7 @@ detected:
 hardware_class: moe-12gb-32ram  # chosen from machines/_defaults.yaml by RAM/VRAM; override here if a bench says otherwise
 
 # Windows paths: use single quotes so YAML keeps the backslashes literal.
-model_store: 'D:\ollama\models'     # C: has 52 GB free; models live on D: (OLLAMA_MODELS)
+model_store: 'C:\ollama\models'     # moved by the owner from D: (USB SSD) to C: (NVMe) on 2026-11-01 (OLLAMA_MODELS)
 data_dir: ".run"                    # Phoenix SQLite, Open WebUI data, pids, logs (gitignored)
 
 models:
@@ -30,7 +30,7 @@ models:
 
 ollama_env:
   # per-machine additions/overrides to machines/_defaults.yaml:ollama_env
-  OLLAMA_MODELS: 'D:\ollama\models'
+  OLLAMA_MODELS: 'C:\ollama\models'
 
 # External models are off (policy/privacy.yaml). Account: Claude Max 5x subscription; no API key on this machine.
 

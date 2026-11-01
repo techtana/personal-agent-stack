@@ -95,7 +95,7 @@ If you don't see the `setup complete` line, see [troubleshooting.md](troubleshoo
 
 Open `machines/<HOST>.yaml`. The `detected:` block is regenerated on refresh. You can change everything else, for example:
 
-- `model_store`: the folder for Ollama models (SEKAIHOME uses `D:\ollama\models`).
+- `model_store`: the folder for Ollama models (SEKAIHOME uses `C:\ollama\models`).
 - `models.primary`: replace the class default model. SEKAIHOME uses `qwen3.5:9b`.
 
 After you edit it, run:
