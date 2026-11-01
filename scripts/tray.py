@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -26,12 +27,63 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from tkinter import messagebox, ttk
 
+LOG_FILE = Path(__file__).resolve().parents[1] / ".run" / "logs" / "tray.log"
+# `stack.py tray` watches the log for these lines (stacklib/startup.py), so keep the two in step.
+READY = "[tray] ready"
+FAILED = "[tray] start-up failed:"
+
+
+def startup_failure_text(exc: BaseException) -> str:
+    """Why the tray could not start and what to do about it, for the message box shown under pythonw."""
+    repo = LOG_FILE.parents[2]
+    text = " ".join(str(exc).split()) or type(exc).__name__
+    missing = re.search(r"no machine profile at (.+?);", text)
+    if missing:
+        reason = f"This computer has no machine profile: {missing.group(1)} does not exist."
+        todo = f"Open a terminal in {repo} and run\n    uv run scripts/stack.py doctor --write-profile\nthen start the tray again."
+    elif isinstance(exc, ImportError):
+        reason = f"A Python package the tray needs could not be loaded: {text}"
+        todo = (f"Open a terminal in {repo} and run\n    uv sync\nthen start the tray again. If the message mentions an "
+                "Application Control policy, Windows Smart App Control blocked the file.")
+    else:
+        reason = f"{type(exc).__name__}: {text}"
+        todo = f"Start it again from a terminal in {repo} with\n    uv run scripts/stack.py tray"
+    return f"{reason}\n\n{todo}\n\nDetails are in {LOG_FILE}"
+
+
+def _report_startup_failure(exc_type, exc, tb) -> None:
+    """An uncaught error under pythonw: nobody sees the traceback, so log it and say on screen why the tray stopped."""
+    traceback.print_exception(exc_type, exc, tb)
+    print(f"{FAILED} {type(exc).__name__}: {' '.join(str(exc).split())}")
+    if issubclass(exc_type, KeyboardInterrupt):
+        return
+    pidfile = LOG_FILE.parents[1] / "pids" / "tray.pid"
+    try:  # give up the single-instance claim now, so a retry works while the message is still open
+        if pidfile.read_text(encoding="utf-8").split()[0] == str(os.getpid()):
+            pidfile.unlink()
+    except (OSError, IndexError):
+        pass
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("Agent Stack could not start", startup_failure_text(exc), parent=root)
+        root.destroy()
+    except tk.TclError:  # no display to show it on; the log has it
+        pass
+
+
+if __name__ == "__main__" and (sys.stdout is None or not sys.stdout.isatty()):
+    # pythonw has no console: keep a log instead, opened before the imports below so an import error lands in it too.
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    sys.stdout = sys.stderr = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
+    sys.excepthook = _report_startup_failure
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import psutil  # noqa: E402
 import pystray  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
-from stacklib import IS_WINDOWS, REPO, ollama, process_metrics, profile as prof, services  # noqa: E402
+from stacklib import IS_WINDOWS, ollama, process_metrics, profile as prof, services  # noqa: E402
 from stacklib import settings as cfg  # noqa: E402
 from stacklib import startup, usage  # noqa: E402
 
@@ -1111,16 +1163,13 @@ class TrayApp:
 
 
 def main() -> int:
-    log_dir = REPO / ".run" / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    if sys.stdout is None or not sys.stdout.isatty():  # pythonw has no console: keep a log instead
-        log = open(log_dir / "tray.log", "a", encoding="utf-8", buffering=1)
-        sys.stdout = sys.stderr = log
     print(f"[tray] {datetime.now().isoformat(timespec='seconds')} starting pid {os.getpid()}")
     if not startup.claim_single_instance():
         print("[tray] another tray instance is running; exiting")
         return 0
-    TrayApp(autostart="--no-autostart" not in sys.argv).run()
+    app = TrayApp(autostart="--no-autostart" not in sys.argv)  # an error here reaches _report_startup_failure
+    app.root.after(0, lambda: print(f"{READY} pid {os.getpid()}"))  # runs once the icon is up and the Tk loop turns
+    app.run()
     print("[tray] exited")
     return 0
 
