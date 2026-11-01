@@ -23,5 +23,7 @@ talk to their own cloud (Claude Code on a subscription, Claude Desktop), because
   and the items still to verify (V1-V11).
 - [INSTALL.md](INSTALL.md): dependencies per platform (a `winget configure` file on Windows, cloud-init on Linux) and
   every configuration step; the optional Harbor runtime.
+- [AGENT-FILE-ISOLATION.md](AGENT-FILE-ISOLATION.md): hard block on AI agents (Claude Code, Claude Desktop, Gemini,
+  Copilot, this stack) reading personal files: a separate Windows account with NTFS deny ACEs, not app settings.
 
 Both plans start with the gate and its evaluation set. Plan B reaches a usable `owner` mode sooner.
