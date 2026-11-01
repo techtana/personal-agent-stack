@@ -34,6 +34,7 @@ from stacklib import settings as cfg  # noqa: E402
 from stacklib import startup, usage  # noqa: E402
 
 POLL_SECONDS = 10
+START_TIMEOUT = 180  # seconds a started service gets to answer its health check
 RESOURCE_SECONDS = 5  # pause between process samples while the Resources tab is on screen
 RESOURCES_TAB = 3
 LABELS = {
@@ -111,11 +112,19 @@ def human_bytes(n: int) -> str:
     return f"{n / 2**30:.1f} GB" if n >= 2**30 else f"{n / 2**20:.0f} MB"
 
 
+def since(started: float) -> str:
+    """'... 12 s' after a monotonic start time; just '...' in the first second."""
+    seconds = int(time.monotonic() - started)
+    return f"... {seconds} s" if seconds else "..."
+
+
 class TrayApp:
     def __init__(self, autostart: bool = True) -> None:
         self.profile = prof.resolve_profile()
         self.managed = [s for s in services.SERVICE_ORDER if s in services.commands(self.profile)]
-        self.rows: list[dict] = []
+        self.rows: dict[str, dict] = {}  # service -> newest status row
+        self.row_checked: dict[str, float] = {}  # service -> when the check behind its row began (monotonic)
+        self.rows_lock = threading.Lock()
         self.loaded: list[dict] = []
         self.usage_data: dict | None = None
         self.usage_days = 7
@@ -125,8 +134,12 @@ class TrayApp:
         self.sampling = False
         self.sample_job: str | None = None
         self.sample_failures = 0
-        self.pending: dict[str, str] = {}  # service -> "start" | "stop" while that action runs
-        self.busy = ""
+        # service -> ("start" | "stop", monotonic start time) while that action runs; the tuple's identity tells a
+        # worker whether a newer click (Stop during a start) has taken over its row. Changed on the Tk thread only.
+        self.pending: dict[str, tuple[str, float]] = {}
+        self.service_locks = {s: threading.Lock() for s in services.SERVICE_ORDER}
+        self.tick_job: str | None = None
+        self.busy = ""  # set while settings are applied; every service control waits for it
         self.checked_at = ""
         self.ui_queue: queue.Queue = queue.Queue()
         self.stop_event = threading.Event()
@@ -141,13 +154,15 @@ class TrayApp:
 
     # ---------- state ----------
     def refresh(self) -> None:
+        checked = time.monotonic()
+        rows = services.status(self.profile)
+        self.loaded = ollama.ps(f"http://127.0.0.1:{self.profile['ports']['ollama']}")
+        self._store_rows(rows, checked)
+        self.checked_at = datetime.now().strftime("%H:%M:%S")
         # Refreshes come from the poller and from start/stop threads; pystray's Windows backend frees the old icon
         # handle on every swap, so two concurrent swaps fail with WinError 1402. Serialise, and swap only on change.
         with self.refresh_lock:
-            self.rows = services.status(self.profile)
-            self.loaded = ollama.ps(f"http://127.0.0.1:{self.profile['ports']['ollama']}")
-            self.checked_at = datetime.now().strftime("%H:%M:%S")
-            up = {r["service"] for r in self.rows if r["healthy"]}
+            up = {s for s, r in self.rows.items() if r["healthy"]}
             wanted = ["ollama", *self.managed]
             n_up = sum(1 for s in wanted if s in up)
             if "litellm" not in up or "ollama" not in up:
@@ -159,10 +174,31 @@ class TrayApp:
             if color != self.icon_color:
                 self.icon.icon = make_icon(color)
                 self.icon_color = color
-            self.icon.title = f"Agent Stack: {n_up}/{len(wanted)} up" + (f" ({self.busy})" if self.busy else "")
+            activity = self._activity()
+            self.icon.title = f"Agent Stack: {n_up}/{len(wanted)} up" + (f" ({activity})" if activity else "")
             self.icon.update_menu()
         self.ui_queue.put(self._render_window)
         self.refresh_usage()
+
+    def _store_rows(self, rows: list[dict], checked: float) -> None:
+        """Keep each service's newest reading, so a slow poll that began before an action finished cannot undo it."""
+        with self.rows_lock:
+            new = dict(self.rows)
+            for r in rows:
+                if checked >= self.row_checked.get(r["service"], 0.0):
+                    new[r["service"]] = r
+                    self.row_checked[r["service"]] = checked
+            self.rows = new  # replaced, never changed in place: other threads read it without the lock
+
+    def _activity(self) -> str:
+        if self.busy:
+            return self.busy
+        pending = dict(self.pending)
+        if not pending:
+            return ""
+        verbs = {a for a, _ in pending.values()}
+        verb = "starting" if verbs == {"start"} else "stopping" if verbs == {"stop"} else "changing"
+        return f"{verb} {next(iter(pending)) if len(pending) == 1 else f'{len(pending)} services'}"
 
     def refresh_usage(self) -> None:
         try:
@@ -181,28 +217,60 @@ class TrayApp:
             self.stop_event.wait(POLL_SECONDS)
 
     def _act(self, action: str, svcs: list[str]) -> None:
-        """Start or stop services. Runs on the Tk thread: the rows change at once, the work happens in the background."""
-        what = f"{'Starting' if action == 'start' else 'Stopping'} {svcs[0] if len(svcs) == 1 else 'services'}"
-        self.busy = what.lower()
-        self.pending.update({s: action for s in svcs})
-        self._render_window()
+        """Start or stop services. Runs on the Tk thread: the rows change at once, each service's work runs in its own
+        thread, and a start waits only for the service it started."""
+        now = time.monotonic()
+        for svc in svcs:
+            if self.pending.get(svc, ("",))[0] == action:
+                continue
+            entry = (action, now)
+            self.pending[svc] = entry
+            threading.Thread(target=self._run_action, args=(svc, entry), daemon=True).start()
+        self._render_services()
+        self._tick_soon()
+        if self._window_built():
+            self._settings_dirty()
 
-        def run() -> None:
-            self.refresh_soon()
-            try:
-                if action == "start":
-                    services.start(self.profile, svcs)
-                    services.wait_healthy(self.profile, self.managed, timeout=180)
-                else:
-                    services.stop(self.profile, svcs)
-            except Exception as e:  # noqa: BLE001
-                print(f"[tray] {what} failed: {e}")
-            finally:
-                self.busy = ""
-                self.ui_queue.put(lambda: [self.pending.pop(s, None) for s in svcs])
-                self.refresh_soon()
+    def _run_action(self, svc: str, entry: tuple[str, float]) -> None:
+        action = entry[0]
+        try:
+            # A Stop clicked during a start waits here until the start has launched the process, then stops it.
+            with self.service_locks[svc]:
+                if self.pending.get(svc) is not entry:
+                    return
+                services.start(self.profile, [svc]) if action == "start" else services.stop(self.profile, [svc])
+            deadline = time.monotonic() + START_TIMEOUT
+            while action == "start" and self.pending.get(svc) is entry and time.monotonic() < deadline:
+                row = services.probe(self.profile, svc)
+                if row["healthy"] or row["state"] == "stopped":
+                    break
+                time.sleep(1)
+        except Exception as e:  # noqa: BLE001
+            print(f"[tray] {action} {svc} failed: {e}")
+        checked = time.monotonic()
+        row = services.probe(self.profile, svc)
+        self.ui_queue.put(lambda: self._action_done(svc, entry, row, checked))
 
-        threading.Thread(target=run, daemon=True).start()
+    def _action_done(self, svc: str, entry: tuple[str, float], row: dict, checked: float) -> None:
+        if self.pending.get(svc) is not entry:
+            return  # a newer click took over this row
+        del self.pending[svc]
+        self._store_rows([row], checked)
+        self._render_services()
+        if not self.pending and self._window_built():
+            self._settings_dirty()  # Apply and Revert wait for service changes to finish
+        self.refresh_soon()
+
+    def _tick_soon(self) -> None:
+        if self.tick_job is None:
+            self.tick_job = self.root.after(1000, self._tick)
+
+    def _tick(self) -> None:
+        """Advance the seconds shown on starting and stopping rows, once a second while there are any."""
+        self.tick_job = None
+        self._render_services()
+        if self.pending or any(r["state"] == "starting" for r in self.rows.values()):
+            self._tick_soon()
 
     def _on_ui(self, fn) -> None:
         """Run fn on the Tk thread: at once for a window click, through the UI queue for the tray menu's thread."""
@@ -215,15 +283,19 @@ class TrayApp:
         threading.Thread(target=self.refresh, daemon=True).start()
 
     # ---------- actions ----------
+    def _running(self, svc: str) -> bool:
+        """Running, starting, or being started: what Stop applies to."""
+        pending = self.pending.get(svc)
+        return pending[0] == "start" if pending else self.rows.get(svc, {}).get("state", "stopped") != "stopped"
+
     def start_all(self, *_):
-        self._on_ui(lambda: self._act("start", self.managed))
+        self._on_ui(lambda: self._act("start", [s for s in self.managed if not self._running(s) and s not in self.pending]))
 
     def stop_all(self, *_):
-        self._on_ui(lambda: self._act("stop", self.managed))
+        self._on_ui(lambda: self._act("stop", [s for s in self.managed if self._running(s)]))
 
     def toggle(self, svc: str) -> None:
-        healthy = any(r["service"] == svc and r["healthy"] for r in self.rows)
-        self._act("stop" if healthy else "start", [svc])
+        self._act("stop" if self._running(svc) else "start", [svc])
 
     def open_url(self, svc: str) -> None:
         webbrowser.open(ui_links(self.profile)[svc])
@@ -247,8 +319,11 @@ class TrayApp:
     # ---------- tray menu ----------
     def _status_text(self, svc: str):
         def text(_item) -> str:
-            row = next((r for r in self.rows if r["service"] == svc), None)
-            mark = "● up" if row and row["healthy"] else "○ down"
+            row, pending = self.rows.get(svc), self.pending.get(svc)
+            if pending:
+                mark = "starting..." if pending[0] == "start" else "stopping..."
+            else:
+                mark = "● up" if row and row["healthy"] else "○ down"
             return f"{LABELS[svc]}: {mark}"
 
         return text
@@ -430,21 +505,38 @@ class TrayApp:
         ttk.Checkbutton(bar, text="Start at login", style="Page.TCheckbutton", variable=self.startup_var,
                         command=self._toggle_startup).pack(side="right")
 
+    def _window_built(self) -> bool:
+        return self.window is not None and self.window.winfo_exists()
+
     def _render_window(self) -> None:
-        if self.window is None or not self.window.winfo_exists():
+        if not self._window_built():
+            return
+        self._render_services()
+        m = self.profile["models"]
+        cloud = "external models allowed" if self.profile["policy"]["external"]["enabled"] else "private only"
+        self.head_sub.configure(text=f"{self.profile['name']}  ·  primary {m.get('primary')} @ {compact(m.get('primary_num_ctx', 0))} ctx  ·  {cloud}")
+        self.startup_var.set(startup.is_installed())
+        self._render_loaded()
+        if any(r["state"] == "starting" for r in self.rows.values()):
+            self._tick_soon()
+
+    def _render_services(self) -> None:
+        """Service rows, the status pill and Start all / Stop all, from cached state only (no I/O): runs on every
+        click and once a second while something is starting or stopping."""
+        if not self._window_built():
             return
         t = self.t
-        rows = {r["service"]: r for r in self.rows}
         up = 0
         for svc, (dot, state, toggle) in self.row_widgets.items():
-            healthy = bool(rows.get(svc, {}).get("healthy"))
+            row = self.rows.get(svc, {})
+            healthy = bool(row.get("healthy"))
             enabled = svc == "ollama" or svc in self.managed
             up += healthy and enabled
-            pid = rows.get(svc, {}).get("pid")
+            pid = row.get("pid")
             pending = self.pending.get(svc)
             if pending:
                 dot.configure(fg=t["warn"])
-                state.configure(text="Starting..." if pending == "start" else "Stopping...")
+                state.configure(text=("Starting" if pending[0] == "start" else "Stopping") + since(pending[1]))
             elif healthy:
                 dot.configure(fg=t["good"])
                 state.configure(text=f"Running{f'  (pid {pid})' if pid else ''}")
@@ -454,19 +546,18 @@ class TrayApp:
             else:
                 dot.configure(fg=t["muted"])
                 state.configure(text="Off in settings")
-            toggle.configure(text="Stop" if healthy else "Start",
-                             state="disabled" if self.busy or pending or not (enabled or healthy) else "normal")
+            stopping = bool(pending) and pending[0] == "stop"
+            toggle.configure(text="Stop" if self._running(svc) else "Start",
+                             state="disabled" if self.busy or stopping or not (enabled or healthy) else "normal")
         total = sum(1 for s in self.row_widgets if s == "ollama" or s in self.managed)
         self.pill_dot.configure(fg=t["good"] if up == total else (t["warn"] if up else t["bad"]))
-        busy = f"  ·  {self.busy}..." if self.busy else ""
+        activity = self._activity()
+        busy = f"  ·  {activity}..." if activity else ""
         self.pill_text.configure(text=f"{up}/{total} running  ·  checked {self.checked_at or '...'}{busy}")
-        m = self.profile["models"]
-        cloud = "external models allowed" if self.profile["policy"]["external"]["enabled"] else "private only"
-        self.head_sub.configure(text=f"{self.profile['name']}  ·  primary {m.get('primary')} @ {compact(m.get('primary_num_ctx', 0))} ctx  ·  {cloud}")
-        for b in (self.start_btn, self.stop_btn):
-            b.configure(state="disabled" if self.busy else "normal")
-        self.startup_var.set(startup.is_installed())
-        self._render_loaded()
+        can_start = any(not self._running(s) and s not in self.pending for s in self.managed)
+        can_stop = any(self._running(s) and self.pending.get(s, ("",))[0] != "stop" for s in self.managed)
+        self.start_btn.configure(state="normal" if can_start and not self.busy else "disabled")
+        self.stop_btn.configure(state="normal" if can_stop and not self.busy else "disabled")
 
     def _render_loaded(self) -> None:
         for child in self.loaded_frame.winfo_children():
@@ -849,7 +940,7 @@ class TrayApp:
             self.pending_label.configure(text=f"{len(todo)} unsaved change{'s' if len(todo) > 1 else ''}. Apply will: " + "; ".join(effects) + ".")
         else:
             self.pending_label.configure(text=f"Saved in machines/{self.profile['name']}.yaml. Defaults come from machines/_defaults.yaml.")
-        state = "normal" if todo and not self.busy else "disabled"
+        state = "normal" if todo and not self.busy and not self.pending else "disabled"
         self.apply_btn.configure(state=state)
         self.revert_btn.configure(state=state)
 
@@ -870,9 +961,6 @@ class TrayApp:
             self.ui_queue.put(lambda text="  ·  ".join(lines[-4:]): self.apply_log.configure(text=text))
 
         def run() -> None:
-            self.busy = "applying settings"
-            self.ui_queue.put(self._settings_dirty)
-            self.refresh_soon()
             try:
                 new = cfg.apply(self.profile, edits, log=log)
                 self.profile = new
@@ -885,6 +973,9 @@ class TrayApp:
                 self.ui_queue.put(self._load_settings)
                 self.refresh_soon()
 
+        self.busy = "applying settings"
+        self._settings_dirty()
+        self._render_services()
         threading.Thread(target=run, daemon=True).start()
 
     def _drain_ui_queue(self) -> None:
