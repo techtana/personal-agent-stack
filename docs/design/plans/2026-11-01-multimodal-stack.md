@@ -1,5 +1,12 @@
 **Status:** proposed 2026-11-01. Nothing is built. The decisions in section 12 are open. The next session starts from
-[../../HANDOFF-2026-11-01-multimodal.md](../../HANDOFF-2026-11-01-multimodal.md).
+[../../HANDOFF-2026-11-01-multimodal.md](../../HANDOFF-2026-11-01-multimodal.md). Tasks: section 14.
+
+Background chapters (read before changing this plan):
+[media generation on local GPUs](../../knowledge/media-generation-on-local-gpus.md),
+[video with audio](../../knowledge/video-with-audio.md),
+[speech and vision](../../knowledge/speech-and-vision.md),
+[routing across experts, media and one GPU](../../knowledge/routing-across-models-and-media.md) (decision trees for
+every routing stage).
 
 # Multimodal stack: vision, speech, images, video with audio, music and routing per message
 
@@ -41,6 +48,22 @@ Every feature runs on the owner's own hardware. That is the private-first rule (
 | C7 | Licences must be checked before a model is named (lesson 2026-10-26). | Section 5 lists each licence. Non-commercial weights need an owner decision (D-M3). |
 | C8 | Ollama's image generation runs on macOS and Linux with CUDA only. | Images come from ComfyUI on this Windows machine. |
 | C9 | The repository is public. | No personal data, paths under the user profile or file names from personal folders in commits. |
+
+### Trade-off analysis
+
+The research of 2026-11-01 comes down to five trade-offs. Each row names the choice this plan makes on SEKAIHOME and
+what would change it.
+
+| Trade-off | Option A | Option B | Choice here | What would change it |
+|---|---|---|---|---|
+| Experts | One model per subject: best possible specialist | Prompts on one shared model: no reloads | **B.** A model switch costs 130-161 s cold; ten switches a day is about 22 min of waiting (derived) | A card with room for two chat models, or a warm reload under about 10 s |
+| Where routing per message lives | Gateway: every client gets it | Open WebUI pipe: sees attachments, pins per chat | **B** for subject; the gateway keeps difficulty tiers | A LiteLLM custom classifier that pins per session, if Claude Code and OpenCode need it |
+| GPU sharing | Automatic hand-over per request | Owner switches a GPU mode; ComfyUI offloads as a safety net | **B** | Measured warm reload time (S0c) small enough to automate |
+| Video with audio | Chain of specialists | Joint audio-video model | **Chain** under 24 GB of VRAM; joint from 24 GB for short clips with speech; joint by default from 32 GB | A card upgrade, or a joint model that fits 12 GB |
+| Long media jobs | Reply in the chat | Job with progress and a link | **Job**: video takes minutes | Nothing on this hardware |
+
+The trees that apply these choices, stage by stage, are in
+[routing-across-models-and-media.md](../../knowledge/routing-across-models-and-media.md).
 
 ## 4. Target architecture
 
@@ -124,6 +147,20 @@ under $10M revenue; the weights are gated on Hugging Face.
 Decision rule (D-M1): try one 5 s clip, time-boxed to one hour of setup. Adopt Route B only if it finishes in under
 20 minutes and the owner prefers its output to Route A's. Otherwise record the result and keep Route A.
 
+### The hardware rule (proposed for D-M1)
+
+The right route depends on VRAM more than on anything else
+([video-with-audio.md](../../knowledge/video-with-audio.md) has the tree and the numbers):
+
+| VRAM | Route | Why |
+|---|---|---|
+| under 24 GB (SEKAIHOME) | chain | LTX-2.5 does not fit; offloaded runs are "a demo, not a workflow" |
+| 24 GB | joint for clips of about 5 s with speech or tight sync; chain otherwise | LTX-2.5 int8 needs 22.7 GiB for 5 s; 10 s clips can stall at the decode |
+| 32 GB or more | joint by default, plus ACE-Step music mixed in with ffmpeg (the hybrid) | about 25 s for a 4 s 720p clip on an RTX 5090 |
+| 128 GB unified memory | chain, and expect slow video | bandwidth-limited: a Wan 2.2 5B clip took about 14 min on a DGX Spark |
+
+The machine profile carries it as `media.video_route: chain | joint | auto` (task T54); `auto` applies the table.
+
 ### How the owner starts a video
 
 - v1: from ComfyUI's own UI, with the workflow saved in the repo (`config/comfyui/workflows/video_with_audio.json`).
@@ -179,6 +216,10 @@ department still gets evals, because the build generates the promptfoo gate from
 `supports_vision` from the catalog instead of the hard-coded `False`.
 
 ### 8.2 The "Auto" model in Open WebUI
+
+Decision trees for stage 1 (kind of request), stage 2 (department), stage 3 (tier), stage 4 (GPU owner), stage 5
+(media route) and events during a chat are in
+[routing-across-models-and-media.md](../../knowledge/routing-across-models-and-media.md).
 
 A pipe function `config/openwebui/functions/auto_router.py` appears as one model, "Auto". For each chat it:
 
@@ -272,7 +313,7 @@ change only through `uv run scripts/stack.py build`.
 
 | # | Decision | Default proposed |
 |---|---|---|
-| D-M1 | Video-with-audio route | Route A; try Route B once (S0f) |
+| D-M1 | Video-with-audio route | By VRAM (section 6, hardware rule): chain under 24 GB, so Route A on SEKAIHOME; try Route B once (S0f) |
 | D-M2 | Foley model | Whichever sounds right in S0e, after the licence check in D-M3 |
 | D-M3 | Non-commercial or custom-licence weights (MMAudio, FLUX.2 klein 9B, HunyuanVideo-Foley, LTX-2) | Allowed for personal use only, and marked "(NC)" or "(custom licence)" in the model or workflow name |
 | D-M4 | Speech through LiteLLM or direct to Kokoro and Whisper | Direct first; through LiteLLM if the Usage tab should count it |
@@ -292,7 +333,109 @@ change only through `uv run scripts/stack.py build`.
 | Plan facts are from web pages, not measured here | Spike M-S0 replaces every timing in this plan with a SEKAIHOME measurement |
 | Generated media leaves the private boundary through sharing | Outputs stay in the ComfyUI and Open WebUI data folders; nothing uploads automatically |
 
-## 14. Sources (read 2026-11-01)
+## 14. Task breakdown
+
+Every task is small enough for one sitting and ends at a check. "Where" says whether the task needs SEKAIHOME (its
+GPU or installed services) and whether the owner must be present. Tasks marked **any** can run in a cloud session or
+on another machine, so they can start while the spike waits.
+
+```mermaid
+flowchart LR
+  S0["M-S0 spike<br/>T01-T07"] --> M1["M1 vision and departments<br/>T10-T14"]
+  S0 --> M2["M2 speech<br/>T20-T25"]
+  M1 --> M3["M3 Auto router<br/>T30-T34"]
+  S0 --> M4["M4 ComfyUI, images, GPU mode<br/>T40-T46"]
+  M4 --> M5a["M5a video with audio, music<br/>T50-T56"]
+  M5a --> M5b["M5b make_video tool<br/>T60-T61"]
+  D5["Owner decision D-M5"] --> M6["M6 web search<br/>T70-T71"]
+  M3 --> M7["M7 docs closure<br/>T80-T82"]
+  M5b --> M7
+  M2 --> M7
+  M6 --> M7
+```
+
+### M-S0: spike (SEKAIHOME, owner present)
+
+| ID | Task | Size | Depends | Done when |
+|---|---|---|---|---|
+| T01 | Check vision in `qwen3.5:9b`: `ollama show`, then one image through a temporary gateway config with `supports_vision` on | S | - | the answer names the image's content; result in `memory/state.md` |
+| T02 | Find a ComfyUI install that runs under Smart App Control (desktop installer, portable, uv venv); make one 1024 px Z-Image-Turbo image | M | D-M6 | install route, seconds per image and peak VRAM recorded |
+| T03 | GPU hand-over timings: unload the 9B, make an image, reload the 9B; and an image with the 9B loaded under `--lowvram` | S | T02 | warm reload time and both image times recorded |
+| T04 | Start Kokoro-FastAPI on the CPU from its uv script | S | - | starts or blocked; seconds per sentence recorded |
+| T05 | Wan 2.2 5B 5 s 720p clip; both Foley candidates on it; a 30 s ACE-Step track; desktop apps closed | M | T02 | minutes per clip, peak RAM and VRAM, owner's Foley choice recorded |
+| T06 | Route B: one LTX-2.x GGUF clip, one-hour cap | S | T02 | finished or not, and time, recorded |
+| T07 | Write the spike results into `memory/state.md`, `memory/lessons.md` and sections 5-6 of this plan | S | T01-T06 | pull request merged |
+
+### M1: vision and new departments
+
+| ID | Task | Where | Size | Depends | Done when |
+|---|---|---|---|---|---|
+| T10 | `vision` in `model_catalog`; `litellm_build.py` sets `supports_vision` from it; unit test | any | S | T01 | generated config shows `supports_vision: true` for the 9B deployments; test passes |
+| T11 | `capabilities` and `surfaces` keys in `agents_build.py`; unit tests | any | S | - | Open WebUI JSON carries `vision`; departments without `claude` in `surfaces` produce no `.claude/agents` file |
+| T12 | `writer`, `scientist`, `architect`, `art-critic` YAMLs with prompts and at least three evals each | any | M | T11 | `stack.py build` passes; promptfoo evals pass on the local tier |
+| T13 | `smoke`: send a small PNG to `art-critic` | SEKAIHOME | S | T10, T12 | smoke passes; the answer names the image's colour |
+| T14 | AGENTS.md department list, README, user guide | any | S | T12 | docs list ten departments |
+
+### M2: speech
+
+| ID | Task | Where | Size | Depends | Done when |
+|---|---|---|---|---|---|
+| T20 | Whisper settings in the Open WebUI env; smoke reads back the effective setting | any (code), SEKAIHOME (check) | S | - | the effective STT engine and model match the profile |
+| T21 | `kokoro` service: port, `services.py` command, health and image names, off by default; unit tests | any | S | T04 | tests pass; `stack.py up kokoro` starts it on SEKAIHOME |
+| T22 | Tray Settings entry to turn Kokoro on or off | any | S | T21 | Apply starts and stops it |
+| T23 | Open WebUI TTS settings pointing at Kokoro | any | S | T21 | read-aloud plays a Kokoro voice |
+| T24 | `smoke --media`: Kokoro speaks a sentence, Whisper transcribes it | SEKAIHOME | S | T20, T23 | the words come back |
+| T25 | Only if D-M4 says so: audio deployments in the gateway with `data_class: private` | any | S | D-M4 | Usage tab counts speech requests |
+
+### M3: the "Auto" router
+
+| ID | Task | Where | Size | Depends | Done when |
+|---|---|---|---|---|---|
+| T30 | `routing_rules.py`: a pure function from message, attachments and pin to department and reason; unit tests | any | S | T12 | tests cover every rule in the stage-2 tree |
+| T31 | Pipe function `auto_router.py`: rules, `local-small` fallback with a JSON schema, pinning, `@department`, `generate_chat_completion`, status event | any (code), SEKAIHOME (check) | M | T30 | a chat shows "Routed to: X" and keeps it until `@` switches |
+| T32 | Install the function through Open WebUI's API (`stack.py webui-provision`), or document the import | any | S | T31 | a fresh Open WebUI gets "Auto" without manual steps |
+| T33 | Labelled set of at least 20 prompts and a scorer | any | S | T30 | at least 18 of 20 routed right |
+| T34 | Log department and rule (never text); `why-routed` reads it | any | S | T31 | `why-routed` lists recent pipe decisions |
+
+### M4: ComfyUI, images, style transfer, GPU mode
+
+| ID | Task | Where | Size | Depends | Done when |
+|---|---|---|---|---|---|
+| T40 | `comfyui` service: `media:` section, port 8188, command with `--lowvram --reserve-vram 1.0`, health `/system_stats`; unit tests | any (code), SEKAIHOME (check) | M | T02 | `stack.py up comfyui` healthy on SEKAIHOME |
+| T41 | GPU mode: unload Ollama models, `POST /free`, stop ComfyUI; tray switch with status; tests with stubbed HTTP | any (code), SEKAIHOME (check) | M | T40, T03 | two switches in a row leave one model loaded; chat works after media |
+| T42 | Image workflow JSON and node map; Open WebUI image settings | SEKAIHOME | S | T40 | the image button returns a 1024 px image |
+| T43 | Style-transfer workflow (SDXL + IP-Adapter, or an edit model from S0b) | SEKAIHOME | S | T42 | a photo comes back in the reference picture's style |
+| T44 | `config/comfyui/MODELS.md`: model, version, licence, size, source; pinned custom-node commits | any | S | T02 | every model in a saved workflow is listed |
+| T45 | `smoke --media`: one 512 px, 4-step image | SEKAIHOME | S | T42 | passes |
+| T46 | winget entry for ComfyUI, if T02 picked the desktop installer and winget has it | any | S | T02 | generated winget file lists it |
+
+### M5a: video with audio and music
+
+| ID | Task | Where | Size | Depends | Done when |
+|---|---|---|---|---|---|
+| T50 | `media_mux.py`: ffmpeg filter graph with `loudnorm`, `sidechaincompress`, `amix` and mux; unit tests on the graph; integration test with synthetic tones when ffmpeg exists | any | M | - | tests pass; the mixed test file measures -16 LUFS +/- 1 LU |
+| T51 | `stack.py media mux` command with a loudness report | any | S | T50 | command documented and tested |
+| T52 | Route A workflow `video_with_audio.json` | SEKAIHOME | M | T05, T40 | one prompt gives frames, Foley, optional voice and music |
+| T53 | Music workflow (ACE-Step 1.5) | SEKAIHOME | S | T05, T40 | a 30 s track from a prompt |
+| T54 | `media.video_route` setting (`chain`, `joint` or `auto`); `auto` from detected VRAM; unit tests | any | S | T40 | tests cover 12, 24 and 32 GB profiles |
+| T55 | Joint workflow (LTX-2.5) for machines of 24 GB or more; marked untested here unless T06 succeeded | any | S | T06 | workflow saved with its licence note |
+| T56 | Acceptance run on SEKAIHOME (section 6) | SEKAIHOME, owner | S | T51, T52 | time and loudness recorded in `memory/state.md` |
+
+### M5b, M6, M7
+
+| ID | Task | Where | Size | Depends | Done when |
+|---|---|---|---|---|---|
+| T60 | `make_video` Open WebUI tool: post to `/prompt`, poll `/history`, progress events, return a link | any (code), SEKAIHOME (check) | M | T52 | a chat request queues a clip and returns its link |
+| T61 | Output folder, retention and size cap for generated media | any | S | T60 | old outputs are removed by the rule the owner sets |
+| T70 | Owner decides D-M5 (web search) | owner | - | - | decision recorded |
+| T71 | If on: per-chat toggle, engine settings, `DECISIONS.md` exception entry | any | S | T70 | search works only when toggled in a chat |
+| T80 | User guide: one section per feature | any | S | each package | a newcomer can use each feature from the guide |
+| T81 | Troubleshooting rows: Smart App Control blocks, out of memory at decode, workflow rejected, slow reload | any | S | each package | rows added |
+| T82 | Close the plan: Outcome note here, design index status, `memory/state.md` | any | S | all | plan marked done |
+
+Tasks that can start now, without SEKAIHOME: T11, T30 (after T12's ids are fixed), T44 (structure), T50, T51, T54.
+
+## 15. Sources (read 2026-11-01)
 
 - Ollama image generation, macOS and Linux CUDA only: https://ollama.com/blog/image-generation (via release notes mirrored at https://gitea.alexlebens.dev/alexlebens/infrastructure/pulls/3436)
 - Qwen 3.5 on Ollama accepts images, all sizes including 9B: https://summarizemeeting.com/en/news/ollama-qwen-3-5-local-tool-calling-multimodal

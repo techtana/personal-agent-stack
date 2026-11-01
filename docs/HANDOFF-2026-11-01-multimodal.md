@@ -5,8 +5,16 @@ the plan has been run on the machine.
 
 You are continuing the design and build of the multimodal features of this stack: vision, speech, image generation
 and style transfer, **video with audio**, music, web search, and a router that picks an expert per message. The plan
-is [design/plans/2026-11-01-multimodal-stack.md](design/plans/2026-11-01-multimodal-stack.md). Read this file first,
-then the plan, then work through section 4 below.
+is [design/plans/2026-11-01-multimodal-stack.md](design/plans/2026-11-01-multimodal-stack.md). Read in this order:
+
+1. this file;
+2. the plan, including its trade-off analysis (section 3) and task breakdown (section 14);
+3. the background chapters: [media generation on local GPUs](knowledge/media-generation-on-local-gpus.md),
+   [video with audio](knowledge/video-with-audio.md), [speech and vision](knowledge/speech-and-vision.md) and
+   [routing across experts, media and one GPU](knowledge/routing-across-models-and-media.md), which has the decision
+   trees for every routing stage.
+
+Then work through section 4 below.
 
 ## 1. Owner's goals (authoritative)
 
@@ -64,13 +72,18 @@ that branch. Check and correct the state file.
    web-search setting names. Fix the plan where it is wrong.
 3. Settle decisions D-M1 to D-M8 (plan section 12) with the owner, a few questions at a time. Record each in
    `docs/design/DECISIONS.md` (replace the "Pending" note) and in the plan.
-4. Turn packages M1-M7 into issue-sized tasks with acceptance checks. Put the task list in the plan under a new
-   "Tasks" section, or open GitHub issues if the owner prefers.
-5. Open a pull request with the planning changes. Stop for review.
+4. Review the task breakdown (plan section 14, tasks T01-T82) against what you found in steps 1-3. Fix sizes,
+   dependencies and "done when" checks. Open GitHub issues for them if the owner prefers.
+5. Check the decision trees in the routing chapter against the code you will write; they are the specification for
+   the "Auto" pipe and the GPU mode.
+6. Open a pull request with the planning changes. Stop for review.
+
+Tasks marked **any** in plan section 14 (T11, T30, T44, T50, T51, T54) need no GPU. They can be built in a
+separate session while the spike waits for the owner.
 
 ### Session 2: spike M-S0 (owner present; changes the machine)
 
-Run S0a-S0f from the plan. Ask before each install. Record every time, VRAM and RAM figure in `memory/state.md`, and
+Run tasks T01-T07 (checks S0a-S0f) from the plan. Ask before each install. Record every time, VRAM and RAM figure in `memory/state.md`, and
 every surprise in `memory/lessons.md`. Update the plan's model choices from the results. One pull request.
 
 ### Sessions 3 onward: build, one package per pull request
@@ -104,8 +117,8 @@ Paste this into Claude Code opened on this repository on SEKAIHOME:
 
 ```
 Read docs/HANDOFF-2026-11-01-multimodal.md and follow it. Start with Session 1 (deep planning, no machine
-changes): check the plan in docs/design/plans/2026-11-01-multimodal-stack.md against the code and the installed
-versions, then walk me through decisions D-M1 to D-M8 a few at a time, then break M1-M7 into tasks with acceptance
-checks. Never touch the D: drive or my OneDrive folders; tell me what to copy instead. Open a pull request at the
+changes): check the plan in docs/design/plans/2026-11-01-multimodal-stack.md and the four knowledge chapters it
+links against the code and the installed versions, then walk me through decisions D-M1 to D-M8 a few at a time, then
+review the task breakdown T01-T82 and the routing decision trees. Never touch the D: drive or my OneDrive folders; tell me what to copy instead. Open a pull request at the
 end and stop.
 ```

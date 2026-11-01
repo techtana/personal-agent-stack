@@ -18,6 +18,11 @@ entry stays and gets a "Done <date>" note.
   video-to-audio Foley model, optional Kokoro narration and ACE-Step music, mixed and muxed with ffmpeg). Why: the
   owner requires audio on videos; one-model audio-video (LTX-2.x) does not fit 12 GB without heavy offload. Rejected
   for now: LTX-2.x as the default (to be tried once in spike S0f). Source: the plan, section 6.
+- **Pending: the video route follows the GPU.** Chain under 24 GB of VRAM; joint model (LTX-2.5) for clips of about
+  5 s with speech at 24 GB; joint by default from 32 GB, with music mixed in by ffmpeg; chain on unified-memory
+  machines. Carried as `media.video_route: chain | joint | auto`. Why: LTX-2.5 int8 needs 22.7 GiB for a 5 s clip,
+  and unified memory is bandwidth-limited for diffusion. Source: the plan, section 6;
+  [video-with-audio.md](../knowledge/video-with-audio.md).
 - **Pending: experts are departments on one shared model, not separate models.** Why: a cold load of the 9B took
   130-161 s here, so a model per subject would mean minutes of waiting at each switch. Rejected: LiteLLM's semantic
   router (deprecated); a model per subject. Source: the plan, section 8.
