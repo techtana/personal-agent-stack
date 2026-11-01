@@ -18,6 +18,7 @@ import os
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 import webbrowser
 from datetime import date, datetime, timezone
@@ -33,6 +34,8 @@ from stacklib import settings as cfg  # noqa: E402
 from stacklib import startup, usage  # noqa: E402
 
 POLL_SECONDS = 10
+RESOURCE_SECONDS = 5  # pause between process samples while the Resources tab is on screen
+RESOURCES_TAB = 3
 LABELS = {
     "ollama": "Ollama",
     "phoenix": "Phoenix",
@@ -119,6 +122,10 @@ class TrayApp:
         self.usage_group = "alias"
         self.process_sampler = process_metrics.ProcessSampler()
         self.process_rows: list[dict] = []
+        self.sampling = False
+        self.sample_job: str | None = None
+        self.sample_failures = 0
+        self.pending: dict[str, str] = {}  # service -> "start" | "stop" while that action runs
         self.busy = ""
         self.checked_at = ""
         self.ui_queue: queue.Queue = queue.Queue()
@@ -130,7 +137,7 @@ class TrayApp:
         self.icon_color = COLORS["idle"]
         self.icon = pystray.Icon("agent-stack", make_icon(COLORS["idle"]), "Agent Stack: starting", menu=self._menu())
         if autostart:
-            self._in_background("Starting services", lambda: services.start(self.profile, self.managed))
+            self._act("start", self.managed)
 
     # ---------- state ----------
     def refresh(self) -> None:
@@ -139,7 +146,6 @@ class TrayApp:
         with self.refresh_lock:
             self.rows = services.status(self.profile)
             self.loaded = ollama.ps(f"http://127.0.0.1:{self.profile['ports']['ollama']}")
-            self.process_rows = self.process_sampler.sample()
             self.checked_at = datetime.now().strftime("%H:%M:%S")
             up = {r["service"] for r in self.rows if r["healthy"]}
             wanted = ["ollama", *self.managed]
@@ -174,37 +180,50 @@ class TrayApp:
                 print(f"[tray] refresh failed: {e}")
             self.stop_event.wait(POLL_SECONDS)
 
-    def _in_background(self, what: str, fn) -> None:
+    def _act(self, action: str, svcs: list[str]) -> None:
+        """Start or stop services. Runs on the Tk thread: the rows change at once, the work happens in the background."""
+        what = f"{'Starting' if action == 'start' else 'Stopping'} {svcs[0] if len(svcs) == 1 else 'services'}"
+        self.busy = what.lower()
+        self.pending.update({s: action for s in svcs})
+        self._render_window()
+
         def run() -> None:
-            self.busy = what.lower()
             self.refresh_soon()
             try:
-                fn()
-                services.wait_healthy(self.profile, self.managed, timeout=180) if what.startswith("Start") else None
+                if action == "start":
+                    services.start(self.profile, svcs)
+                    services.wait_healthy(self.profile, self.managed, timeout=180)
+                else:
+                    services.stop(self.profile, svcs)
             except Exception as e:  # noqa: BLE001
                 print(f"[tray] {what} failed: {e}")
             finally:
                 self.busy = ""
+                self.ui_queue.put(lambda: [self.pending.pop(s, None) for s in svcs])
                 self.refresh_soon()
 
         threading.Thread(target=run, daemon=True).start()
+
+    def _on_ui(self, fn) -> None:
+        """Run fn on the Tk thread: at once for a window click, through the UI queue for the tray menu's thread."""
+        if threading.current_thread() is threading.main_thread():
+            fn()
+        else:
+            self.ui_queue.put(fn)
 
     def refresh_soon(self) -> None:
         threading.Thread(target=self.refresh, daemon=True).start()
 
     # ---------- actions ----------
     def start_all(self, *_):
-        self._in_background("Starting services", lambda: services.start(self.profile, self.managed))
+        self._on_ui(lambda: self._act("start", self.managed))
 
     def stop_all(self, *_):
-        self._in_background("Stopping services", lambda: services.stop(self.profile, self.managed))
+        self._on_ui(lambda: self._act("stop", self.managed))
 
     def toggle(self, svc: str) -> None:
         healthy = any(r["service"] == svc and r["healthy"] for r in self.rows)
-        if healthy:
-            self._in_background(f"Stopping {svc}", lambda: services.stop(self.profile, [svc]))
-        else:
-            self._in_background(f"Starting {svc}", lambda: services.start(self.profile, [svc]))
+        self._act("stop" if healthy else "start", [svc])
 
     def open_url(self, svc: str) -> None:
         webbrowser.open(ui_links(self.profile)[svc])
@@ -272,6 +291,7 @@ class TrayApp:
         self.window.deiconify()
         self.window.lift()
         self.window.focus_force()
+        self._sample_resources()
 
     def _style(self) -> None:
         t = self.t = THEMES[system_theme()]
@@ -344,6 +364,7 @@ class TrayApp:
             except (OSError, AttributeError):
                 pass
         self.window = w
+        w.bind("<Map>", lambda e: self._sample_resources() if e.widget is w else None)  # restored from the taskbar
 
         head = ttk.Frame(w, padding=(18, 14, 18, 8))
         head.pack(fill="x")
@@ -360,7 +381,7 @@ class TrayApp:
 
         self.tabs = ttk.Notebook(w)
         self.tabs.pack(fill="both", expand=True, padx=18, pady=(4, 18))
-        self.tabs.bind("<<NotebookTabChanged>>", lambda _e: self._render_usage())
+        self.tabs.bind("<<NotebookTabChanged>>", lambda _e: (self._render_usage(), self._sample_resources()))
         self._build_overview(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
         self._build_usage(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
         self._build_settings(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
@@ -420,7 +441,11 @@ class TrayApp:
             enabled = svc == "ollama" or svc in self.managed
             up += healthy and enabled
             pid = rows.get(svc, {}).get("pid")
-            if healthy:
+            pending = self.pending.get(svc)
+            if pending:
+                dot.configure(fg=t["warn"])
+                state.configure(text="Starting..." if pending == "start" else "Stopping...")
+            elif healthy:
                 dot.configure(fg=t["good"])
                 state.configure(text=f"Running{f'  (pid {pid})' if pid else ''}")
             elif enabled:
@@ -430,7 +455,7 @@ class TrayApp:
                 dot.configure(fg=t["muted"])
                 state.configure(text="Off in settings")
             toggle.configure(text="Stop" if healthy else "Start",
-                             state="disabled" if self.busy or not (enabled or healthy) else "normal")
+                             state="disabled" if self.busy or pending or not (enabled or healthy) else "normal")
         total = sum(1 for s in self.row_widgets if s == "ollama" or s in self.managed)
         self.pill_dot.configure(fg=t["good"] if up == total else (t["warn"] if up else t["bad"]))
         busy = f"  ·  {self.busy}..." if self.busy else ""
@@ -442,7 +467,6 @@ class TrayApp:
             b.configure(state="disabled" if self.busy else "normal")
         self.startup_var.set(startup.is_installed())
         self._render_loaded()
-        self._render_resources()
 
     def _render_loaded(self) -> None:
         for child in self.loaded_frame.winfo_children():
@@ -486,6 +510,49 @@ class TrayApp:
         self.process_tree.configure(yscrollcommand=scroll.set)
         self.process_tree.grid(row=2, column=0, sticky="nsew")
         scroll.grid(row=2, column=1, sticky="ns")
+        self.resources_note = ttk.Label(card, text="Reading processes...", style="Card.Muted.TLabel")
+        self.resources_note.grid(row=3, column=0, sticky="w", pady=(8, 0))
+
+    def _resources_visible(self) -> bool:
+        w = self.window
+        return bool(w is not None and w.winfo_exists() and w.state() == "normal" and self.tabs.index("current") == RESOURCES_TAB)
+
+    def _sample_resources(self) -> None:
+        """Sample processes while the Resources tab is on screen. A sample takes about 3 s (the GPU counters start
+        PowerShell), so it runs off the Tk thread, one at a time, and never holds up the status poll."""
+        if self.sample_job:
+            self.root.after_cancel(self.sample_job)
+            self.sample_job = None
+        if self.sampling or not self._resources_visible():
+            return
+        self.sampling = True
+
+        def run() -> None:
+            try:
+                rows, error = self.process_sampler.sample(), ""
+            except Exception as e:  # noqa: BLE001 - shown in the tab and retried with backoff
+                rows, error = [], str(e)
+            self.ui_queue.put(lambda: self._resources_sampled(rows, error))
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _resources_sampled(self, rows: list[dict], error: str) -> None:
+        self.sampling = False
+        if self.window is None or not self.window.winfo_exists():
+            return
+        if error:
+            self.sample_failures += 1
+            wait = min(300, RESOURCE_SECONDS * 2 ** self.sample_failures)
+            print(f"[tray] process sample failed: {error}")
+            note = f"Could not read the process list: {error}. Next try in {wait} s."
+        else:
+            self.sample_failures, wait = 0, RESOURCE_SECONDS
+            self.process_rows = rows
+            self._render_resources()
+            gpu = self.process_sampler.gpu_problem
+            note = f"GPU columns are empty: {gpu}." if gpu else f"Updated {datetime.now():%H:%M:%S}, every {RESOURCE_SECONDS} s while this tab is open."
+        self.resources_note.configure(text=note)
+        self.sample_job = self.root.after(wait * 1000, self._sample_resources)
 
     def _render_resources(self) -> None:
         def num(v: float | None) -> str:
@@ -831,12 +898,12 @@ class TrayApp:
         except queue.Empty:
             pass
         if not self.stop_event.is_set():
-            self.root.after(200, self._drain_ui_queue)
+            self.root.after(100, self._drain_ui_queue)
 
     def run(self) -> None:
         threading.Thread(target=self._poll, daemon=True).start()
         self.icon.run_detached()
-        self.root.after(200, self._drain_ui_queue)
+        self.root.after(100, self._drain_ui_queue)
         if "--show" in sys.argv:
             self.ui_queue.put(lambda: self.show_window(0))
         self.root.mainloop()
