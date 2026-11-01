@@ -654,9 +654,10 @@ class TrayApp:
         card = self._card(tab, "Live process resources", row=0, column=0)
         card.columnconfigure(0, weight=1)
         card.rowconfigure(2, weight=1)
-        ttk.Label(card, text="CPU is measured between refreshes; GPU metrics are reported by the driver. "
-                  "Unavailable readings show as -.", style="Card.Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 8))
-        cols = (("name", "Process", 260, "w"), ("pid", "PID", 80, "e"), ("cpu", "CPU %", 90, "e"),
+        ttk.Label(card, text=f"CPU is the share of all {process_metrics.CPU_COUNT} logical processors (100% is the whole machine), "
+                  "measured since the previous sample; GPU metrics are reported by the driver. Unavailable readings show as -.",
+                  style="Card.Muted.TLabel", wraplength=820, justify="left").grid(row=1, column=0, sticky="w", pady=(0, 8))
+        cols = (("name", "Process", 260, "w"), ("pid", "PID", 80, "e"), ("cpu", "CPU % (all cores)", 130, "e"),
                 ("memory", "RAM MB", 100, "e"), ("gpu", "GPU engine %", 120, "e"), ("gpu_memory", "GPU dedicated MB", 150, "e"))
         self.process_tree = ttk.Treeview(card, columns=[c[0] for c in cols], show="headings", height=16)
         for key, title, width, anchor in cols:
@@ -711,13 +712,22 @@ class TrayApp:
         self.sample_job = self.root.after(wait * 1000, self._sample_resources)
 
     def _render_resources(self) -> None:
+        """Update the rows in place, keyed by pid, so the selection and the scroll position survive each sample."""
         def num(v: float | None) -> str:
             return f"{v:.1f}" if v is not None else "-"
 
-        self.process_tree.delete(*self.process_tree.get_children())
-        for r in self.process_rows:
-            self.process_tree.insert("", "end", values=(r["name"], r["pid"], num(r["cpu_percent"]), num(r["memory_mb"]),
-                                                         num(r["gpu_percent"]), num(r["gpu_memory_mb"])))
+        tree = self.process_tree
+        rows = {str(r["pid"]): r for r in self.process_rows}
+        gone = [iid for iid in tree.get_children() if iid not in rows]
+        if gone:
+            tree.delete(*gone)
+        for index, (iid, r) in enumerate(rows.items()):
+            values = (r["name"], r["pid"], num(r["cpu_percent"]), num(r["memory_mb"]), num(r["gpu_percent"]), num(r["gpu_memory_mb"]))
+            if tree.exists(iid):
+                tree.item(iid, values=values)
+                tree.move(iid, "", index)
+            else:
+                tree.insert("", index, iid=iid, values=values)
 
     # ---------- Usage tab ----------
     def _build_usage(self, tab: ttk.Frame) -> None:
