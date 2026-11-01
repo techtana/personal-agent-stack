@@ -144,9 +144,10 @@ because the rules are easier to test in code.
 
 - Default on SEKAIHOME: the chain, in one ComfyUI workflow (`config/comfyui/workflows/video_with_audio.json`), plus
   `uv run scripts/stack.py media mux` for the mix (plan package M5a).
-- A machine setting `media.video_route: chain | joint | auto` (proposed, task T54). `auto` applies the hardware rule
-  above from the detected VRAM.
-- LTX-2.x gets one time-boxed try on SEKAIHOME (spike S0f). It becomes the default only on a 24 GB or larger card.
+- The owner allows open licences only (decision D-M3, 2026-11-01). That rules out both V2A candidates named above
+  (HunyuanVideo-Foley, MMAudio) and LTX-2.x. Spike S0e looks for an open-licence V2A model and reads its licence first.
+- So the chain is the route on every machine for now. The hardware rule above stays as background. The
+  `media.video_route` setting (task T54) waits for an open-licence joint model, and the LTX-2.x trial is dropped.
 - Lip-sync is out of scope for the first version.
 
 ## What we found
@@ -155,9 +156,8 @@ Not measured here yet. All numbers are web reports read on 2026-11-01.
 
 ## Open questions
 
-- Which V2A model sounds right on Wan 2.2 clips, and is its licence acceptable to the owner (D-M2, D-M3)?
+- Is there an open-licence V2A model (code and weights) that sounds right on Wan 2.2 clips (D-M2, D-M3)?
 - How long does the full chain take on SEKAIHOME, end to end?
-- Does an LTX-2.5 Q3 GGUF finish a 5 s clip at all on 12 GB with 32 GB of RAM?
 
 ## Sources and further reading
 

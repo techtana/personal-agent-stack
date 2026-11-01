@@ -87,9 +87,9 @@ flowchart TD
   D -->|"video or music, v1"| D2[Reply: open the ComfyUI workflow]
   D -->|"video or music, v2"| JOB[Stage 5: queue a ComfyUI job]
   D -->|no| E{Image attached?}
-  E -->|yes| E1{Department can read images?}
-  E1 -->|yes| EXP[Stage 2]
-  E1 -->|no| E2[Route to art-critic or another vision department] --> EXP
+  E -->|yes| E1{"Chat pinned to a department<br/>without vision?"}
+  E1 -->|no| EXP[Stage 2, vision departments only]
+  E1 -->|yes| E2["Answer this message from a vision department<br/>(stage 2 picks it); keep the pin"] --> EXP
   E -->|no| F{"Web search toggle on for this chat?"}
   F -->|yes| F1[Open WebUI searches, adds results as context] --> EXP
   F -->|no| EXP
@@ -107,14 +107,12 @@ flowchart TD
   B -->|no| C{Chat already pinned?}
   C -->|yes| USE[Use the pinned department]
   C -->|no| D{Rules match?}
-  D -->|"image attached, no code"| AC[art-critic]
   D -->|"code fence or file name"| AD[app-dev]
   D -->|"review, test, security,<br/>deploy, document"| DEP["code-review, testing, security,<br/>devops or docs"]
   D -->|"architecture words"| AR[architect]
-  D -->|no rule| E["Ask local-small for one id<br/>JSON schema answer, same runner"]
+  D -->|no rule| E["Ask the shared 9B for one id<br/>JSON schema answer; keep_alive -1 alias<br/>image attached: vision departments only"]
   E -->|"valid id"| F[That department]
-  E -->|"invalid or timeout"| G[Default: writer for prose, app-dev for code-like text]
-  AC --> PIN
+  E -->|"invalid or timeout"| G["Default: art-critic if an image is attached,<br/>else writer for prose, app-dev for code-like text"]
   AD --> PIN
   DEP --> PIN
   AR --> PIN
@@ -127,6 +125,13 @@ flowchart TD
 Trade-offs: rules are instant and predictable but miss unusual phrasing; the classifier call catches those but adds
 a short model call (on the same loaded runner, so no reload). A labelled set of at least 20 prompts measures the
 mix (plan task T33).
+
+Two details the code forces (checked 2026-11-01). The classifier call goes through an alias with `keep_alive: -1`:
+`local-small` sends `"30m"`, and Ollama would apply that to the shared runner. And the chosen department is reached
+through its Open WebUI workspace model, because only that model carries the department's system prompt.
+
+An image used to go straight to `art-critic`. Decision D-M8 narrowed that rule: a plot attached to a science question
+belongs with `scientist`, a diagram with `architect`.
 
 ### Stage 3: which tier inside the department?
 
@@ -191,15 +196,13 @@ flowchart TD
   I2 --> NOW["Run now: seconds,<br/>result in the chat"]
   I3 --> NOW
   B -->|music| M1["ACE-Step 1.5"] --> NOW2["Run now or as a job:<br/>tens of seconds on a 3060, to measure"]
-  B -->|video| V1{"media.video_route"}
-  V1 -->|chain| VC["Wan 2.2 5B, then V2A Foley,<br/>Kokoro, ACE-Step, ffmpeg mix"]
-  V1 -->|joint| VJ["LTX-2.5, then optional<br/>ACE-Step music and ffmpeg mix"]
-  V1 -->|auto| VA{"VRAM 24 GB or more,<br/>clip 5 s or less?"}
-  VA -->|yes| VJ
-  VA -->|no| VC
+  B -->|video| VC["Chain: Wan 2.2 5B, then an open-licence<br/>V2A Foley model, Kokoro, ACE-Step, ffmpeg mix"]
   VC --> JOB["Always a job: minutes.<br/>v1 ComfyUI UI, v2 make_video tool with progress"]
-  VJ --> JOB
 ```
+
+The video branch was a choice between the chain and a joint model (LTX-2.5) by VRAM. Decision D-M3 (open licences
+only) removed the joint model, so every machine takes the chain until an open joint model exists;
+[video-with-audio.md](video-with-audio.md) keeps the hardware rule as background.
 
 Trade-off: a request that takes minutes cannot be a normal chat reply, because the browser request would time out
 and the chat would block. Jobs report progress and hand back a link when done.
@@ -210,9 +213,9 @@ Things change mid-conversation. The table says what each stage does.
 
 | What happens | What the stack does | Stage |
 |---|---|---|
-| The owner attaches an image to a pinned writer chat | Checks the writer's `vision` capability; if it has none, answers once from `art-critic` and keeps the pin | 1, 2 |
+| The owner attaches an image to a pinned writer chat | Checks the writer's `vision` capability; if it has none, stage 2 picks a vision department for this one answer and keeps the pin | 1, 2 |
 | The owner types `@scientist` | Switches and re-pins; the next answer shows "Routed to: Scientist" | 2 |
-| The conversation grows past 90% of the context | Gateway moves to a tier with a larger window; if none exists, the reply asks to shorten or split | 3 |
+| The conversation grows past 90% of the context | Gateway moves to a tier with a larger window. On SEKAIHOME every tier is the same 32k model, so nothing changes and the request fails or is cut once it no longer fits; nothing asks the owner to shorten yet | 3 |
 | The model repeats the same tool call, or writes `ESCALATE` | Gateway bumps the tier for the next turn | 3 |
 | The owner asks for a video in the middle of a chat | v1: points to the workflow; v2: queues a job and keeps chatting | 1, 5 |
 | A video job is running and the owner asks a question | The 9B reloads if it was unloaded; ComfyUI may slow down; the tray shows Media mode | 4 |
@@ -233,9 +236,9 @@ sequenceDiagram
   U->>W: voice note + photo
   W->>W: Whisper transcribes on the CPU
   W->>P: text + image
-  P->>P: no pin yet, rule "image, no code" gives art-critic, pin it
+  P->>P: no pin, no rule; classifier picks among vision departments: art-critic; pin it
   P-->>U: status "Routed to: Art critic"
-  P->>L: chat request to art-critic
+  P->>L: art-critic workspace model (its system prompt added)
   L->>L: complexity router picks a tier (all local)
   L->>O: request with the image
   O-->>L: answer
@@ -269,7 +272,8 @@ sequenceDiagram
 - Stage 2 is the "Auto" pipe function (plan package M3, tasks T30-T34).
 - Stage 3 is unchanged (`scripts/stacklib/litellm_build.py`).
 - Stage 4 is the tray's GPU mode (task T41) with ComfyUI `--lowvram` as the safety net.
-- Stage 5's video route is the `media.video_route` setting (task T54).
+- Stage 5's video route is the chain on every machine for now; the `media.video_route` setting (task T54) is
+  deferred until an open-licence joint model exists.
 
 ## What we found
 
@@ -295,3 +299,6 @@ Nothing measured yet. The reload time after a media job (spike S0c) and the rout
 ## Changes
 
 - 2026-11-01: first version.
+- 2026-11-01: checked against the code and the owner's decisions D-M3 and D-M8: image routing among vision
+  departments, classifier on a `keep_alive: -1` alias, workspace model for the system prompt, chain-only video,
+  corrected the 90% context row.

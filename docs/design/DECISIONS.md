@@ -9,23 +9,45 @@ entry stays and gets a "Done <date>" note.
 
 ## 2026-11-01
 
+- **Pending: multimodal decisions D-M1 to D-M8, settled with the owner in Session 1.** Source: the plan, section 12;
+  [plans/2026-11-01-multimodal-stack.md](plans/2026-11-01-multimodal-stack.md).
+  - D-M3: **open licences only** (Apache-2.0, MIT and similar; SDXL's CreativeML OpenRAIL++-M allowed). Out: MMAudio,
+    HunyuanVideo-Foley, LTX-2.x, FLUX.2 klein 9B. Rejected: personal use of non-commercial or custom-licence weights,
+    labelled.
+  - D-M1: video audio comes from the chain (Route A) on every machine. The one-time LTX-2 trial is dropped (D-M3), and
+    the `media.video_route` setting waits for an open-licence joint model.
+  - D-M2: the Foley model is picked by ear in spike S0e, among open-licence candidates only; with none, back to the
+    owner.
+  - D-M4: Open WebUI talks to Kokoro and Whisper directly; speech through LiteLLM stays optional.
+  - D-M5: **web search with DuckDuckGo, no key, as a per-chat toggle, off by default.** This is an exception to private
+    first: the search query leaves the machine; the chat and its model call do not. Rejected: off (the proposed
+    default); a keyed API (Brave, Tavily).
+  - D-M6: agent sessions work only in the drives and folders the owner selects; the machine profile carries them as
+    `agent_access.allowed_roots` (empty means ask), and the build refuses media paths outside them (T08).
+  - D-M7: GPU sharing by a tray Chat/Media switch, with ComfyUI always on `--lowvram --reserve-vram 1.0`.
+  - D-M8: four new departments (`writer`, `scientist`, `architect`, `art-critic`). An attached image goes to the
+    classifier, limited to the vision departments, with `art-critic` as fallback. Rejected: every image to
+    `art-critic`.
 - **Pending: multimodal features follow one plan,** [plans/2026-11-01-multimodal-stack.md](plans/2026-11-01-multimodal-stack.md):
   vision on the existing `qwen3.5:9b`, speech (Whisper in Open WebUI, Kokoro on the CPU), ComfyUI for images, style
   transfer, video and music, and an "Auto" pipe function in Open WebUI that picks a department per chat. Why: the
   owner wants one private stack for writing, coding, science, art critique, images, video, music and speech. Open:
-  D-M1 to D-M8 in the plan. Source: [handoff](../HANDOFF-2026-11-01-multimodal.md).
+  D-M1 to D-M8 in the plan (settled above). Source: [handoff](../HANDOFF-2026-11-01-multimodal.md). Done 2026-11-01
+  (PR #16).
 - **Pending: generated videos carry audio.** Default route: a composed ComfyUI pipeline (Wan 2.2 TI2V-5B, then a
   video-to-audio Foley model, optional Kokoro narration and ACE-Step music, mixed and muxed with ffmpeg). Why: the
   owner requires audio on videos; one-model audio-video (LTX-2.x) does not fit 12 GB without heavy offload. Rejected
-  for now: LTX-2.x as the default (to be tried once in spike S0f). Source: the plan, section 6.
+  for now: LTX-2.x as the default (to be tried once in spike S0f). Source: the plan, section 6. Done 2026-11-01
+  (PR #16); the S0f trial superseded by D-M3 above.
 - **Pending: the video route follows the GPU.** Chain under 24 GB of VRAM; joint model (LTX-2.5) for clips of about
   5 s with speech at 24 GB; joint by default from 32 GB, with music mixed in by ffmpeg; chain on unified-memory
   machines. Carried as `media.video_route: chain | joint | auto`. Why: LTX-2.5 int8 needs 22.7 GiB for a 5 s clip,
   and unified memory is bandwidth-limited for diffusion. Source: the plan, section 6;
-  [video-with-audio.md](../knowledge/video-with-audio.md).
+  [video-with-audio.md](../knowledge/video-with-audio.md). Superseded by 2026-11-01 D-M3 (open licences only): the
+  joint model has a custom licence, so every machine uses the chain.
 - **Pending: experts are departments on one shared model, not separate models.** Why: a cold load of the 9B took
   130-161 s here, so a model per subject would mean minutes of waiting at each switch. Rejected: LiteLLM's semantic
-  router (deprecated); a model per subject. Source: the plan, section 8.
+  router (deprecated); a model per subject. Source: the plan, section 8. Done 2026-11-01 (PR #16).
 
 - **UX reviews use a researched rule catalog packaged as a skill (`/ux-rules`).** 122 rules in 14 categories plus 15
   contested or debunked ones; each rule carries an evidence grade, limits, how to detect it, how to build it and how
