@@ -186,6 +186,10 @@ The plan uses 1 as a tray switch ("GPU mode") with 2 as a safety net. A 32 GB ca
 - Open WebUI's image button calls ComfyUI with a saved workflow and node map. The stock workflow fails without them
   ([atlas wiki note](https://github.com/thekaveh/atlas/wiki/Service-Open-Webui)).
 - Saved workflows live in `config/comfyui/workflows/`; licences and versions in `config/comfyui/MODELS.md`.
+- Open licences only (decision D-M3, 2026-11-01): Apache-2.0, MIT and similar, plus SDXL's OpenRAIL++-M. The
+  restricted rows in the model-family table (LTX-2, HunyuanVideo-Foley, MMAudio, FLUX.2 klein 9B) are not used.
+- Style transfer uses Open WebUI 0.12.3's native image edit with its own ComfyUI workflow (`ENABLE_IMAGE_EDIT`,
+  `IMAGES_EDIT_COMFYUI_WORKFLOW`).
 - The tray gains a GPU mode switch; ComfyUI starts with `--lowvram --reserve-vram 1.0`.
 - Model files, caches and outputs: only on the drives and folders the owner selects (`agent_access.allowed_roots`).
   Every tool's cache path is set explicitly, so nothing lands in a default folder outside the selection.

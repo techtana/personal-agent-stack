@@ -1,7 +1,8 @@
 # HANDOFF - 2026-11-01 - multimodal stack, for the next Claude Code session
 
 **Status:** open. Written in a cloud session that could read this repository and the web but not SEKAIHOME. Nothing in
-the plan has been run on the machine.
+the plan has been run on the machine. Session 1 (deep planning) is done as of 2026-11-01: decisions D-M1 to D-M8 are
+in plan section 12 and the code review in plan section 16. Start at Session 2.
 
 You are continuing the design and build of the multimodal features of this stack: vision, speech, image generation
 and style transfer, **video with audio**, music, web search, and a router that picks an expert per message. The plan
@@ -67,8 +68,10 @@ Read on the web on 2026-11-01 and **not measured here** (plan sections 5 and 6 l
   under 4 GB; Kokoro-FastAPI starts natively on Windows from a uv script.
 - LTX-2.x makes picture and sound in one model but does not fit 12 GB without heavy offload.
 
-Possibly stale: `memory/state.md` says the 2026-11-01 tray UX branch is not merged, but `main` contains PR #15 from
-that branch. Check and correct the state file.
+Corrected 2026-11-01: `memory/state.md` now says the tray UX branch merged in PR #15.
+
+Owner decision D-M3 (open licences only) rules out MMAudio, HunyuanVideo-Foley and LTX-2.x above; spike S0e looks
+for an open-licence Foley model instead.
 
 ## 4. What to do, in order
 
@@ -87,19 +90,19 @@ that branch. Check and correct the state file.
    the "Auto" pipe and the GPU mode.
 6. Open a pull request with the planning changes. Stop for review.
 
-Tasks marked **any** in plan section 14 (T08, T11, T30, T44, T50, T51, T54) need no GPU. They can be built in a
+Tasks marked **any** in plan section 14 (T08, T11, T12 prompts, T30, T44, T50, T51, T71 code) need no GPU. They can be built in a
 separate session while the spike waits for the owner.
 
 ### Session 2: spike M-S0 (owner present; changes the machine)
 
-Run tasks T01-T07 (checks S0a-S0f) from the plan, inside the selected drives and folders only. Build T08
+Run tasks T01-T07 (checks S0a-S0e; T06 was removed) from the plan, inside the selected drives and folders only. Build T08
 (the path guard) before or alongside them, so the stack's own tools enforce the selection. Ask before each install. Record every time, VRAM and RAM figure in `memory/state.md`, and
 every surprise in `memory/lessons.md`. Update the plan's model choices from the results. One pull request.
 
 ### Sessions 3 onward: build, one package per pull request
 
 Order: M1 (vision, departments) -> M2 (speech) -> M3 (Auto router) -> M4 (ComfyUI, images, GPU mode) -> M5a (video
-with audio, music, `media mux`) -> M5b (`make_video` tool) -> M6 (web search, only if the owner turned it on) -> M7
+with audio, music, `media mux`) -> M5b (`make_video` tool) -> M6 (web search, DuckDuckGo per chat, D-M5) -> M7
 (docs closure). For each package:
 
 - write or extend tests first where the code is testable without a GPU (build output, service commands, the ffmpeg

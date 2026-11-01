@@ -55,8 +55,8 @@ tracing, Open WebUI, Ollama runtime; Apply patches machines/<HOST>.yaml in place
 Cloud tiers stay read-only there on purpose (open item 4). Verified by screenshots and a headless apply; not yet run as the
 live tray, which still runs the old code until it is restarted from the main checkout.
 
-2026-11-01, tray UX fixes (branch claude/wonderful-hofstadter-9f02ef; not merged, the live tray still runs the old
-code): a Start/Stop click changes its row on the Tk thread at once (measured 6-9 ms); each service has its own pending
+2026-11-01, tray UX fixes (branch claude/wonderful-hofstadter-9f02ef, merged to main in PR #15; the live tray runs
+the new code only after a restart from the main checkout): a Start/Stop click changes its row on the Tk thread at once (measured 6-9 ms); each service has its own pending
 state ("Starting... N s" in amber, Stop cancels a start) and a start waits only for its own service, so one service that
 never answers no longer locks every control for 3 minutes; a service whose process is alive but not answering shows
 as Starting, not Stopped; failures show under the row with Show log (Smart App Control or another refused start, missing
@@ -143,5 +143,8 @@ once across a session restart.
    `uv run --with pytest pytest` until pytest is a dev dependency. Restart the tray from the main checkout after merging.
 14. Multimodal stack (2026-11-01): plan in docs/design/plans/2026-11-01-multimodal-stack.md, handoff in
    docs/HANDOFF-2026-11-01-multimodal.md. Nothing installed or measured yet; spike M-S0 runs on this machine with the
-   owner present. Agent sessions work only on the drives and folders the owner selects at the start of each session;
+   owner present. Session 1 (2026-11-01, planning only, worktree and scratchpad only) settled D-M1 to D-M8: open
+   licences only, chain video, an open Foley model to find in S0e, DuckDuckGo per-chat search, four new departments.
+   `stack.py status` that day: only Ollama up; LiteLLM, Open WebUI, Phoenix and the orchestrator down. Not run by the
+   session (outside its folders): `stack.py doctor`, `ollama show qwen3.5:9b`; both are in T01 for the owner. Agent sessions work only on the drives and folders the owner selects at the start of each session;
    everything else is off-limits (plan C5, D-M6, task T08).

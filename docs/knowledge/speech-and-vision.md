@@ -81,6 +81,12 @@ long, and say so in the user guide. Photos can carry faces and location metadata
   YAMLs gain `capabilities: {vision: true}`. Smoke test: send a small PNG and check the answer.
 - M2: Whisper settings in the Open WebUI env; Kokoro-FastAPI as a native service `kokoro` on port 8880, off by
   default, with a tray entry. Smoke test: speak a sentence with Kokoro, transcribe it with Whisper, compare the words.
+  Open WebUI talks to both directly, not through the gateway (decision D-M4, 2026-11-01).
+- Setting names in Open WebUI 0.12.3 (read from its source at that tag): `AUDIO_STT_ENGINE` (empty for the built-in
+  Whisper), `WHISPER_MODEL` (default `base`), `WHISPER_COMPUTE_TYPE` (default `int8`), `AUDIO_TTS_ENGINE`,
+  `AUDIO_TTS_OPENAI_API_BASE_URL`, `AUDIO_TTS_MODEL`, `AUDIO_TTS_VOICE` (default `alloy`, an OpenAI voice, so set a
+  Kokoro one). Whisper models cache in `DATA_DIR/cache/whisper/models`. Settings saved in the admin panel override
+  the env (`ENABLE_PERSISTENT_CONFIG`, default true).
 
 ## What we found
 
@@ -89,7 +95,8 @@ Not measured here yet. Smart App Control may block Kokoro's compiled modules; sp
 ## Open questions
 
 - Does `ollama show qwen3.5:9b` list `vision` for the tag pulled on SEKAIHOME?
-- What are the exact audio setting names in the installed Open WebUI 0.12.3?
+- Which `AUDIO_STT_ENGINE` value list and which device does the 0.12.3 STT code use? (Not in `config.py`; the old
+  `routers/audio.py` moved.)
 - Where does Open WebUI store recorded audio, and can retention be limited?
 
 ## Sources and further reading
