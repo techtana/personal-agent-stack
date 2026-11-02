@@ -13,6 +13,10 @@ dependencies = [
 ]
 
 [tool.uv]
+# Prefer an installed python.org Python (signed by the Python Software Foundation) over uv's own builds, which are
+# unsigned: Smart App Control refused the unsigned .venv\Scripts\pythonw.exe that starts the installer and the tray
+# (CodeIntegrity 3033, 2026-11-01). Without a system Python uv still downloads its own.
+python-preference = "system"
 # The gateway, tracing UI and chat UI are installed as isolated uv tools by
 # `uv run scripts/stack.py setup`, not as project dependencies, because they pin
 # conflicting transitive versions:
