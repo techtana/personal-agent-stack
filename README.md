@@ -31,8 +31,8 @@ Design, decisions and measurements: [docs/ORCHESTRATOR-DESIGN.md](docs/ORCHESTRA
 Private-first multi-user plans (cloud-led on confidential VMs, local-led), privacy gate and installation:
 [docs/plans/](docs/plans/README.md).
 Stable rules for agents: [AGENTS.md](AGENTS.md). State and lessons: [memory/](memory/).
-Manuals: [installation](docs/manuals/installation.md) · [user guide](docs/manuals/user-guide.md) ·
-[troubleshooting](docs/manuals/troubleshooting.md).
+Manuals: [installation](docs/manuals/installation.md) · [choosing drives](docs/manuals/choosing-drives.md) ·
+[user guide](docs/manuals/user-guide.md) · [troubleshooting](docs/manuals/troubleshooting.md).
 
 **When to use it:** you write code with AI agents on your own GPU workstation, and you want routine work to stay
 local, private and free. External models are off; they will only ever be an explicit, gated choice (docs/plans/).

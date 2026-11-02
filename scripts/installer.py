@@ -21,8 +21,9 @@ POLL_MS = 500
 ERROR_FG = "#a4262c"    # 6.5:1 on the default #f0f0f0 window background
 MUTED_FG = "#4d4d4d"    # 7.6:1
 OK_FG = "#0e6b0e"       # 6.3:1
+WARN_FG = "#7a4f00"     # 6.2:1
 MARK = {"pending": ("○", MUTED_FG), "running": ("▶", "#005a9e"), "done": ("✓", OK_FG),
-        "skipped": ("–", MUTED_FG), "failed": ("✗", ERROR_FG)}
+        "skipped": ("–", MUTED_FG), "warning": ("!", WARN_FG), "failed": ("✗", ERROR_FG)}
 
 
 class NoDisplay(Exception):
@@ -74,6 +75,9 @@ class Installer:
         self.move = tk.BooleanVar(value=bool(d["move_from"]))
         self.get_ollama = tk.BooleanVar(value=d["ollama_missing"])
         self.start = tk.BooleanVar(value=True)
+        self.disks = tk.BooleanVar(value=True)
+        self.hf = tk.BooleanVar(value=True)
+        self.openclaw = tk.BooleanVar(value=not d["openclaw_installed"])
 
         self.store_msg = self._folder(f, "Models (Ollama)", "Downloaded models live here. Needs the most space; "
                                       "a fast internal drive loads models quicker than a USB one.", self.store, d["model_note"])
@@ -91,6 +95,13 @@ class Installer:
         if d["ollama_missing"]:
             ttk.Checkbutton(opts, variable=self.get_ollama, text="Install Ollama with winget (it is not installed; "
                             "accepts the Ollama package agreement)").grid(sticky="w")
+        ttk.Checkbutton(opts, variable=self.disks, text="Check how fast each drive is and warn about slow ones "
+                        "(writes a 256 MB test file per drive)").grid(sticky="w")
+        self.hf_box = ttk.Checkbutton(opts, variable=self.hf)
+        self.hf_box.grid(sticky="w")
+        if not d["openclaw_installed"]:
+            ttk.Checkbutton(opts, variable=self.openclaw, text="Install OpenClaw with npm (upgrades Node.js with winget "
+                            "first if it is too old; Windows asks for admin)").grid(sticky="w")
         ttk.Checkbutton(opts, variable=self.start, text="Start the stack when setup finishes (tray app)").grid(sticky="w")
 
         self.error = ttk.Label(f, text="", foreground=ERROR_FG, wraplength=640)
@@ -146,6 +157,8 @@ class Installer:
         return store_gb, tools_gb
 
     def validate(self) -> bool:
+        self.hf_box.configure(text=f"Put the Hugging Face cache in {install.default_hf_home(self.store.get().strip())} "
+                              "(HF_HOME) and install the hf command")
         store_gb, tools_gb = self.needs()
         ok = True
         for var, label, need in ((self.store, self.store_msg, store_gb), (self.tools, self.tools_msg, tools_gb)):
@@ -171,6 +184,9 @@ class Installer:
                 install_ollama=self.d["ollama_missing"] and self.get_ollama.get(),
                 pull=self.pull.get(),
                 start_stack=self.start.get(),
+                check_disks=self.disks.get(),
+                setup_huggingface=self.hf.get(),
+                install_openclaw=not self.d["openclaw_installed"] and self.openclaw.get(),
             )
             install.spawn_worker(plan)
         except (OSError, ValueError, RuntimeError) as e:
@@ -235,9 +251,9 @@ class Installer:
                 continue
             sym, fg = MARK.get(s["status"], MARK["pending"])
             mark.configure(text=sym, foreground=fg)
-            word = {"skipped": "Skipped: ", "failed": "Failed: "}.get(s["status"], "")
+            word = {"skipped": "Skipped: ", "warning": "Warning: ", "failed": "Failed: "}.get(s["status"], "")
             detail.configure(text=word + s["detail"] if s["detail"] else word.rstrip(": "),
-                             foreground=ERROR_FG if s["status"] == "failed" else MUTED_FG)
+                             foreground={"failed": ERROR_FG, "warning": WARN_FG}.get(s["status"], MUTED_FG))
             if s["status"] == "running":
                 running = s
         if running and running.get("fraction") is not None:
@@ -252,13 +268,14 @@ class Installer:
         else:
             self.bar.stop()
             self.bar.configure(mode="determinate")
-            self.bar["value"] = 1.0 if status == "done" else self.bar["value"]
+            self.bar["value"] = 1.0 if status in ("done", "warnings") else self.bar["value"]
         self._tail_log()
         if status in ("running",) or not state:
             self.root.after(POLL_MS, self.poll)
         else:
             self.subheading.configure(text={
                 "done": "Next: open http://127.0.0.1:3000 for chat, or run `uv run scripts/stack.py smoke` to check the gateway.",
+                "warnings": "Everything ran; the steps marked ! say what to look at. Then open http://127.0.0.1:3000 for chat.",
                 "failed": "The failed steps say what went wrong; the log has the details. Fix it, then run setup again.",
                 "interrupted": "Run setup again to finish; steps that already ran are quick the second time.",
             }.get(status, ""))

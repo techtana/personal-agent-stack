@@ -34,6 +34,12 @@ Files are kept current: when understanding improves, the explanation is rewritte
 6. [agent-file-isolation.md](agent-file-isolation.md): accounts, NTFS permissions and why an agent's own settings
    cannot keep it out of personal files. For the isolation plan.
 
+**Drives**
+
+- [storage-and-drives.md](storage-and-drives.md): sequential and random reads, latency, USB link speeds, why a
+  USB-C plug's orientation can matter, and why models can live on a USB drive but tools cannot. For anyone choosing
+  folders in the installer or reading the **Check drive speed** step.
+
 **Agents and how the stack improves**
 
 7. [coding-agents-and-self-improvement.md](coding-agents-and-self-improvement.md): agent loops, subagents,
