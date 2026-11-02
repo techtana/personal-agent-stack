@@ -292,6 +292,10 @@ def main() -> int:
         try:
             import ctypes
 
+            # install.cmd starts python.exe (Smart App Control blocks the venv's pythonw.exe); hide its console window.
+            # Only when install.cmd asked, so a terminal running `stack.py install` stays visible.
+            if os.environ.get("AGENT_STACK_HIDE_CONSOLE") == "1":
+                ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
             ctypes.windll.shcore.SetProcessDpiAwareness(1)   # sharp text on scaled displays; must precede Tk()
         except (AttributeError, OSError):
             pass

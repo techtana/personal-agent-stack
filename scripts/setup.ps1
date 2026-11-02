@@ -14,6 +14,8 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 }
 Push-Location $repo
 try {
+    & (Join-Path $PSScriptRoot 'signed-venv.ps1') -Repo $repo
+    if ($LASTEXITCODE) { exit $LASTEXITCODE }
     # setup's own flags keep the unattended path that earlier docs and scripts call
     $unattended = @($Args | Where-Object { $_ -in @('setup', '--no-pull', '--no-restart', '--refresh') }).Count -gt 0
     if ($unattended) { uv run scripts/stack.py setup @($Args | Where-Object { $_ -ne 'setup' }) }
