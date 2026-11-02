@@ -64,6 +64,23 @@ class Advise(unittest.TestCase):
         self.assertEqual(disks.advise(speeds, "D:\\ollama\\models", "", 7.9), ([], ""))
 
 
+class WinsatHowto(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "winsat is Windows only")
+    def test_names_each_test_file_drive_and_the_thresholds(self):
+        speeds = [drive("C:\\", 2800), drive("D:\\", 41)]
+        speeds[0].method = "winsat"
+        lines = disks.winsat_howto(speeds)
+        self.assertIn("winsat disk -drive d", lines[0])
+        self.assertNotIn("-drive c", lines[0])
+        self.assertIn("administrator", lines[0])
+        self.assertIn("200 MB/s or more", lines[1])
+
+    def test_nothing_when_winsat_measured_everything(self):
+        s = drive("C:\\", 2800)
+        s.method = "winsat"
+        self.assertEqual(disks.winsat_howto([s]), [])
+
+
 class FileTest(unittest.TestCase):
     def test_measures_and_cleans_up(self):
         root = Path(tempfile.gettempdir()).anchor

@@ -420,9 +420,12 @@ def step_disks(plan: Plan, profile: dict, report) -> str:
         warn(w)
     store = next((s for s in speeds if s.root.lower() == disks.drive_of(plan.model_store).lower()), None)
     head = f"models drive {store.summary()}." if store else "; ".join(s.summary() for s in speeds) + "."
+    howto = disks.winsat_howto(speeds)
+    for line in howto:
+        info(f"      {line}")
     if notes:
-        raise Warn(" ".join([head, *notes]))
-    return head
+        raise Warn(" ".join([head, *notes, *howto]))
+    return " ".join([head, *howto])
 
 
 def step_huggingface(plan: Plan, profile: dict, report) -> str:

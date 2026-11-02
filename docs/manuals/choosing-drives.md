@@ -49,6 +49,40 @@ again, it runs better from the internal drive, but it needs 22 GB there.
 
 ## Check a drive's speed
 
+### With Windows' own tool (as administrator)
+
+Windows' own disk test is the most reliable figure. It needs an administrator terminal:
+
+1. Right-click **Start** and choose **Terminal (Admin)**. Click **Yes** when Windows asks.
+2. Run this for each drive you want to check, with that drive's letter:
+
+   ```powershell
+   winsat disk -drive c
+   ```
+
+   ```powershell
+   winsat disk -drive d
+   ```
+
+3. Find the line that starts `Disk  Sequential 64.0 Read`. The number before `MB/s` is the drive's read speed. For
+   example:
+
+   ```
+   > Disk  Sequential 64.0 Read                   376.26 MB/s          8.0
+   ```
+
+4. Decide with the table in [What the numbers mean](#what-the-numbers-mean) and [What goes where](#what-goes-where):
+   - **Under 100 MB/s:** fix the connection first ([below](#fix-a-usb-drive-that-reads-at-about-40-mbs)), then test
+     again. Don't put models or games on it yet.
+   - **100 to 200 MB/s:** use it for storage, downloads and backups. Put models on a faster drive if you have one.
+   - **200 MB/s or more:** fine for Ollama models, the Hugging Face cache and games.
+   - **Whatever the speed,** keep the Python tools and OpenClaw on the internal drive (usually C:), because they start
+     at sign-in.
+5. If the models folder should move, run the installer again (`install.cmd`) and choose a folder on the drive you
+   picked.
+
+Without administrator rights, `winsat` prints nothing at all and looks as if it worked.
+
 ### In the installer
 
 The installer has a **Check how fast each drive is and warn about slow ones** option, on by default. The setup step
@@ -57,6 +91,9 @@ The installer has a **Check how fast each drive is and warn about slow ones** op
 ```
 models drive D: read 389 MB/s, write 325 MB/s (USB, 869 GB free, test file).
 ```
+
+The installer is not run as administrator, so it measures with a test file (below). The step then also prints the
+exact `winsat` commands for your drives and the decision rules above, so you can confirm the figures yourself.
 
 If a drive is slow, the step gets an amber **!** instead of a tick, the heading reads **Setup finished with
 warnings.**, and the step says what to do. Setup still runs every other step. A warning never moves your files: to
@@ -74,7 +111,11 @@ To test only some drives:
 uv run scripts/stack.py disks C: D:
 ```
 
-It prints one line per drive and a `WARN` line for each problem.
+It prints one line per drive, a `WARN` line for each problem, and, when it used the test file, the `winsat` commands
+to run as administrator. Run it from an administrator terminal and it uses `winsat` itself.
+
+This command is part of the installer changes on branch `claude/nervous-euclid-8357d0`. Until that branch is merged,
+the main checkout answers `invalid choice: 'disks'`.
 
 ### How it measures
 
@@ -87,14 +128,6 @@ It prints one line per drive and a `WARN` line for each problem.
 
 Each drive needs about 0.5 GB free for the test. At USB 2.0 speed a drive takes about 15 seconds; a fast drive takes
 a second or two.
-
-You can also run `winsat` yourself in an administrator terminal:
-
-```powershell
-winsat disk -drive d
-```
-
-Look at `Disk  Sequential 64.0 Read`.
 
 ### What the numbers mean
 

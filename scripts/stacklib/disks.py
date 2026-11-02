@@ -255,3 +255,19 @@ def advise(speeds: list[DriveSpeed], model_store: str, tool_dir: str, models_gb:
         warnings.append(f"The Python tools are on {tools.letter}, a USB drive. They start at login, so when the drive is "
                         "unplugged the stack does not start; keep them on the internal drive.")
     return warnings, suggestion
+
+
+def winsat_howto(speeds: list[DriveSpeed]) -> list[str]:
+    """How to get Windows' own figures for drives measured with the test file, and how to read them."""
+    letters = [s.letter for s in speeds if s.method == "test file"]
+    if not letters or not IS_WINDOWS:
+        return []
+    cmds = "; ".join(f"winsat disk -drive {x[0].lower()}" for x in letters)
+    return [
+        f"These figures come from a test file. For Windows' own figures, open Terminal as administrator "
+        f"(right-click Start > Terminal (Admin)) and run: {cmds}",
+        "Then read the 'Disk  Sequential 64.0 Read' line: under 100 MB/s, fix the drive's connection first; "
+        "100-200 MB/s, use the drive for storage and backups only; 200 MB/s or more, fine for models, the Hugging Face "
+        "cache and games. Keep the Python tools and OpenClaw on the internal drive either way. "
+        "Details: docs/manuals/choosing-drives.md",
+    ]

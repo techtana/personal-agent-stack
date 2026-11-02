@@ -189,6 +189,8 @@ def cmd_disks(a):
         warn(w)
     if not warnings and not suggestion:
         info(f"no slow drives; models in {store}")
+    for line in disks.winsat_howto(speeds):
+        info(line)
 
 
 def cmd_pull(a):
