@@ -57,12 +57,20 @@ def set_user_env(env: dict[str, str]) -> list[str]:
     return changed
 
 
-def restart(base: str) -> None:
-    """Restart the native Ollama app so new environment variables apply."""
+def stop() -> None:
+    """Stop the native Ollama app and server (Windows); systemd's unit on Linux."""
     if IS_WINDOWS:
         subprocess.run(["taskkill", "/IM", "ollama app.exe", "/F"], capture_output=True)
         subprocess.run(["taskkill", "/IM", "ollama.exe", "/F"], capture_output=True)
         time.sleep(1.5)
+    else:
+        subprocess.run(["systemctl", "stop", "ollama"], capture_output=True)
+
+
+def restart(base: str) -> None:
+    """Restart the native Ollama app so new environment variables apply."""
+    if IS_WINDOWS:
+        stop()
         app = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Ollama" / "ollama app.exe"
         if app.exists():
             # Launch through Explorer so the tray app becomes a normal desktop process. Started directly, it would
@@ -89,6 +97,38 @@ def pull(models: list[str]) -> None:
             continue
         info(f"ollama pull {m}")
         subprocess.run([exe, "pull", m], check=False)
+
+
+def pull_stream(base: str, model: str, on_progress=None, timeout: float = 300) -> None:
+    """Pull one model through the HTTP API, calling on_progress(fraction | None, completed_bytes, total_bytes) as layers
+    arrive. Raises RuntimeError with Ollama's message on failure (the CLI only prints it and exits 1)."""
+    req = urllib.request.Request(base + "/api/pull", data=json.dumps({"model": model, "stream": True}).encode(),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    layers: dict[str, tuple[int, int]] = {}
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            for raw in r:
+                if not raw.strip():
+                    continue
+                ev = json.loads(raw)
+                if ev.get("error"):
+                    raise RuntimeError(ev["error"])
+                if ev.get("digest") and ev.get("total"):
+                    layers[ev["digest"]] = (ev.get("completed", 0), ev["total"])
+                if on_progress:
+                    done = sum(c for c, _ in layers.values())
+                    total = sum(t for _, t in layers.values())
+                    on_progress(done / total if total else None, done, total)
+                if ev.get("status") == "success":
+                    return
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "replace")
+        try:
+            body = json.loads(body).get("error", body)
+        except ValueError:
+            pass
+        raise RuntimeError(f"HTTP {e.code}: {body}") from None
+    raise RuntimeError("Ollama ended the download without reporting success")
 
 
 def ps(base: str) -> list[dict]:
