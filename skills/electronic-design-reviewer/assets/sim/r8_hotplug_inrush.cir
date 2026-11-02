@@ -1,0 +1,17 @@
+* R8 Hot-plug inrush and overshoot into low-ESR input capacitors (expert EXP-PWR-02)
+* A cable has inductance (~1 uH per metre of pair). Plugging it live into ceramic
+* capacitors forms a lightly damped LC: the input can ring to nearly twice the supply.
+* Measure: max V(vin) and max I(VSENSE). Then add damping (bulk electrolytic with
+* ESR, series R, or a TVS) and compare.
+* Expected (ee_calc.py hotplug --v 12 --l 1u --r 0.05 --c 10u --esr 5m):
+* ~21 V peak (76% overshoot) and ~33 A peak current.
+.param VIN=12 LCAB=1u RCAB=50m C=10u ESR=5m
+VS src 0 PULSE(0 {VIN} 10u 100n 100n 1 2)
+* 0 V source used as an ammeter
+VSENSE src s1 DC 0
+LCAB s1 n1 {LCAB}
+RCAB n1 vin {RCAB}
+CIN vin nesr {C}
+RESR nesr 0 {ESR}
+* Suggested analysis: .tran 10n 100u
+.end

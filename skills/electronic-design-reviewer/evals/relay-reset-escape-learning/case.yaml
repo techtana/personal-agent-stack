@@ -1,0 +1,12 @@
+schema_version: "1.1"
+name: relay-reset-escape-learning
+context:
+  scaffold_script: place-files.sh
+expected_outcome: |
+  An escape analysis. Most likely cause: the relay contacts switch the 12 V pump motor (an
+  inductive load) with no suppression, so opening the contacts arcs and kicks; the pump current
+  also returns through the board GND shared with the MCU. Explains why turn-OFF (not ON) points to
+  this. Gives discriminating tests, a concrete fix (diode across the DC pump and/or snubber/TVS
+  across the contacts, separate pump return, bulk capacitance, brown-out), classifies the review
+  gap, writes a learned rule with a regression check without editing the skill folder, and returns
+  an updated ledger with the escape recorded. Asks at most one question.

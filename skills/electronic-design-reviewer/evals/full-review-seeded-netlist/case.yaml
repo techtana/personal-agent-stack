@@ -1,0 +1,13 @@
+schema_version: "1.1"
+name: full-review-seeded-netlist
+context:
+  scaffold_script: place-files.sh
+expected_outcome: |
+  A full schematic-stage review report. Verdict NOT READY because of two blockers: C4 electrolytic
+  is reversed (+ on GND, - on VBUS) and relay K1 has no flyback diode. Major findings include the
+  VBAT / V_BAT split, separate AGND not connected to GND, the one-pin SDA net, floating EN (U1) and
+  VIN- (U4) inputs, no decoupling on +3V3_SENS, R3 = 10 ohm (missing k), R9 'DNP' without the DNP
+  attribute, the tantalum C5 margin and DC-bias loss on C1/C2. The report has a weighted guide
+  compliance score with coverage, Finding Cards that explain the physics to a beginner, a
+  verification log with honest evidence tags (no simulator was available), what-you-did-well and
+  what-you-learned sections.

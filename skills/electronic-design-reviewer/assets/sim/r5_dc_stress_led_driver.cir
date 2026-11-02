@@ -1,0 +1,17 @@
+* R5 DC operating point and part stress - guide SCH-18, CMP-17, CMP-24
+* Example: GPIO drives an NPN that sinks an LED current from 5 V.
+* Measure: DC operating point, then power in RLED, Q1 and D1 (measure_power),
+* the LED current, and Q1 saturation. Compare with ratings (0402 resistor ~63 mW,
+* 0603 ~100 mW; small LEDs ~20 mA continuous).
+* Expected: ~43 mA and ~0.12 W in RLED - both over typical ratings. Fix: RLED ~150 ohm.
+VCC vcc 0 DC 5
+VGPIO gpio 0 DC 3.3
+RB gpio b 1k
+Q1 c b 0 QNPN
+RLED vcc a 68
+D1 a c DLED
+.model QNPN NPN(Bf=200 Is=1e-14 Vaf=100)
+* Rough red LED: ~1.9 V at 20 mA
+.model DLED D(Is=3e-21 N=1.7 Rs=2)
+* Suggested analysis: .op
+.end

@@ -1,0 +1,14 @@
+* R4 LC low-pass with a real inductor (DCR and core loss) - guide CMP-22, CMP-23, CMP-01
+* Change RLOAD, RDC and RP to see how losses and loading change the peak at f0.
+* RP models core loss at f0: RP = Q * 2*pi*f0*L (Q from the inductor datasheet).
+* Expected: f0 = 1/(2*pi*sqrt(L*C)) = 50.3 kHz for 10 uH and 1 uF.
+* Add the inductor SRF (parallel CPAR) if the signal goes near it (ee_calc.py srf).
+.param L=10u C=1u RDC=50m RP=95 RLOAD=50
+VIN in 0 AC 1
+L1 in n1 {L}
+RP1 in n1 {RP}
+RDC1 n1 out {RDC}
+C1 out 0 {C}
+RLD out 0 {RLOAD}
+* Suggested analysis: .ac dec 100 1k 10meg ; measure gain peak and -3 dB point
+.end

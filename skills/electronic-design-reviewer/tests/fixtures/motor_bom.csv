@@ -1,0 +1,6 @@
+Designator,Value
+M1,Motor_DC 12V
+Q1,AO3400
+R1,100
+U1,MCU
+C1,100n 25V X7R

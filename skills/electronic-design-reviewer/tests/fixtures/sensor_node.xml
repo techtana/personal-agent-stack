@@ -1,0 +1,343 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <components>
+    <comp ref="C1">
+      <value>1u/10V X5R</value>
+      <footprint>Capacitor_SMD:C_0603_1608Metric</footprint>
+      <fields>
+        <field name="MPN">CL10A105KP8NNNC</field>
+      </fields>
+      <libsource lib="Device" part="C" description="Unpolarized capacitor"/>
+    </comp>
+    <comp ref="C2">
+      <value>10u 6V3 X5R</value>
+      <footprint>Capacitor_SMD:C_0603_1608Metric</footprint>
+      <fields>
+        <field name="MPN">CL10A106MQ8NNNC</field>
+      </fields>
+      <libsource lib="Device" part="C" description="Unpolarized capacitor"/>
+    </comp>
+    <comp ref="C3">
+      <value>100n</value>
+      <footprint>Capacitor_SMD:C_0402_1005Metric</footprint>
+      <fields>
+        <field name="MPN">GRM155R71C104KA88D</field>
+        <field name="Voltage">16V</field>
+        <field name="Dielectric">X7R</field>
+      </fields>
+      <libsource lib="Device" part="C" description="Unpolarized capacitor"/>
+    </comp>
+    <comp ref="C4">
+      <value>100u/6.3V</value>
+      <footprint>Capacitor_SMD:CP_Elec_6.3x5.4</footprint>
+      <fields>
+        <field name="MPN">EEE-FK0J101UR</field>
+      </fields>
+      <libsource lib="Device" part="C_Polarized" description="Polarized capacitor"/>
+    </comp>
+    <comp ref="C5">
+      <value>22u 6V3</value>
+      <footprint>Capacitor_Tantalum_SMD:CP_EIA-3216-18_Kemet-A</footprint>
+      <fields>
+        <field name="MPN">T491A226K006AT</field>
+      </fields>
+      <libsource lib="Device" part="C_Polarized" description="Tantalum capacitor"/>
+    </comp>
+    <comp ref="C6">
+      <value>100n X7R 50V</value>
+      <footprint>Capacitor_SMD:C_0402_1005Metric</footprint>
+      <libsource lib="Device" part="C" description="Unpolarized capacitor"/>
+    </comp>
+    <comp ref="C7">
+      <value>10n</value>
+      <footprint>Capacitor_SMD:C_0402_1005Metric</footprint>
+      <libsource lib="Device" part="C" description="Unpolarized capacitor"/>
+      <property name="dnp"/>
+    </comp>
+    <comp ref="C8">
+      <value>100</value>
+      <footprint>Capacitor_SMD:C_0402_1005Metric</footprint>
+      <libsource lib="Device" part="C" description="Unpolarized capacitor"/>
+    </comp>
+    <comp ref="C9">
+      <value>100n X7R 16V</value>
+      <footprint>Capacitor_SMD:C_0402_1005Metric</footprint>
+      <libsource lib="Device" part="C" description="Unpolarized capacitor"/>
+    </comp>
+    <comp ref="D2">
+      <value>LED_Green</value>
+      <footprint>LED_SMD:LED_0603_1608Metric</footprint>
+      <libsource lib="Device" part="LED" description="Light emitting diode"/>
+    </comp>
+    <comp ref="FB1">
+      <value>600R@100MHz</value>
+      <footprint>Inductor_SMD:L_0603_1608Metric</footprint>
+      <libsource lib="Device" part="FerriteBead" description="Ferrite bead"/>
+    </comp>
+    <comp ref="J1">
+      <value>USB_B_Micro</value>
+      <footprint>Connector_USB:USB_Micro-B</footprint>
+      <fields>
+        <field name="MPN">10118194-0001LF</field>
+      </fields>
+      <libsource lib="Connector" part="USB_B_Micro" description="USB Micro Type B"/>
+    </comp>
+    <comp ref="J2">
+      <value>Screw_Terminal_01x02</value>
+      <footprint>TerminalBlock:TB_1x02_P5.00mm</footprint>
+      <libsource lib="Connector" part="Screw_Terminal_01x02" description="Screw terminal"/>
+    </comp>
+    <comp ref="J3">
+      <value>Conn_01x02</value>
+      <footprint>Connector_JST:JST_PH_B2B-PH-K</footprint>
+      <fields>
+        <field name="MPN">B2B-PH-K-S</field>
+      </fields>
+      <libsource lib="Connector" part="Conn_01x02" description="Battery connector"/>
+    </comp>
+    <comp ref="K1">
+      <value>G5V-1-5VDC</value>
+      <footprint>Relay_THT:Relay_SPDT_Omron_G5V-1</footprint>
+      <fields>
+        <field name="MPN">G5V-1-DC5</field>
+      </fields>
+      <libsource lib="Relay" part="G5V-1" description="Relay SPDT"/>
+    </comp>
+    <comp ref="Q1">
+      <value>MMBT3904</value>
+      <footprint>Package_TO_SOT_SMD:SOT-23</footprint>
+      <fields>
+        <field name="MPN">MMBT3904LT1G</field>
+      </fields>
+      <libsource lib="Transistor_BJT" part="MMBT3904" description="NPN"/>
+    </comp>
+    <comp ref="Q2">
+      <value>DMG2305UX</value>
+      <footprint>Package_TO_SOT_SMD:SOT-23</footprint>
+      <fields>
+        <field name="MPN">DMG2305UX-7</field>
+      </fields>
+      <libsource lib="Transistor_FET" part="DMG2305UX" description="P-MOSFET"/>
+    </comp>
+    <comp ref="R1">
+      <value>4k7</value>
+      <footprint>Resistor_SMD:R_0402_1005Metric</footprint>
+      <libsource lib="Device" part="R" description="Resistor"/>
+    </comp>
+    <comp ref="R2">
+      <value>4k7</value>
+      <footprint>Resistor_SMD:R_0402_1005Metric</footprint>
+      <libsource lib="Device" part="R" description="Resistor"/>
+    </comp>
+    <comp ref="R3">
+      <value>10</value>
+      <footprint>Resistor_SMD:R_0402_1005Metric</footprint>
+      <libsource lib="Device" part="R" description="Resistor"/>
+    </comp>
+    <comp ref="R4">
+      <value>10k</value>
+      <footprint>Resistor_SMD:R_0402_1005Metric</footprint>
+      <libsource lib="Device" part="R" description="Resistor"/>
+    </comp>
+    <comp ref="R5">
+      <value>10k</value>
+      <footprint>Resistor_SMD:R_0402_1005Metric</footprint>
+      <libsource lib="Device" part="R" description="Resistor"/>
+    </comp>
+    <comp ref="R6">
+      <value>1k</value>
+      <footprint>Resistor_SMD:R_0402_1005Metric</footprint>
+      <libsource lib="Device" part="R" description="Resistor"/>
+    </comp>
+    <comp ref="R7">
+      <value>1M</value>
+      <footprint>Resistor_SMD:R_0402_1005Metric</footprint>
+      <libsource lib="Device" part="R" description="Resistor"/>
+    </comp>
+    <comp ref="R8">
+      <value>1M</value>
+      <footprint>Resistor_SMD:R_0402_1005Metric</footprint>
+      <libsource lib="Device" part="R" description="Resistor"/>
+    </comp>
+    <comp ref="R9">
+      <value>DNP</value>
+      <footprint>Resistor_SMD:R_0402_1005Metric</footprint>
+      <libsource lib="Device" part="R" description="Resistor"/>
+    </comp>
+    <comp ref="TP1">
+      <value>TestPoint</value>
+      <footprint>TestPoint:TestPoint_Pad_D1.0mm</footprint>
+      <libsource lib="Connector" part="TestPoint" description="test point"/>
+    </comp>
+    <comp ref="U1">
+      <value>AP2112K-3.3</value>
+      <footprint>Package_TO_SOT_SMD:SOT-23-5</footprint>
+      <fields>
+        <field name="MPN">AP2112K-3.3TRG1</field>
+      </fields>
+      <libsource lib="Regulator_Linear" part="AP2112K-3.3" description="600mA LDO"/>
+    </comp>
+    <comp ref="U2">
+      <value>ATtiny1616-M</value>
+      <footprint>Package_DFN_QFN:QFN-20</footprint>
+      <fields>
+        <field name="MPN">ATTINY1616-MNR</field>
+      </fields>
+      <libsource lib="MCU_Microchip_ATtiny" part="ATtiny1616-M" description="MCU"/>
+    </comp>
+    <comp ref="U3">
+      <value>SHTC3</value>
+      <footprint>Sensor_Humidity:Sensirion_DFN-4</footprint>
+      <fields>
+        <field name="MPN">SHTC3</field>
+      </fields>
+      <libsource lib="Sensor_Humidity" part="SHTC3" description="Humidity sensor"/>
+    </comp>
+    <comp ref="U4">
+      <value>MCP3421A0T-E/CH</value>
+      <footprint>Package_TO_SOT_SMD:SOT-23-6</footprint>
+      <fields>
+        <field name="MPN">MCP3421A0T-E/CH</field>
+      </fields>
+      <libsource lib="Analog_ADC" part="MCP3421x0" description="18-bit ADC"/>
+    </comp>
+  </components>
+  <nets>
+    <net code="1" name="GND">
+      <node ref="J1" pin="5" pinfunction="GND" pintype="passive"/>
+      <node ref="J3" pin="2" pintype="passive"/>
+      <node ref="U1" pin="2" pinfunction="GND" pintype="power_in"/>
+      <node ref="U2" pin="20" pinfunction="GND" pintype="power_in"/>
+      <node ref="U3" pin="2" pinfunction="VSS" pintype="power_in"/>
+      <node ref="C1" pin="2" pintype="passive"/>
+      <node ref="C2" pin="2" pintype="passive"/>
+      <node ref="C3" pin="2" pintype="passive"/>
+      <node ref="C4" pin="1" pinfunction="+" pintype="passive"/>
+      <node ref="C5" pin="2" pinfunction="-" pintype="passive"/>
+      <node ref="C8" pin="2" pintype="passive"/>
+      <node ref="C9" pin="2" pintype="passive"/>
+      <node ref="Q1" pin="2" pinfunction="E" pintype="passive"/>
+      <node ref="D2" pin="1" pinfunction="K" pintype="passive"/>
+      <node ref="R8" pin="2" pintype="passive"/>
+      <node ref="R9" pin="2" pintype="passive"/>
+      <node ref="C7" pin="2" pintype="passive"/>
+    </net>
+    <net code="2" name="AGND">
+      <node ref="U4" pin="2" pinfunction="VSS" pintype="power_in"/>
+      <node ref="C6" pin="2" pintype="passive"/>
+    </net>
+    <net code="3" name="VBUS">
+      <node ref="J1" pin="1" pinfunction="VBUS" pintype="passive"/>
+      <node ref="U1" pin="1" pinfunction="VIN" pintype="power_in"/>
+      <node ref="C1" pin="1" pintype="passive"/>
+      <node ref="C4" pin="2" pinfunction="-" pintype="passive"/>
+      <node ref="C5" pin="1" pinfunction="+" pintype="passive"/>
+      <node ref="K1" pin="1" pinfunction="~" pintype="passive"/>
+    </net>
+    <net code="4" name="+3V3">
+      <node ref="U1" pin="5" pinfunction="VOUT" pintype="power_out"/>
+      <node ref="C2" pin="1" pintype="passive"/>
+      <node ref="C3" pin="1" pintype="passive"/>
+      <node ref="U2" pin="1" pinfunction="VDD" pintype="power_in"/>
+      <node ref="U4" pin="5" pinfunction="VDD" pintype="power_in"/>
+      <node ref="R1" pin="1" pintype="passive"/>
+      <node ref="R2" pin="1" pintype="passive"/>
+      <node ref="R3" pin="1" pintype="passive"/>
+      <node ref="R4" pin="1" pintype="passive"/>
+      <node ref="R5" pin="1" pintype="passive"/>
+      <node ref="Q2" pin="2" pinfunction="S" pintype="passive"/>
+      <node ref="FB1" pin="1" pintype="passive"/>
+      <node ref="C8" pin="1" pintype="passive"/>
+      <node ref="TP1" pin="1" pinfunction="1" pintype="passive"/>
+      <node ref="C6" pin="1" pintype="passive"/>
+    </net>
+    <net code="5" name="+3V3_SENS">
+      <node ref="Q2" pin="3" pinfunction="D" pintype="passive"/>
+      <node ref="U3" pin="1" pinfunction="VDD" pintype="power_in"/>
+    </net>
+    <net code="6" name="VCC">
+      <node ref="FB1" pin="2" pintype="passive"/>
+      <node ref="U2" pin="11" pinfunction="AVCC" pintype="power_in"/>
+      <node ref="C9" pin="1" pintype="passive"/>
+    </net>
+    <net code="7" name="I2C_SDA">
+      <node ref="U2" pin="8" pinfunction="PB1" pintype="bidirectional"/>
+      <node ref="R1" pin="2" pintype="passive"/>
+      <node ref="U4" pin="4" pinfunction="SDA" pintype="bidirectional"/>
+    </net>
+    <net code="8" name="I2C_SCL">
+      <node ref="U2" pin="9" pinfunction="PB0" pintype="bidirectional"/>
+      <node ref="R2" pin="2" pintype="passive"/>
+      <node ref="U3" pin="4" pinfunction="SCL" pintype="input"/>
+      <node ref="U4" pin="3" pinfunction="SCL" pintype="input"/>
+    </net>
+    <net code="9" name="SDA">
+      <node ref="U3" pin="3" pinfunction="SDA" pintype="bidirectional"/>
+    </net>
+    <net code="10" name="RESET">
+      <node ref="U2" pin="19" pinfunction="RESET" pintype="input"/>
+      <node ref="R4" pin="2" pintype="passive"/>
+    </net>
+    <net code="11" name="Net-(Q2-G)">
+      <node ref="Q2" pin="1" pinfunction="G" pintype="passive"/>
+      <node ref="R5" pin="2" pintype="passive"/>
+      <node ref="U2" pin="12" pinfunction="PC0" pintype="bidirectional"/>
+    </net>
+    <net code="12" name="Net-(D2-A)">
+      <node ref="D2" pin="2" pinfunction="A" pintype="passive"/>
+      <node ref="R3" pin="2" pintype="passive"/>
+    </net>
+    <net code="13" name="RELAY_DRV">
+      <node ref="U2" pin="13" pinfunction="PA2" pintype="bidirectional"/>
+      <node ref="R6" pin="1" pintype="passive"/>
+    </net>
+    <net code="14" name="Net-(Q1-B)">
+      <node ref="Q1" pin="1" pinfunction="B" pintype="passive"/>
+      <node ref="R6" pin="2" pintype="passive"/>
+    </net>
+    <net code="15" name="Net-(K1-Pad2)">
+      <node ref="K1" pin="2" pinfunction="~" pintype="passive"/>
+      <node ref="Q1" pin="3" pinfunction="C" pintype="passive"/>
+    </net>
+    <net code="16" name="LOAD_COM">
+      <node ref="K1" pin="3" pinfunction="~" pintype="passive"/>
+      <node ref="J2" pin="1" pintype="passive"/>
+    </net>
+    <net code="17" name="LOAD_NO">
+      <node ref="K1" pin="4" pinfunction="~" pintype="passive"/>
+      <node ref="J2" pin="2" pintype="passive"/>
+    </net>
+    <net code="18" name="unconnected-(K1-Pad5)">
+      <node ref="K1" pin="5" pinfunction="~" pintype="passive"/>
+    </net>
+    <net code="19" name="VBAT">
+      <node ref="J3" pin="1" pintype="passive"/>
+    </net>
+    <net code="20" name="V_BAT">
+      <node ref="R7" pin="1" pintype="passive"/>
+    </net>
+    <net code="21" name="BAT_SENSE">
+      <node ref="R7" pin="2" pintype="passive"/>
+      <node ref="R8" pin="1" pintype="passive"/>
+      <node ref="U2" pin="14" pinfunction="PA3" pintype="bidirectional"/>
+      <node ref="R9" pin="1" pintype="passive"/>
+      <node ref="C7" pin="1" pintype="passive"/>
+    </net>
+    <net code="22" name="unconnected-(U1-EN-Pad3)">
+      <node ref="U1" pin="3" pinfunction="EN" pintype="input"/>
+    </net>
+    <net code="23" name="unconnected-(U1-NC-Pad4)">
+      <node ref="U1" pin="4" pinfunction="NC" pintype="no_connect"/>
+    </net>
+    <net code="24" name="unconnected-(U2-PA1-Pad15)">
+      <node ref="U2" pin="15" pinfunction="PA1" pintype="bidirectional"/>
+    </net>
+    <net code="25" name="unconnected-(U4-VIN--Pad6)">
+      <node ref="U4" pin="6" pinfunction="VIN-" pintype="input"/>
+    </net>
+    <net code="26" name="Net-(U4-VIN+)">
+      <node ref="U4" pin="1" pinfunction="VIN+" pintype="input"/>
+      <node ref="J3" pin="3" pintype="passive"/>
+    </net>
+  </nets>
+</export>

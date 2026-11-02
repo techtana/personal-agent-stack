@@ -1,0 +1,23 @@
+* R1 relay coil flyback - low-side switch turns a coil off (guide SCH-08, SCH-18)
+* Run 1: as written (clamp diode D1 present). Run 2: delete or comment out D1.
+* Measure: max V(drain) after turn-off at t = 1.5 ms. Compare with the switch rating
+* (e.g. MMBT3904 VCEO 40 V, 2N7002 VDS 60 V).
+* Expected (analytic, ee_calc.py flyback): with D1 ~12.8 V and ~0.7 ms decay;
+* without D1 ~1.3 kV ringing at ~71 kHz (a real switch avalanches or arcs first).
+* SPICE suffixes: m = milli, meg = mega (never M), u = micro, n = nano, p = pico.
+.param VSUP=12 LCOIL=100m RCOIL=400
+VSUP vsup 0 DC {VSUP}
+* Coil = inductance plus winding resistance
+LCOIL vsup coil_mid {LCOIL}
+RCOIL coil_mid drain {RCOIL}
+* Switch-node capacitance (transistor output capacitance plus wiring)
+CPAR drain 0 50p
+* Gate/base drive: on for 1.5 ms (5 coil time constants), then off
+VCTRL ctrl 0 PULSE(0 5 0 1u 1u 1.5m 10m)
+S1 drain 0 ctrl 0 SWMOD
+.model SWMOD SW(Ron=0.1 Roff=10meg Vt=2.5 Vh=0.1)
+* Clamp diode across the coil: anode on the switch side, cathode on the supply
+D1 drain vsup D1N4148
+.model D1N4148 D(Is=2.52n Rs=0.568 N=1.752 Cjo=4p M=0.4 Tt=20n BV=100 IBV=100u)
+* Suggested analysis: .tran 0.1u 2.5m 0 0.1u
+.end

@@ -1,0 +1,21 @@
+* R10 Op-amp follower driving a capacitive load (expert EXP-ANA-02)
+* Generic single-pole macromodel: A0 = 100k, GBW = 1 MHz, Rout = 50 ohm.
+* Prefer the vendor model if it runs in ngspice (or SpiceBridge create_model from
+* datasheet values). Step the input; ringing/overshoot on V(out) means low phase margin.
+* Run with CLOAD = 10p, 1n, 10n. Fix to try: move CL to a new node "load" and add
+* RISO (e.g. 50 ohm) from out to load; feedback stays on out.
+* Expected (two-pole estimate): 1n -> phase margin ~73 deg (clean); 10n -> ~18 deg (rings hard).
+.param CLOAD=1n
+VIN in 0 PULSE(0 0.1 10u 10n 10n 50u 100u)
+XU1 in out out OPAMP1P
+CL out 0 {CLOAD}
+.subckt OPAMP1P inp inn out
+E1 n1 0 inp inn 100000
+R1 n1 n2 1000
+* Dominant pole at GBW/A0 = 10 Hz: C = 1/(2*pi*1000*10)
+C1 n2 0 15.9u
+E2 n3 0 n2 0 1
+ROUT n3 out 50
+.ends OPAMP1P
+* Suggested analysis: .tran 10n 100u ; measure overshoot and settling of V(out)
+.end
