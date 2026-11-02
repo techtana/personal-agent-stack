@@ -2,6 +2,9 @@
   "create-documentation": {
     "origin": "~/.claude/skills"
   },
+  "electronic-design-reviewer": {
+    "origin": "claude.ai (plugin)"
+  },
   "hiring-process-design": {
     "origin": "claude.ai (plugin)"
   },

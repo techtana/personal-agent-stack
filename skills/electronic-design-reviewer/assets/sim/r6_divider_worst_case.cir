@@ -1,0 +1,12 @@
+* R6 Divider tolerance worst case - battery monitor / UVLO threshold (expert EXP-ANA-06)
+* Run run_worst_case or run_monte_carlo with resistor tolerance (e.g. 1%) and, if
+* relevant, the source range. Measure V(sense) min/max at DC.
+* Cross-check: ee_calc.py divider --vin 4.2 --r1 1meg --r2 1meg --tol 1
+* Note the 2.1 uA permanent drain and the 500 k source impedance seen by the ADC.
+VBAT vbat 0 DC 4.2
+R1 vbat sense 1meg
+R2 sense 0 1meg
+* Charge reservoir for the ADC sampling capacitor
+C1 sense 0 100n
+* Suggested analysis: .op (worst case / Monte Carlo over R1, R2)
+.end

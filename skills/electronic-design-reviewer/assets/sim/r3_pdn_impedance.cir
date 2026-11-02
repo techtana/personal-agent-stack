@@ -1,0 +1,26 @@
+* R3 decoupling network impedance seen by an IC supply pin (guide SCH-07, CMP-01, CMP-02, PLC-02)
+* A 1 A AC current is injected into the rail, so |V(rail)| in volts = |Z| in ohms.
+* Each capacitor = C + ESR + ESL. Use MOUNTED ESL (part + pads + vias), and the
+* EFFECTIVE C after DC bias (ee_calc.py mlcc / maker curve).
+* Measure: |V(rail)| from 1 kHz to 1 GHz; find minimum, anti-resonance peaks, and
+* the bands above the target Z = allowed ripple / load step.
+* Cross-check: ee_calc.py pdn-z --cap "6u,5m,1n" --cap "100n,20m,0.6n,2" --reg "10m,50n"
+IIN 0 rail AC 1
+* DC path so the operating point exists
+RDC rail 0 1meg
+* Bulk: 10 uF X5R 0805 at bias (~6 uF effective), ESR 5 mohm, ESL 1 nH
+CB rail nb1 6u
+RB nb1 nb2 5m
+LB nb2 0 1n
+* Local: two 100 nF 0402, each ESR 20 mohm, ESL 0.6 nH (written as one branch per part)
+CD1 rail nd1 100n
+RD1 nd1 nd2 20m
+LD1 nd2 0 0.6n
+CD2 rail ne1 100n
+RD2 ne1 ne2 20m
+LD2 ne2 0 0.6n
+* Regulator output, simplified: closed-loop resistance plus inductance
+RREG rail nr 10m
+LREG nr 0 50n
+* Suggested analysis: .ac dec 100 1k 1g
+.end

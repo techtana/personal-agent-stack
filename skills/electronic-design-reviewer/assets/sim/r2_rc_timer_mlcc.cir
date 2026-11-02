@@ -1,0 +1,12 @@
+* R2 RC timer with a class-2 MLCC: nominal vs DC-bias-derated capacitance (guide CMP-03, CMP-12)
+* Run 1: C = nominal value. Run 2: C = effective value over the voltage the capacitor
+* sees WHILE timing (0 V up to the threshold), from the maker DC-bias curve.
+* Measure: the time V(out) crosses the threshold it drives (EN, reset, comparator), at the
+* threshold's datasheet min and max. The delay is -R*C*ln(1 - Vth/Vstep), not R*C.
+* Expected (ee_calc.py rc --vstep 5 --vth 0.4 and --vth 1.5): 83 ms and 357 ms for R*C = 1 s.
+.param R=100k C=10u
+V1 in 0 PULSE(0 5 0 1u 1u 10 20)
+R1 in out {R}
+C1 out 0 {C}
+* Suggested analysis: .tran 1m 3
+.end

@@ -1,0 +1,13 @@
+Net,Ref,Pin,PinType
++12V,M1,1,passive
+MOTOR_N,M1,2,passive
+MOTOR_N,Q1,3,passive
+GND,Q1,2,passive
+GATE,Q1,1,passive
+GATE,R1,2,passive
+PWM,R1,1,passive
+PWM,U1,5,output
+GND,U1,4,power_in
++12V,U1,8,power_in
++12V,C1,1,passive
+GND,C1,2,passive

@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: rc-delay-mlcc-decision
+expected_outcome: |
+  A short decision review (not a full report). Finds from the AP2112 datasheet that EN switches
+  somewhere between 0.4 V and 1.5 V, so the delay is t = -RC*ln(1 - Vth/5V) = roughly 0.08-0.36 s,
+  not 1 s. Judges the X5R DC-bias effect at the voltage the capacitor sees while timing (0 V to the
+  threshold: small), not at 5 V. Recommends a specific alternative (supervisor IC with a C0G timing
+  cap, or a larger resistor) and cites the guide rules (CMP-03, CMP-12, SCH-06). Stays short.
