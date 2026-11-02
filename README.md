@@ -53,9 +53,8 @@ Docker is optional (`infrastructure/docker-compose.yml`); the reference machine 
 ## Quick start
 
 ```powershell
-# Windows (PowerShell)
-.\scripts\setup.ps1          # detect hardware -> machines/<HOST>.yaml, write .env secrets, set Ollama env,
-                             # install litellm/phoenix/open-webui as uv tools, generate configs, pull models
+# Windows: double-click install.cmd (or run .\scripts\setup.ps1). A window asks where the models and the
+# Python tools go, then setup runs in the background: .env secrets, Ollama env, uv tools, configs, model downloads.
 uv run scripts/stack.py up   # start phoenix, litellm, orchestrator, open_webui
 uv run scripts/stack.py smoke
 ```

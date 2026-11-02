@@ -60,17 +60,21 @@ winget configure --file winget\configuration.winget --accept-configuration-agree
 
 ### 2. Run setup
 
-From the repository root, on Windows:
+On Windows, double-click `install.cmd` in the repository root, or run `.\scripts\setup.ps1`. On Linux, macOS, WSL
+or Git Bash, run `./scripts/setup.sh`.
 
-```powershell
-.\scripts\setup.ps1
-```
+The installer first asks two questions, in a window (or in the terminal when there is no display, or with `--no-gui`):
 
-On Linux, macOS, WSL or Git Bash:
+- **Models folder**: where Ollama keeps downloaded models (`OLLAMA_MODELS`). Needs about 8 GB for the core models.
+  If the folder in your machine profile is on a drive that is not connected, the installer says so and offers
+  Ollama's default, `%USERPROFILE%\.ollama\models`. If models already exist in the old folder, it offers to move them.
+- **Python tools folder**: where uv puts LiteLLM, Phoenix and Open WebUI (`UV_TOOL_DIR`, about 3 GB). Keep the path
+  short; deep Python packages break past Windows' 260-character limit.
 
-```bash
-./scripts/setup.sh
-```
+Under each folder it shows the free space on that drive; **Install** stays disabled until both folders are usable.
+It writes the models folder into `machines/<HOST>.yaml` (`model_store` and `ollama_env.OLLAMA_MODELS`), then starts
+setup as a background process. You can close the window: setup keeps going, and opening the installer again (or
+`uv run scripts/stack.py install --status`) shows each step's progress. The log is `.run/install/install.log`.
 
 Setup does the following, in this order:
 
@@ -84,18 +88,21 @@ Setup does the following, in this order:
 7. Writes `.claude/settings.local.json`, which holds the MCP bearer and the memory directory.
 8. Pulls the core models. This can take a long time on a slow disk or a slow connection.
 
-You should see: ``setup complete. Next: `uv run scripts/stack.py up` then `uv run scripts/stack.py smoke`.``
+A failed step does not stop the others; the window marks it with a cross and Ollama's or uv's message, and
+**Change folders and run again** goes back to the questions. Steps that already ran are quick the second time.
 
-Options: `--no-pull` skips the model downloads, and `--no-restart` leaves Ollama running as it is. On Windows, pass
-them like this: `.\scripts\setup.ps1 -Args @('--no-pull')`.
+Unattended setup (no questions; uses the folders already in the profile): `uv run scripts/stack.py setup`, or on
+Windows `.\scripts\setup.ps1 -Args @('--no-pull')`. `--no-pull` skips the model downloads and `--no-restart` leaves
+Ollama running as it is. It ends with ``setup complete. Next: `uv run scripts/stack.py up` then `uv run scripts/stack.py smoke`.``
+and stops with an error when the models folder is on a drive that is not connected.
 
-If you don't see the `setup complete` line, see [troubleshooting.md](troubleshooting.md).
+If setup reports problems, see [troubleshooting.md](troubleshooting.md).
 
 ### 3. Review your machine profile
 
 Open `machines/<HOST>.yaml`. The `detected:` block is regenerated on refresh. You can change everything else, for example:
 
-- `model_store`: the folder for Ollama models (SEKAIHOME uses `D:\ollama\models`).
+- `model_store`: the folder for Ollama models; the installer sets it (and `ollama_env.OLLAMA_MODELS`) for you.
 - `models.primary`: replace the class default model. SEKAIHOME uses `qwen3.5:9b`.
 
 After you edit it, run:

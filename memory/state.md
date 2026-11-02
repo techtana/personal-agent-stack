@@ -148,3 +148,7 @@ once across a session restart.
    `stack.py status` that day: only Ollama up; LiteLLM, Open WebUI, Phoenix and the orchestrator down. Not run by the
    session (outside its folders): `stack.py doctor`, `ollama show qwen3.5:9b`; both are in T01 for the owner. Agent sessions work only on the drives and folders the owner selects at the start of each session;
    everything else is off-limits (plan C5, D-M6, task T08).
+15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
+   and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
+   (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render
+   harness and a stand-in worker; the real worker (registry, Ollama restart, pulls) has not run yet.
