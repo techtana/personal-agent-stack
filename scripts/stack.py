@@ -9,6 +9,7 @@ Commands
   install       installer window: asks where models and Python tools go, then runs setup in the background
                 (--no-gui asks in the terminal; --status shows the background run's progress)
   setup         profile + .env secrets + Ollama env + uv tools + build + settings.local.json (+ pull core models unless --no-pull)
+  disks         measure each drive's read/write speed and say which drive should hold models, tools and caches
   pull          pull the profile's models (--all includes the reviewer)
   up/down/status  manage native services: phoenix, litellm, orchestrator, open_webui
   bench         measure tok/s and GPU/CPU split for the primary (or --model) via Ollama
@@ -146,7 +147,13 @@ def install_in_terminal():
         tool_dir = "" if d["tool_dir"] and Path(tool_dir) == Path(d["tool_dir"]) else tool_dir
         plan = install.Plan(model_store=store, tool_dir=tool_dir, move_models_from=move,
                             install_ollama=d["ollama_missing"] and ask_yes("Ollama is not installed. Install it with winget?"),
-                            pull=pull, start_stack=ask_yes("Start the stack when setup finishes?"))
+                            pull=pull,
+                            check_disks=ask_yes("Check how fast each drive is (writes a 256 MB test file per drive)?"),
+                            setup_huggingface=ask_yes(f"Put the Hugging Face cache in {install.default_hf_home(store)} "
+                                                      "and install the hf command?"),
+                            install_openclaw=not d["openclaw_installed"] and ask_yes(
+                                "Install OpenClaw with npm (upgrades Node.js with winget first if it is too old)?"),
+                            start_stack=ask_yes("Start the stack when setup finishes?"))
         install.save_paths(p, store)
         install.spawn_worker(plan)
         info(f"setup runs in the background (log: {install.LOG_FILE.relative_to(REPO)}). Ctrl+C stops watching, not setup.")
@@ -164,6 +171,24 @@ def install_in_terminal():
             time.sleep(1)
     except KeyboardInterrupt:
         info("stopped watching; `uv run scripts/stack.py install --status` shows progress")
+
+
+def cmd_disks(a):
+    from stacklib import disks, install
+
+    p = prof.resolve_profile()
+    store = p["ollama_env"].get("OLLAMA_MODELS") or p["model_store"] or ""
+    if not disks.is_admin():
+        info("not running as administrator, so winsat cannot run; timing a 256 MB test file per drive instead")
+    speeds = disks.measure_all(a.drives or None)
+    for s in speeds:
+        info(s.summary())
+    warnings, suggestion = disks.advise(speeds, store, install.current_tool_dir(),
+                                        install.pull_size_gb(p, install.models_to_pull(p)))
+    for w in warnings + ([suggestion] if suggestion else []):
+        warn(w)
+    if not warnings and not suggestion:
+        info(f"no slow drives; models in {store}")
 
 
 def cmd_pull(a):
@@ -299,6 +324,8 @@ def main(argv=None):
     s = sub.add_parser("install", help="ask where models and tools go, then run setup in the background")
     s.add_argument("--no-gui", action="store_true"); s.add_argument("--status", action="store_true")
     s.add_argument("--worker", help=argparse.SUPPRESS); s.set_defaults(f=cmd_install)
+    s = sub.add_parser("disks", help="measure drive speeds and suggest where models, tools and caches go")
+    s.add_argument("drives", nargs="*", help="drive roots such as C:\\ D:\\ (default: every local drive)"); s.set_defaults(f=cmd_disks)
     s = sub.add_parser("pull"); s.add_argument("--all", action="store_true"); s.set_defaults(f=cmd_pull)
     s = sub.add_parser("up"); s.add_argument("services", nargs="*"); s.add_argument("--wait", type=float, default=150); s.set_defaults(f=cmd_up)
     s = sub.add_parser("down"); s.add_argument("services", nargs="*"); s.set_defaults(f=cmd_down)

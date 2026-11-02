@@ -9,6 +9,10 @@ Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; des
 ## Machine: SEKAIHOME (profile: machines/SEKAIHOME.yaml, class moe-12gb-32ram, primary overridden to qwen3.5:9b)
 - Windows 11 Pro, AMD Ryzen 5 5500 (6C/12T), 32 GB DDR4-2133 (2x16), RTX 3060 12 GB (driver 610.88, ~1.0 GB idle VRAM), C: ~36 GB free after installs, D: ~788 GB free.
 - D: is a USB SSD (Micron Crucial X8); C: is an NVMe SSD (Kingston SNV3S). Model loads from D: are USB-bound.
+  2026-11-01 `winsat`: D: read 41.6 MB/s (USB 2.0 link) until the owner turned the USB-C plug over, then 376 MB/s read /
+  372 MB/s write; C: 2,762-2,990 MB/s read. The earlier 130-161 s cold loads of the 9B fit the 41 MB/s link. One plug
+  orientation falls back to USB 2.0, so the cable or port has a bad contact. A second USB drive, E: (867 GB free),
+  reads 42-43 MB/s (`stack.py disks`), cause not checked.
 - Typical desktop load (Chrome, Claude apps, VS Code, Notion, Spotify, Logseq) leaves ~11-12 GB of the 32 GB RAM free before any model loads.
 - Smart App Control is ON (VerifiedAndReputablePolicyState=1). Since 2026-10-25 19:34 it blocks `~/.local/bin/phoenix.exe`
   (WinError 4551; CodeIntegrity events 3033/3077). Each `~/.local/bin/*.exe` uv launcher embeds its script, so Windows
@@ -148,6 +152,11 @@ once across a session restart.
    `stack.py status` that day: only Ollama up; LiteLLM, Open WebUI, Phoenix and the orchestrator down. Not run by the
    session (outside its folders): `stack.py doctor`, `ollama show qwen3.5:9b`; both are in T01 for the owner. Agent sessions work only on the drives and folders the owner selects at the start of each session;
    everything else is off-limits (plan C5, D-M6, task T08).
+16. Installer additions (2026-11-01, branch claude/nervous-euclid-8357d0): steps **Check drive speed** (`stacklib/disks.py`,
+   `stack.py disks`), **Set up the Hugging Face cache** (HF_HOME=<models drive>:\huggingface) and **Install OpenClaw**
+   (Node.js here is 24.20.0, below openclaw's >=24.22.1, so the step will upgrade it to 26 LTS via winget with UAC).
+   Verified: unit tests (53 passed), `stack.py disks` on C:, D: and E:, and a render of both installer pages. Not run:
+   the HF and OpenClaw steps for real (they change user env vars, move the cache and upgrade Node.js).
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

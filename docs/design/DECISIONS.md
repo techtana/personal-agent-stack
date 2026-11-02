@@ -9,6 +9,14 @@ entry stays and gets a "Done <date>" note.
 
 ## 2026-11-01
 
+- **Pending: the installer checks drive speed, sets up the Hugging Face cache and installs OpenClaw.** Asked by the
+  owner after `winsat` showed the models drive at 41 MB/s (USB 2.0 link) and 376 MB/s with the plug turned over.
+  The speed check uses `winsat` only as administrator (without it, `winsat` prints nothing) and otherwise times an
+  uncached 256 MB test file; it warns and suggests a drive but never moves files. `HF_HOME` goes to
+  `<models drive>:\huggingface` (the owner chose `D:\huggingface` over `D:\hf`); the token stays on the internal
+  drive. OpenClaw installs with npm on the system drive and upgrades Node.js through winget when it is too old;
+  onboarding stays a manual step. Rejected: running `winsat` through a UAC prompt from the background worker.
+  Manual: [../manuals/choosing-drives.md](../manuals/choosing-drives.md).
 - **Pending: multimodal decisions D-M1 to D-M8, settled with the owner in Session 1.** Source: the plan, section 12;
   [plans/2026-11-01-multimodal-stack.md](plans/2026-11-01-multimodal-stack.md).
   - D-M3: **open licences only** (Apache-2.0, MIT and similar; SDXL's CreativeML OpenRAIL++-M allowed). Out: MMAudio,

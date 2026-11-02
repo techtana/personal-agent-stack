@@ -22,7 +22,7 @@ from pathlib import Path
 import yaml
 
 from . import ENV_FILE, IS_WINDOWS, REPO, info, load_dotenv, warn, which
-from . import agents_build, claude_env, litellm_build, ollama, services, winget_build
+from . import agents_build, claude_env, disks, litellm_build, ollama, services, winget_build
 from . import profile as prof
 
 INSTALL_DIR = REPO / ".run" / "install"   # under the repository, not data_dir: it must not move while setup runs
@@ -39,6 +39,10 @@ TOOLS = (
 )
 TOOLS_GB = 3.0      # the three environments measured 2.85 GB on SEKAIHOME (2026-11-01)
 LONG_PATH = 60      # Python packages with deep trees (spaCy, HF cache) break past 260 characters on Windows
+HF_TOOL = ("huggingface-hub", ["huggingface_hub"], "3.12")   # environment name, install spec, python: the `hf` command
+HF_CACHE_DIRS = ("hub", "xet", "datasets", "assets")       # what moves from an earlier HF_HOME; the token stays put
+# openclaw 2026.10.9 declares engines.node ">=24.22.1 <25 || >=26.12.1"; winget's OpenJS.NodeJS.LTS was 26.13.0 then.
+OPENCLAW_NODE = ((24, 22, 1), (25, 0, 0), (26, 12, 1))
 
 
 @dataclass
@@ -50,6 +54,10 @@ class Plan:
     pull: bool = True
     restart_ollama: bool = True
     start_stack: bool = False
+    check_disks: bool = True
+    setup_huggingface: bool = True
+    hf_home: str = ""               # HF_HOME; "" puts it next to the models (<models drive>\\huggingface on Windows)
+    install_openclaw: bool = False  # may upgrade Node.js machine-wide, so only when chosen in the installer
 
 
 @dataclass
@@ -154,6 +162,7 @@ def defaults(profile: dict) -> dict:
         "tool_dir": current_tool_dir(),
         "tools_missing": tools_missing(profile, current_tool_dir()),
         "ollama_missing": not which("ollama"),
+        "openclaw_installed": bool(which("openclaw")),
         "models": models,
         "models_gb": pull_size_gb(profile, models),
     }
@@ -204,6 +213,10 @@ class Skip(Exception):
     """The step does not apply; its message says why."""
 
 
+class Warn(Exception):
+    """The step finished, but something needs the owner's attention; its message says what."""
+
+
 class Progress:
     """Step states for the window (state_file) or the console (state_file None)."""
 
@@ -246,12 +259,13 @@ class Progress:
     def end(self, sid: str, status: str, detail: str = "") -> None:
         s = self._step(sid)
         s.update(status=status, detail=detail or s["detail"], fraction=None)
-        (warn if status == "failed" else info)(f"      {status}{': ' + s['detail'] if s['detail'] else ''}")
+        (warn if status in ("failed", "warning") else info)(f"      {status}{': ' + s['detail'] if s['detail'] else ''}")
         self._write(force=True)
 
     def finish(self) -> bool:
         failed = [s for s in self.state["steps"] if s["status"] == "failed"]
-        self.state["status"] = "failed" if failed else "done"
+        warned = any(s["status"] == "warning" for s in self.state["steps"])
+        self.state["status"] = "failed" if failed else "warnings" if warned else "done"
         self.state["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         self._write(force=True)
         return not failed
@@ -358,7 +372,7 @@ def _set_persistent_env(name: str, value: str) -> None:
     if IS_WINDOWS:
         ollama.set_user_env({name: value})   # writes any variable to HKCU\Environment and broadcasts the change
     else:
-        warn(f"add `export {name}={value}` to your shell profile so uv finds the tools there later")
+        warn(f"add `export {name}={value}` to your shell profile so later shells see it")
 
 
 def step_tools(plan: Plan, profile: dict, report) -> str:
@@ -384,6 +398,112 @@ def step_tools(plan: Plan, profile: dict, report) -> str:
     if failed:
         raise RuntimeError(f"uv could not install {', '.join(failed)}; the log has uv's message")
     return f"installed {', '.join(todo)} in {tool_dir}" + ("; the old tool folder was left as it was" if moved else "")
+
+
+def default_hf_home(model_store: str) -> str:
+    """Next to the models on Windows (<drive>:\\huggingface): both are large files read once into GPU memory."""
+    if IS_WINDOWS and model_store:
+        return str(Path(Path(model_store).anchor) / "huggingface")
+    return str(Path.home() / ".cache" / "huggingface")
+
+
+def step_disks(plan: Plan, profile: dict, report) -> str:
+    if not plan.check_disks:
+        raise Skip("not chosen")
+    speeds = disks.measure_all(disks.list_drives(), report)
+    for s in speeds:
+        info(f"      {s.summary()}")
+    need = pull_size_gb(profile, models_to_pull(profile))
+    warnings, suggestion = disks.advise(speeds, plan.model_store, plan.tool_dir or current_tool_dir(), need)
+    notes = warnings + ([suggestion] if suggestion else [])
+    for w in notes:
+        warn(w)
+    store = next((s for s in speeds if s.root.lower() == disks.drive_of(plan.model_store).lower()), None)
+    head = f"models drive {store.summary()}." if store else "; ".join(s.summary() for s in speeds) + "."
+    if notes:
+        raise Warn(" ".join([head, *notes]))
+    return head
+
+
+def step_huggingface(plan: Plan, profile: dict, report) -> str:
+    if not plan.setup_huggingface:
+        raise Skip("not chosen")
+    old = Path(os.environ.get("HF_HOME") or Path.home() / ".cache" / "huggingface")
+    new = Path(plan.hf_home or default_hf_home(plan.model_store))
+    if not drive_present(str(new)):
+        raise RuntimeError(f"drive {new.drive or new.anchor} is not connected")
+    new.mkdir(parents=True, exist_ok=True)
+    notes = [f"HF_HOME {new}"]
+    if old.resolve() != new.resolve():
+        for sub in HF_CACHE_DIRS:
+            if (old / sub).is_dir():
+                report(f"moving {old / sub} to {new / sub}")
+                notes.append(f"moved {_move_tree(old / sub, new / sub, report)} files from {old / sub}")
+    _set_persistent_env("HF_HOME", str(new))
+    if not same_drive(str(new), str(Path.home())):
+        # The token is a credential: keep it on the internal drive, not on one that can be unplugged and carried off.
+        token = Path.home() / ".cache" / "huggingface" / "token"
+        _set_persistent_env("HF_TOKEN_PATH", str(token))
+        notes.append(f"token file stays at {token}")
+    env_name, spec, py = HF_TOOL
+    if (Path(current_tool_dir() or ".") / env_name / "pyvenv.cfg").exists():
+        return "; ".join(notes + ["hf command already installed"])
+    report("installing the hf command (huggingface_hub)")
+    r = subprocess.run([which("uv") or "uv", "tool", "install", "--force", "--python", py, *spec], check=False)
+    if r.returncode:
+        raise RuntimeError("; ".join(notes + [f"uv could not install huggingface_hub (exit code {r.returncode})"]))
+    return "; ".join(notes + ["installed the hf command"])
+
+
+def _version(text: str) -> tuple[int, int, int] | None:
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", text or "")
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def node_ok_for_openclaw(v: tuple[int, int, int] | None) -> bool:
+    lo, hi, new = OPENCLAW_NODE
+    return v is not None and (lo <= v < hi or v >= new)
+
+
+def _node_version() -> tuple[int, int, int] | None:
+    node = which("node")
+    if not node:
+        return None
+    return _version(subprocess.run([node, "--version"], capture_output=True, text=True, check=False).stdout)
+
+
+def _dotted(v: tuple | None) -> str:
+    return ".".join(map(str, v)) if v else "not installed"
+
+
+def step_openclaw(plan: Plan, profile: dict, report) -> str:
+    if which("openclaw"):
+        raise Skip("already installed")
+    if not plan.install_openclaw:
+        raise Skip("not chosen")
+    node = _node_version()
+    if not node_ok_for_openclaw(node):
+        if not IS_WINDOWS:
+            raise RuntimeError(f"OpenClaw needs Node.js 24.22.1+ or 26.12.1+ (found {_dotted(node)}); install it, then run setup again")
+        report(f"Node.js {_dotted(node)} is too old for OpenClaw; installing the current LTS with winget (Windows asks for admin)")
+        # On an existing OpenJS.NodeJS.LTS install, `winget install` upgrades it in place.
+        subprocess.run(["winget", "install", "--id", "OpenJS.NodeJS.LTS", "--exact", "--silent",
+                        "--accept-package-agreements", "--accept-source-agreements"], check=False)
+        nodejs = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "nodejs"
+        if nodejs.is_dir() and str(nodejs).lower() not in os.environ.get("PATH", "").lower():
+            os.environ["PATH"] = f"{nodejs}{os.pathsep}{os.environ.get('PATH', '')}"   # a fresh install is not on our PATH yet
+        node = _node_version()
+        if not node_ok_for_openclaw(node):
+            raise RuntimeError(f"Node.js is {_dotted(node)} after winget; upgrade it from https://nodejs.org, then run setup again")
+    npm = which("npm")
+    if not npm:
+        raise RuntimeError("npm was not found next to Node.js")
+    report("npm install -g openclaw (into your user profile on the system drive)")
+    r = subprocess.run([npm, "install", "-g", "openclaw@latest"], check=False)
+    if r.returncode:
+        raise RuntimeError(f"npm install -g openclaw exited with code {r.returncode}; the log has npm's message")
+    return (f"installed (Node.js {_dotted(node)}). Next: run `openclaw onboard` and give it the gateway "
+            f"http://127.0.0.1:{profile['ports']['litellm']}/v1 as its only model provider, so chats stay on this machine")
 
 
 def step_build(plan: Plan, profile: dict, report) -> str:
@@ -435,12 +555,15 @@ def step_start(plan: Plan, profile: dict, report) -> str:
 
 STEPS = (
     ("secrets", "Create local secrets (.env)", step_secrets),
+    ("disks", "Check drive speed", step_disks),
     ("ollama_install", "Install Ollama", step_ollama_install),
     ("models_move", "Move models already downloaded", step_models_move),
     ("ollama_env", "Point Ollama at the models folder", step_ollama_env),
     ("tools", "Install LiteLLM, Phoenix and Open WebUI", step_tools),
     ("build", "Generate gateway and agent configs", step_build),
     ("pull", "Download models", step_pull),
+    ("huggingface", "Set up the Hugging Face cache", step_huggingface),
+    ("openclaw", "Install OpenClaw", step_openclaw),
     ("start", "Start the stack", step_start),
 )
 
@@ -456,6 +579,8 @@ def run(plan: Plan, state_file: Path | None = None, steps=STEPS) -> bool:
             progress.end(sid, "done", detail or "")
         except Skip as e:
             progress.end(sid, "skipped", str(e))
+        except Warn as e:
+            progress.end(sid, "warning", str(e))
         except Exception as e:  # noqa: BLE001 - every failure is reported, then the next step runs
             traceback.print_exc()
             progress.end(sid, "failed", str(e) or type(e).__name__)
@@ -528,6 +653,7 @@ def summary(state: dict) -> str:
     return {
         "running": "Setup is running in the background.",
         "done": "Setup finished.",
+        "warnings": "Setup finished with warnings.",
         "failed": "Setup finished with problems.",
         "interrupted": "Setup stopped before it finished (its process is gone).",
     }.get(state.get("status", ""), "Setup has not run yet.")

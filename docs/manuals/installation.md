@@ -71,6 +71,12 @@ The installer first asks two questions, in a window (or in the terminal when the
 - **Python tools folder**: where uv puts LiteLLM, Phoenix and Open WebUI (`UV_TOOL_DIR`, about 3 GB). Keep the path
   short; deep Python packages break past Windows' 260-character limit.
 
+Which drive to pick for each: [choosing-drives.md](choosing-drives.md). In short, models and the Hugging Face cache
+can go on a second or USB drive that reads at 200 MB/s or more; the Python tools stay on the internal drive.
+
+Under **Options** you can also choose to check each drive's speed, put the Hugging Face cache next to the models, and
+install OpenClaw. All three are on by default (OpenClaw only when it is not installed yet).
+
 Under each folder it shows the free space on that drive; **Install** stays disabled until both folders are usable.
 It writes the models folder into `machines/<HOST>.yaml` (`model_store` and `ollama_env.OLLAMA_MODELS`), then starts
 setup as a background process. You can close the window: setup keeps going, and opening the installer again (or
@@ -82,11 +88,19 @@ Setup does the following, in this order:
 2. Detects your hardware and writes `machines/<HOST>.yaml`. `<HOST>` is your computer name.
 3. Creates `.env` with new random values for `LITELLM_MASTER_KEY`, `ORCHESTRATOR_BEARER` and `WEBUI_SECRET_KEY`.
    It also adds an empty `ANTHROPIC_API_KEY`. It never overwrites values that are already there.
+   Then **Check drive speed** measures every local drive and warns about slow ones; a warning shows as an amber **!**
+   and does not stop setup ([choosing-drives.md](choosing-drives.md#check-a-drives-speed)).
 4. Sets the Ollama user environment variables and restarts the Ollama app if they changed.
 5. Installs LiteLLM, Phoenix and Open WebUI as `uv tool`s.
 6. Generates the configs (`stack.py build`).
 7. Writes `.claude/settings.local.json`, which holds the MCP bearer and the memory directory.
 8. Pulls the core models. This can take a long time on a slow disk or a slow connection.
+9. **Set up the Hugging Face cache**: sets `HF_HOME` to `<models drive>:\huggingface`, moves an existing cache there,
+   keeps the token on the internal drive, and installs the `hf` command
+   ([details](choosing-drives.md#hugging-face-cache)).
+10. **Install OpenClaw**: upgrades Node.js with winget if it is older than OpenClaw needs (Windows asks for
+    administrator approval), then runs `npm install -g openclaw@latest`. Run `openclaw onboard` afterwards
+    ([details](choosing-drives.md#openclaw)).
 
 A failed step does not stop the others; the window marks it with a cross and Ollama's or uv's message, and
 **Change folders and run again** goes back to the questions. Steps that already ran are quick the second time.
