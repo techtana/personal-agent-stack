@@ -68,7 +68,14 @@ def cmd_profile(a):
 
 
 def cmd_build(a):
+    from stacklib import paths
+
     p = prof.resolve_profile(getattr(a, "machine", None))
+    errors, warnings = paths.check(p)
+    for w in warnings:
+        warn(w)
+    if errors:
+        die("path guard: " + "; ".join(errors))
     agents_build.build_all(p)
     litellm_build.build(p)
     winget_build.build()
@@ -159,6 +166,9 @@ def install_in_terminal():
                                                       "and install the hf command?"),
                             install_openclaw=not d["openclaw_installed"] and openclaw,
                             setup_openclaw=openclaw,
+                            setup_media=ask_yes(f"Install ComfyUI and the image model (about {install.MEDIA_GB:.0f} GB) "
+                                                f"in {d['media_root']}? Agent sessions and media tools may use only that folder."),
+                            media_root=d["media_root"],
                             start_stack=ask_yes("Start the stack when setup finishes?"))
         install.save_paths(p, store)
         install.spawn_worker(plan)
@@ -283,7 +293,9 @@ def cmd_bench(a):
 
 def cmd_smoke(a):
     p = prof.resolve_profile()
-    res = smoke.run(p, dept=a.dept, skip_mcp=a.skip_mcp)
+    res = smoke.run_media(p) if a.media_only else smoke.run(p, dept=a.dept, skip_mcp=a.skip_mcp)
+    if a.media and not a.media_only:
+        res += smoke.run_media(p)
     failed = [r for r in res if not r["ok"]]
     info(f"smoke: {len(res) - len(failed)}/{len(res)} passed")
     raise SystemExit(1 if failed else 0)
@@ -333,6 +345,29 @@ def cmd_skills_sync(a):
     skills_sync.sync(dry_run=a.dry_run)
 
 
+def cmd_media(a):
+    from stacklib import media, paths
+
+    p = prof.resolve_profile()
+    if a.action == "check":
+        errors, warnings = paths.check(p)
+        for w in warnings:
+            warn(w)
+        for e in errors:
+            print(f"ERROR {e}")
+        info(f"comfyui installed: {media.comfyui_installed(p)}; missing models: "
+             f"{[m.name for m in media.missing_models(p, p['media'].get('image_workflow') or 'z_image_turbo')] if p['media'].get('root') else 'n/a'}")
+        raise SystemExit(1 if errors else 0)
+    if a.action == "install":
+        info(media.install_comfyui(p, info))
+        info(media.install_models(p, p["media"].get("image_workflow") or "z_image_turbo", lambda d=None, f=None: info(d) if d else None))
+    if a.action in ("install", "provision"):
+        keys = media.provision_openwebui(media.openwebui_db(p), media.image_settings(p))
+        info(f"Open WebUI: {len(keys)} settings changed" + ("; restart it (`stack.py down open_webui` then `up open_webui`)" if keys else ""))
+    if a.action == "gpu":
+        info(media.gpu_mode(p, a.mode))
+
+
 def cmd_retro(a):
     rest = [x for x in a.rest if x != "--"]
     raise SystemExit(subprocess.run([sys.executable, str(REPO / "scripts" / "retro.py"), *rest], cwd=REPO).returncode)
@@ -361,11 +396,16 @@ def main(argv=None):
     s = sub.add_parser("tasks"); s.add_argument("action", choices=["install", "remove", "start", "stop", "status", "xml"])
     s.add_argument("services", nargs="*"); s.add_argument("--trigger", choices=["startup", "logon"], default="startup"); s.set_defaults(f=cmd_tasks)
     s = sub.add_parser("bench"); s.add_argument("--model", action="append"); s.add_argument("--num-ctx", type=int); s.add_argument("--tokens", type=int, default=256); s.add_argument("--runs", type=int, default=1); s.add_argument("--use-mmap", choices=["profile", "true", "false"], default="profile"); s.set_defaults(f=cmd_bench)
-    s = sub.add_parser("smoke"); s.add_argument("--dept", default="docs"); s.add_argument("--skip-mcp", action="store_true"); s.set_defaults(f=cmd_smoke)
+    s = sub.add_parser("smoke"); s.add_argument("--dept", default="docs"); s.add_argument("--skip-mcp", action="store_true")
+    s.add_argument("--media", action="store_true", help="also make a small image through ComfyUI")
+    s.add_argument("--media-only", action="store_true", help="only the media checks"); s.set_defaults(f=cmd_smoke)
     s = sub.add_parser("claude-env"); s.add_argument("--shell", choices=["powershell", "bash"], default="bash"); s.set_defaults(f=cmd_claude_env)
     s = sub.add_parser("why-routed"); s.add_argument("--last", type=int, default=10); s.add_argument("--days", type=int, default=7); s.set_defaults(f=cmd_why_routed)
     s = sub.add_parser("skills-sync", help="copy new or changed personal skills into skills/ (rules: skills/sync.yaml)")
     s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_skills_sync)
+    s = sub.add_parser("media", help="ComfyUI and media models under media.root: check, install, provision, gpu chat|media")
+    s.add_argument("action", choices=["check", "install", "provision", "gpu"]); s.add_argument("mode", nargs="?", choices=["chat", "media"])
+    s.set_defaults(f=cmd_media)
     s = sub.add_parser("retro"); s.add_argument("rest", nargs=argparse.REMAINDER); s.set_defaults(f=cmd_retro)
     s = sub.add_parser("tray", help="background tray app that runs the services and shows their status")
     s.add_argument("--foreground", action="store_true"); s.add_argument("--status", action="store_true"); s.add_argument("--stop", action="store_true")

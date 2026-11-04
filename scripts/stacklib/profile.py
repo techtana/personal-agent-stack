@@ -176,4 +176,22 @@ def resolve_profile(name: str | None = None) -> dict:
         "model_store": m.get("model_store") or "",
         "data_dir": data_dir,
         "catalog": defaults.get("model_catalog", {}),
+        "media": resolve_media(defaults.get("media") or {}, m.get("media") or {}),
+        "agent_access": {"allowed_roots": list(((m.get("agent_access") or {}).get("allowed_roots")) or [])},
     }
+
+
+def resolve_media(defaults: dict, machine: dict) -> dict:
+    """The `media:` section with every folder spelled out. Only `root` is needed; the rest default to folders below
+    it, so one allowed root covers ComfyUI, its models, inputs, outputs and the uv download cache."""
+    media = {**defaults, **{k: v for k, v in machine.items() if v not in (None, "")}}
+    root = media.get("root") or ""
+    if root:
+        sep = "\\" if ":" in root[:3] or "\\" in root else "/"
+        join = lambda *parts: sep.join([root.rstrip("\\/"), *parts])  # noqa: E731 - keeps the owner's separator
+        media.setdefault("comfyui_dir", join("comfyui"))
+        media.setdefault("models_dir", sep.join([media["comfyui_dir"].rstrip("\\/"), "models"]))
+        media.setdefault("output_dir", join("outputs"))
+        media.setdefault("input_dir", join("inputs"))
+        media.setdefault("uv_cache", join(".uv-cache"))
+    return media

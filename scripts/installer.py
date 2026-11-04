@@ -78,11 +78,17 @@ class Installer:
         self.disks = tk.BooleanVar(value=True)
         self.hf = tk.BooleanVar(value=True)
         self.openclaw = tk.BooleanVar(value=not d["openclaw_installed"] or bool(d["openclaw_state"]))
+        self.media_root = tk.StringVar(value=d["media_root"])
+        self.media = tk.BooleanVar(value=True)
 
         self.store_msg = self._folder(f, "Models (Ollama)", "Downloaded models live here. Needs the most space; "
                                       "a fast internal drive loads models quicker than a USB one.", self.store, d["model_note"])
         self.tools_msg = self._folder(f, "Python tools (LiteLLM, Phoenix, Open WebUI)",
                                       "Each tool gets its own Python environment here. Keep the path short.", self.tools)
+        self.media_msg = self._folder(f, "Media (ComfyUI and image models)",
+                                      "Image generation for the chat's image button: ComfyUI, PyTorch and the Z-Image-Turbo "
+                                      "model (Apache-2.0). Agent sessions and media tools may use only this folder.",
+                                      self.media_root, "Installed already: setup updates it." if d["media_installed"] else "")
 
         opts = ttk.LabelFrame(f, text="Options", padding=10)
         opts.grid(sticky="ew", pady=(4, 0))
@@ -105,6 +111,8 @@ class Installer:
         elif d["openclaw_state"]:
             ttk.Checkbutton(opts, variable=self.openclaw, text=f"Point OpenClaw at this stack's gateway (now: "
                             f"{d['openclaw_state'].lower()}; OpenClaw keeps a backup of its config)").grid(sticky="w")
+        ttk.Checkbutton(opts, variable=self.media, command=self.validate,
+                        text=f"Install ComfyUI and the image model in the media folder (about {install.MEDIA_GB:.0f} GB)").grid(sticky="w")
         ttk.Checkbutton(opts, variable=self.start, text="Start the stack when setup finishes (tray app)").grid(sticky="w")
 
         self.error = ttk.Label(f, text="", foreground=ERROR_FG, wraplength=640)
@@ -117,7 +125,7 @@ class Installer:
         self.install_btn.pack(side="right", padx=(0, 8))
         self.root.bind("<Return>", lambda e: self.on_install())
         self.root.bind("<Escape>", lambda e: self.root.destroy())
-        for v in (self.store, self.tools):
+        for v in (self.store, self.tools, self.media_root):
             v.trace_add("write", lambda *_: self.validate())
         self.validate()
 
@@ -164,7 +172,13 @@ class Installer:
                               "(HF_HOME) and install the hf command")
         store_gb, tools_gb = self.needs()
         ok = True
-        for var, label, need in ((self.store, self.store_msg, store_gb), (self.tools, self.tools_msg, tools_gb)):
+        media_gb = install.MEDIA_GB if self.media.get() and not self.d["media_installed"] else 0.1
+        checks = [(self.store, self.store_msg, store_gb), (self.tools, self.tools_msg, tools_gb)]
+        if self.media.get():
+            checks.append((self.media_root, self.media_msg, media_gb))
+        else:
+            self.media_msg.configure(text="Not chosen: the chat has no image button.", foreground=MUTED_FG)
+        for var, label, need in checks:
             chk = install.check_dir(var.get(), need)
             label.configure(text=chk.message, foreground=OK_FG if chk.ok else ERROR_FG)
             ok &= chk.ok
@@ -191,6 +205,8 @@ class Installer:
                 setup_huggingface=self.hf.get(),
                 install_openclaw=not self.d["openclaw_installed"] and self.openclaw.get(),
                 setup_openclaw=self.openclaw.get(),
+                setup_media=self.media.get(),
+                media_root=str(Path(self.media_root.get().strip()).expanduser()) if self.media.get() else "",
             )
             install.spawn_worker(plan)
         except (OSError, ValueError, RuntimeError) as e:

@@ -475,6 +475,16 @@ Tasks that can start now, without SEKAIHOME: T08, T11, T12 (prompts and evals wr
 - Open WebUI pipe functions: https://docs.openwebui.com/features/plugin/functions/pipe
 - Open WebUI with ComfyUI, stock workflow rejected without a workflow and node map: https://github.com/thekaveh/atlas/wiki/Service-Open-Webui
 
+## 15b. Progress
+
+- 2026-11-04, first build session (owner chose `D:\media` and `D:\huggingface`): T08 path guard
+  (`stacklib/paths.py`, build and setup fail on a media path outside `agent_access.allowed_roots`); T02/S0b ComfyUI
+  through a uv venv from python.org Python (runs under Smart App Control with PyAV pinned to 17.0.0);
+  T40 `comfyui` service; T41 GPU mode in the tray and `stack.py media gpu`; T42 Z-Image-Turbo workflow and Open
+  WebUI image settings; T44 `config/comfyui/MODELS.md`; T45 `smoke --media`; installer and setup step **Install
+  ComfyUI and the image model**. Measurements in `memory/state.md`. Not done: T43 style transfer, T46 (no winget
+  package needed), T01, T03 (image with the 9B loaded), T04, T05, and packages M1-M3, M5a-M7.
+
 ## 16. Review against the code, 2026-11-01 (Session 1)
 
 The session could use only this repository's worktree and its scratchpad (D-M6), so installed versions come from

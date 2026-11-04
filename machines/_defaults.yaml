@@ -74,6 +74,8 @@ ports:
   phoenix_grpc: 4317
   orchestrator: 8765
   open_webui: 3000
+  comfyui: 8188     # image, video and music generation (media)
+  kokoro: 8880      # text to speech, OpenAI-compatible /v1/audio/speech
 
 services:
   # native = run as a local process via `stack.py up`; docker = infrastructure/docker-compose.yml; off = not managed
@@ -82,6 +84,26 @@ services:
   phoenix: native
   orchestrator: native
   open_webui: native
+  comfyui: 'off'    # native once media.root is set and `stack.py setup` installed it
+  kokoro: 'off'     # native once `stack.py setup` installed Kokoro-FastAPI under media.root
+
+media:
+  # Image, video, music and speech tools (docs/design/plans/2026-11-01-multimodal-stack.md). Set `root` per machine,
+  # inside agent_access.allowed_roots; ComfyUI, its models, inputs, outputs and the uv cache go below it.
+  root: ''
+  hf_home: ''                # HF_HOME for media downloads; '' keeps the user's own HF_HOME
+  comfyui_ref: master        # git ref `setup` checks out; pin a commit for repeatable installs
+  torch_index: https://download.pytorch.org/whl/cu130   # CUDA 13 wheels; drivers 580+ (cpu: .../whl/cpu)
+  # --lowvram and --reserve-vram keep ComfyUI working while the chat model holds most of the card (plan G2).
+  comfyui_args: [--lowvram, --reserve-vram, '1.0']
+  image_workflow: z_image_turbo   # config/comfyui/workflows/<name>.json
+  image_size: 1024x1024
+  image_steps: 8
+
+agent_access:
+  # Folders agent sessions and media tools may use (decision D-M6). Empty means "ask the owner": every media path
+  # is refused until the machine file lists it.
+  allowed_roots: []
 
 observability:
   phoenix: true          # LiteLLM -> OTLP/HTTP -> Phoenix

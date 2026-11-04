@@ -97,6 +97,29 @@ Cloud tiers are shown but cannot be changed here. Turning them on is a deliberat
 | Phoenix | http://127.0.0.1:6006 | Shows a trace of every request. |
 | Orchestrator MCP | http://127.0.0.1:8765/mcp | Lets agents hand tasks to departments. |
 | Open WebUI | http://127.0.0.1:3000 | A chat interface. |
+| ComfyUI | http://127.0.0.1:8188 | Makes images for the chat's image button; its own page edits workflows. |
+
+## Making images
+
+When ComfyUI is installed (the installer's media option, or `uv run scripts/stack.py media install`), Open WebUI's
+image button works:
+
+1. In a chat, click **Image** under the message box (or ask the model to draw something; Open WebUI turns the
+   request into an image prompt), then send your description.
+2. The image appears in the chat. The first one after a start or a GPU switch takes about 30 s on SEKAIHOME while
+   the model loads from D:; later ones take about 11 s at 1024 x 1024.
+
+The model is Z-Image-Turbo (Apache-2.0) with 8 steps. Images are saved in `<media.root>\outputs\open-webui`.
+Change the size or steps in `machines/<HOST>.yaml` under `media:` (`image_size`, `image_steps`), then run
+`uv run scripts/stack.py media provision`.
+
+Chat and images share the 12 GB card. The tray's **GPU** card has two buttons: **Media** unloads Ollama's models
+so image jobs get the whole card, and **Chat** asks ComfyUI to free its memory so the next chat loads quickly. Image
+generation also works without switching: ComfyUI runs with `--lowvram` and moves weights to RAM when the chat model
+holds the card, which is slower.
+
+The chat model itself (`local-primary`) still cannot draw; it is a text model. "Draw me a picture" in a plain chat
+gets a text answer unless the image button is on.
 
 ## Working with the departments
 
