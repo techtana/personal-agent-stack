@@ -49,6 +49,9 @@ SETTINGS = [
             "Runs Phoenix and sends gateway spans to it. Smart App Control currently blocks Phoenix here.", "phoenix"),
     Setting("services", "open_webui", "Open WebUI (chat)", "bool",
             "Run the chat UI at http://127.0.0.1:3000.", "open_webui", on_off=("native", "off")),
+    Setting("services", "comfyui", "ComfyUI (images)", "bool",
+            "Run ComfyUI at http://127.0.0.1:8188 for the chat's image button. Needs media.root and `stack.py setup`.",
+            "comfyui", on_off=("native", "off")),
     Setting("ollama_env", "OLLAMA_KEEP_ALIVE", "Keep models loaded for", "choice",
             "How long Ollama keeps an idle model in memory.", "ollama", ["5m", "30m", "1h", "4h", "-1"]),
     Setting("ollama_env", "OLLAMA_KV_CACHE_TYPE", "KV cache precision", "choice",
@@ -64,6 +67,7 @@ EFFECT_TEXT = {
     "gateway": "rebuild configs, restart LiteLLM",
     "phoenix": "rebuild configs, start or stop Phoenix, restart LiteLLM",
     "open_webui": "start or stop Open WebUI",
+    "comfyui": "start or stop ComfyUI and turn Open WebUI's image button on or off",
     "ollama": "update Ollama's environment and restart Ollama (interrupts running requests)",
 }
 
@@ -206,6 +210,19 @@ def apply(old_profile: dict, edits: dict[str, object], log=print) -> dict:
             services.start(profile, ["phoenix"])
         else:
             services.stop(old_profile, ["phoenix"])
+    if "comfyui" in effects:
+        from . import media
+
+        if profile["services"].get("comfyui") == "native":
+            services.start(profile, ["comfyui"])
+        else:
+            services.stop(old_profile, ["comfyui"])
+        keys = media.provision_openwebui(media.openwebui_db(profile), media.image_settings(profile)
+                                         or {"image_generation.enable": False})
+        if keys and "open_webui" not in effects and profile["services"].get("open_webui") == "native":
+            log("Restarting Open WebUI so the image button follows ComfyUI...")
+            services.stop(profile, ["open_webui"])
+            services.start(profile, ["open_webui"])
     if "open_webui" in effects:
         if profile["services"].get("open_webui") == "native":
             services.start(profile, ["open_webui"])

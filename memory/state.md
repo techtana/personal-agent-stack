@@ -28,6 +28,26 @@ Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; des
 - Claude account: Max 5x subscription. No Anthropic API key on this machine; cloud tiers are off (all department tiers resolve to local-primary) until a key is added to .env and `stack.py build` is rerun.
 - Ollama user env (registry, applied; the app was restarted 2026-10-25 via Explorer): FLASH_ATTENTION=1, KV_CACHE_TYPE=q8_0, NUM_PARALLEL=1, MAX_LOADED_MODELS=2, MAX_QUEUE=32, CONTEXT_LENGTH=32768, KEEP_ALIVE=30m, GPU_OVERHEAD=512 MiB, LOAD_TIMEOUT=15m, MODELS=D:\ollama\models.
 
+## Media: images (2026-11-04, branch claude/hf-not-working-0777b4)
+- Owner chose `D:\media` (ComfyUI, models, inputs, outputs, uv cache) and `D:\huggingface` (HF_HOME) as the only
+  folders for media tools and agent sessions; both are in `agent_access.allowed_roots` of machines/SEKAIHOME.yaml.
+- ComfyUI 0.44.0 (commit 56f179f6) in `D:\media\comfyui`, venv from python.org Python 3.14.7, torch 2.14.1+cu130
+  (CUDA available on the RTX 3060). First `import torch` took 47 s (Smart App Control scanning the new DLLs).
+- Smart App Control refused PyAV 19.0.2 (`av\audio\frame.pyd`, CodeIntegrity 3033) and 16.0.1; 17.0.0 runs. Pinned.
+  It also refused SQLAlchemy's Cython speed-up (`_collections_cy.cp314`); SQLAlchemy falls back to pure Python.
+- Z-Image-Turbo int8 (6.2 GB) + Qwen3-4B fp8 text encoder (5.6 GB) + VAE (0.3 GB), all Apache-2.0, in
+  `D:\media\comfyui\models`. 1024 x 1024, 8 steps, no chat model loaded: 32.1 s cold (load from D:), 11.0 s warm,
+  peak 11.6 GB VRAM on the card. Open WebUI's own ComfyUI code with the saved settings: 10.2 s. `smoke --media-only`
+  (512 px, 4 steps, right after a GPU switch to chat): 25.1 s.
+- GPU mode: **Chat** (`POST /free` to ComfyUI) took the card from 8.6 GB to 0.8 GB used.
+- Open WebUI image settings written into `.run/open-webui/webui.db` of the main checkout (backup
+  `webui.db.bak-20261104-015437-media`); Open WebUI reads its config rows per request, so no restart was needed.
+- Not verified: the image button clicked in the browser (the built-in browser could not open 127.0.0.1:3000), an image
+  with the 9B loaded under `--lowvram`, the installer's media step run end to end (the pieces ran by hand), the tray's
+  new GPU card and ComfyUI setting in the live tray (rendered from the worktree only).
+- At 01:49:14 on 2026-11-04 the tray stopped its services and exited and Ollama shut down at the same moment, from
+  outside this session (both logs). ComfyUI was then running only from the session's shell.
+
 ## Local model roles on this machine (since 2026-10-25 evening)
 - `local-primary` and `local-small` both serve qwen3.5:9b at num_ctx 32768 with Ollama's default load options, so all
   eight 9B deployments (primary, small, six `<dept>-local`) share one runner and never reload between tiers.
@@ -157,6 +177,8 @@ once across a session restart.
    (Node.js here is 24.20.0, below openclaw's >=24.22.1, so the step will upgrade it to 26 LTS via winget with UAC).
    Verified: unit tests (53 passed), `stack.py disks` on C:, D: and E:, and a render of both installer pages. Not run:
    the HF and OpenClaw steps for real (they change user env vars, move the cache and upgrade Node.js).
+17. Multimodal, after images (2026-11-04): next packages are vision and new departments (M1), speech with Kokoro
+   (M2), the Auto router (M3), style transfer (T43), video with audio and music (M5a), web search (M6). Each is one PR.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

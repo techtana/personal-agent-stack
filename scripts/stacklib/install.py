@@ -22,7 +22,7 @@ from pathlib import Path
 import yaml
 
 from . import ENV_FILE, IS_WINDOWS, REPO, info, load_dotenv, warn, which
-from . import agents_build, claude_env, disks, litellm_build, ollama, services, winget_build
+from . import agents_build, claude_env, disks, litellm_build, media, ollama, services, winget_build
 from . import profile as prof
 
 INSTALL_DIR = REPO / ".run" / "install"   # under the repository, not data_dir: it must not move while setup runs
@@ -58,6 +58,8 @@ class Plan:
     setup_huggingface: bool = True
     hf_home: str = ""               # HF_HOME; "" puts it next to the models (<models drive>\\huggingface on Windows)
     install_openclaw: bool = False  # may upgrade Node.js machine-wide, so only when chosen in the installer
+    setup_media: bool = True        # ComfyUI and the image model under media.root, when the profile has one
+    media_root: str = ""            # chosen in the installer: written to media.root and agent_access.allowed_roots
 
 
 @dataclass
@@ -165,6 +167,8 @@ def defaults(profile: dict) -> dict:
         "openclaw_installed": bool(which("openclaw")),
         "models": models,
         "models_gb": pull_size_gb(profile, models),
+        "media_root": default_media_root(profile, store),
+        "media_installed": media.comfyui_installed(profile),
     }
 
 
@@ -203,6 +207,40 @@ def save_paths(profile: dict, model_store: str) -> Path:
     parsed = yaml.safe_load(text)
     if parsed.get("model_store") != model_store or (parsed.get("ollama_env") or {}).get("OLLAMA_MODELS") != model_store:
         raise ValueError(f"could not write the models folder into {path.name} safely; edit it by hand")
+    path.write_text(text, encoding="utf-8", newline="\n")
+    return path
+
+
+MEDIA_GB = 16.0    # ComfyUI with PyTorch (~4 GB) and the Z-Image-Turbo files (~12 GB)
+
+
+def default_media_root(profile: dict, model_store: str) -> str:
+    """The profile's media.root, else <models drive>\\media on Windows (next to the other large model files)."""
+    if (profile.get("media") or {}).get("root"):
+        return profile["media"]["root"]
+    if IS_WINDOWS and model_store:
+        return str(Path(Path(model_store).anchor) / "media")
+    return str(Path.home() / "media")
+
+
+def save_media(profile: dict, root: str) -> Path:
+    """Write the owner's media folder into machines/<HOST>.yaml: media.root, services.comfyui native, and the folder
+    (plus HF_HOME's, when set) added to agent_access.allowed_roots, the path guard's list."""
+    from .settings import set_key
+
+    path = prof.machine_file(profile["name"])
+    text = path.read_text(encoding="utf-8")
+    parsed = yaml.safe_load(text) or {}
+    roots = list(((parsed.get("agent_access") or {}).get("allowed_roots")) or [])
+    for want in (root, (profile.get("media") or {}).get("hf_home") or ""):
+        if want and not any(Path(want) == Path(r) for r in roots):
+            roots.append(want)
+    text = set_key(text, "media", "root", root)
+    text = set_key(text, "services", "comfyui", "native")
+    text = set_key(text, "agent_access", "allowed_roots", roots)
+    parsed = yaml.safe_load(text)
+    if (parsed.get("media") or {}).get("root") != root or (parsed.get("agent_access") or {}).get("allowed_roots") != roots:
+        raise ValueError(f"could not write the media folder into {path.name} safely; edit it by hand")
     path.write_text(text, encoding="utf-8", newline="\n")
     return path
 
@@ -458,6 +496,24 @@ def step_huggingface(plan: Plan, profile: dict, report) -> str:
     return "; ".join(notes + ["installed the hf command"])
 
 
+def step_media(plan: Plan, profile: dict, report) -> str:
+    if not plan.setup_media:
+        raise Skip("not chosen")
+    if plan.media_root and (profile.get("media") or {}).get("root") != plan.media_root:
+        save_media(profile, plan.media_root)
+        profile = prof.resolve_profile(profile["name"])
+    if profile["services"].get("comfyui") != "native" or not (profile.get("media") or {}).get("root"):
+        raise Skip("no media folder in the machine profile (media.root); choose one in the installer to add images")
+    if not which("git"):
+        raise RuntimeError("git is not installed; install it (winget install Git.Git) and run setup again")
+    notes = [media.install_comfyui(profile, report)]
+    notes.append(media.install_models(profile, profile["media"].get("image_workflow") or "z_image_turbo", report))
+    changed = media.provision_openwebui(media.openwebui_db(profile), media.image_settings(profile))
+    if changed:
+        notes.append("turned on image generation in Open WebUI (restart it to apply)")
+    return "; ".join(notes)
+
+
 def _version(text: str) -> tuple[int, int, int] | None:
     m = re.search(r"(\d+)\.(\d+)\.(\d+)", text or "")
     return tuple(int(x) for x in m.groups()) if m else None
@@ -510,6 +566,11 @@ def step_openclaw(plan: Plan, profile: dict, report) -> str:
 
 
 def step_build(plan: Plan, profile: dict, report) -> str:
+    from . import paths
+
+    errors, _ = paths.check(profile)
+    if errors:
+        raise RuntimeError("path guard: " + "; ".join(errors))
     agents_build.build_all(profile)
     litellm_build.build(profile)
     winget_build.build()
@@ -566,6 +627,7 @@ STEPS = (
     ("build", "Generate gateway and agent configs", step_build),
     ("pull", "Download models", step_pull),
     ("huggingface", "Set up the Hugging Face cache", step_huggingface),
+    ("media", "Install ComfyUI and the image model", step_media),
     ("openclaw", "Install OpenClaw", step_openclaw),
     ("start", "Start the stack", step_start),
 )

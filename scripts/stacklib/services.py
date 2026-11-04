@@ -13,7 +13,8 @@ from pathlib import Path
 
 from . import IS_WINDOWS, LITELLM_DIR, REPO, TRACES_DIR, env_value, info, load_dotenv, warn, which
 
-SERVICE_ORDER = ["phoenix", "litellm", "orchestrator", "open_webui"]
+# Media services (ComfyUI, Kokoro) start before Open WebUI, which points its image and speech settings at them.
+SERVICE_ORDER = ["phoenix", "litellm", "orchestrator", "comfyui", "kokoro", "open_webui"]
 
 # Services that are uv tools: (uv tool environment, console script). They start through the environment's own
 # Python, not the per-script launcher uv writes to ~/.local/bin. Smart App Control judges each executable by
@@ -133,6 +134,8 @@ def health_url(profile: dict, svc: str) -> str:
         "orchestrator": f"http://127.0.0.1:{p['orchestrator']}/healthz",
         "open_webui": f"http://127.0.0.1:{p['open_webui']}/health",
         "ollama": f"http://127.0.0.1:{p['ollama']}/api/version",
+        "comfyui": f"http://127.0.0.1:{p['comfyui']}/system_stats",
+        "kokoro": f"http://127.0.0.1:{p['kokoro']}/v1/models",
     }[svc]
 
 
@@ -172,6 +175,13 @@ def commands(profile: dict) -> dict[str, dict]:
             "AGENT_STACK_REPO": str(REPO),
         },
     }
+    from . import media
+
+    for svc in ("comfyui", "kokoro"):
+        if profile["services"].get(svc) == "native":
+            spec = media.service_command(profile, svc, base_env)
+            if spec:
+                out[svc] = spec
     if profile["services"].get("open_webui") == "native":
         out["open_webui"] = {
             "cmd": [*tool_command("open_webui"), "serve", "--host", "127.0.0.1", "--port", str(p["open_webui"])],
@@ -189,6 +199,7 @@ def commands(profile: dict) -> dict[str, dict]:
                 "RAG_EMBEDDING_MODEL": profile["models"].get("embed") or "nomic-embed-text",
                 "RAG_OLLAMA_BASE_URL": f"http://127.0.0.1:{p['ollama']}",
                 "ENABLE_EVALUATION_ARENA_MODELS": "false",
+                **media.openwebui_env(profile),
             },
         }
     return out
@@ -208,6 +219,8 @@ EXPECTED_IMAGES = {
     "litellm": ("litellm",),
     "orchestrator": ("uv",),
     "open_webui": ("open-webui",),
+    "comfyui": ("python",),
+    "kokoro": ("python", "uv"),
 }
 # Services run with a console that has no window (CREATE_NO_WINDOW), not with no console at all (DETACHED_PROCESS).
 # Every recorded pid is a launcher: a venv's Scripts\python.exe or uv.exe, each of which starts the real interpreter as

@@ -124,3 +124,42 @@ async def _mcp_check(profile: dict) -> tuple[bool, str]:
             return "delegate" in names, f"tools={names} departments={len(data) if isinstance(data, list) else '?'}"
     except Exception as e:  # noqa: BLE001
         return False, f"{type(e).__name__}: {str(e)[:200]}"
+
+
+def run_media(profile: dict) -> list[dict]:
+    """Media checks: one small image through ComfyUI with the saved workflow (512 px, 4 steps)."""
+    from . import media
+
+    results: list[dict] = []
+
+    def rec(name: str, ok: bool, detail: str = "") -> None:
+        results.append({"test": name, "ok": ok, "detail": detail})
+        info(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}")
+
+    if profile["services"].get("comfyui") != "native":
+        rec("comfyui image", False, "services.comfyui is off in the machine profile")
+        return results
+    base = f"http://127.0.0.1:{profile['ports']['comfyui']}"
+    wf, nodes = media.load_workflow(profile["media"].get("image_workflow") or "z_image_turbo")
+    values = {"prompt": "a yellow circle on a white background", "width": 512, "height": 512, "steps": 4, "seed": 1, "n": 1}
+    for entry in nodes:
+        if entry["type"] in values:
+            for nid in entry["node_ids"]:
+                wf[nid]["inputs"][entry["key"]] = values[entry["type"]]
+    t0 = time.time()
+    code, j = _post(f"{base}/prompt", {"prompt": wf}, {})
+    pid = j.get("prompt_id") if code == 200 else None
+    if not pid:
+        rec("comfyui image", False, f"queue failed: {json.dumps(j)[:200]}")
+        return results
+    status: dict = {}
+    while time.time() - t0 < 600:
+        code, h = _get(f"{base}/history/{pid}", {})
+        status = (h.get(pid) or {}).get("status") or {}
+        if status.get("completed") or status.get("status_str") == "error":
+            break
+        time.sleep(1)
+    images = [im for out in ((h.get(pid) or {}).get("outputs") or {}).values() for im in out.get("images", [])]
+    ok = bool(images) and status.get("status_str") == "success"
+    rec("comfyui image (512 px, 4 steps)", ok, f"{time.time() - t0:.1f}s {images[0]['filename'] if images else status.get('status_str') or 'timed out'}")
+    return results

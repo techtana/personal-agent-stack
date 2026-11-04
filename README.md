@@ -129,7 +129,9 @@ uv run scripts/stack.py up [svc...] | down [svc...] | status
 uv run scripts/stack.py tray [--foreground | --status | --stop | --install-startup | --remove-startup]
 uv run scripts/stack.py tasks install|remove|start|stop|status|xml [svc...] [--trigger startup|logon]
 uv run scripts/stack.py bench [--model m] [--num-ctx n] [--tokens n] [--runs n]
-uv run scripts/stack.py smoke [--dept id] [--skip-mcp]
+uv run scripts/stack.py smoke [--dept id] [--skip-mcp] [--media | --media-only]
+uv run scripts/stack.py media check|install|provision          ComfyUI and image models under media.root (path guard first)
+uv run scripts/stack.py media gpu chat|media                   hand the GPU to chat (free ComfyUI) or media (unload Ollama)
 uv run scripts/stack.py why-routed [--last n] [--days n]
 uv run scripts/stack.py retro -- --days 7 [--reflect local-small|none] [--pr]
 uv run scripts/stack.py skills-sync [--dry-run]                 copy your own skills into skills/ (rules: skills/sync.yaml)
@@ -164,6 +166,11 @@ Tracker: https://github.com/techtana/personal-agent-stack/issues
   tray's Settings tab. The tray's Usage tab reads the JSONL traces and does not need Phoenix.
 - Smart App Control may also start blocking the uv tool environments' `python.exe` (see the open items in `memory/state.md`).
 - The LiteLLM admin UI (`/ui`, the tray's **Open gateway admin** link) shows "Not connected to DB!" because it needs Postgres.
+- Images (2026-11-04): Smart App Control refused PyAV 19.0.2 and 16.0.1 inside ComfyUI's environment; 17.0.0 runs,
+  so setup pins `av==17.0.0` (`media.SAC_PINS`). A future refusal shows as "An Application Control policy has blocked
+  this file" in `.run/logs/comfyui.log`.
+- Vision, speech, the Auto router, style transfer, video with audio, music and web search from the multimodal plan
+  are not built yet (docs/design/plans/2026-11-01-multimodal-stack.md).
 - `local-reviewer` points at `flint:40b-a2b`, which is not pulled. No tier routes to it.
 - A chat message cannot switch models. Open WebUI sends each message to the model picked in the chat's model list
   (or with `@` in the input box), and `local-primary` is always the local model.

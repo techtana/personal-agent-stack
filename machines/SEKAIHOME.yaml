@@ -32,6 +32,17 @@ ollama_env:
   # per-machine additions/overrides to machines/_defaults.yaml:ollama_env
   OLLAMA_MODELS: 'D:\ollama\models'
 
+services:
+  comfyui: native
+
+media:
+  # Chosen by the owner 2026-11-04: media tools live on the USB SSD next to the Ollama models.
+  root: 'D:\media'
+  hf_home: 'D:\huggingface'
+
+agent_access:
+  allowed_roots: ['D:\media', 'D:\huggingface']
+
 # External models are off (policy/privacy.yaml). Account: Claude Max 5x subscription; no API key on this machine.
 
 notes:

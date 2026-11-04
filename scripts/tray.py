@@ -83,7 +83,7 @@ import psutil  # noqa: E402
 import pystray  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
-from stacklib import IS_WINDOWS, ollama, process_metrics, profile as prof, services  # noqa: E402
+from stacklib import IS_WINDOWS, media, ollama, process_metrics, profile as prof, services  # noqa: E402
 from stacklib import settings as cfg  # noqa: E402
 from stacklib import startup, usage  # noqa: E402
 
@@ -97,6 +97,8 @@ LABELS = {
     "litellm": "LiteLLM gateway",
     "orchestrator": "Orchestrator MCP",
     "open_webui": "Open WebUI",
+    "comfyui": "ComfyUI",
+    "kokoro": "Kokoro",
 }
 ROLES = {
     "ollama": "runs the local models",
@@ -104,6 +106,8 @@ ROLES = {
     "litellm": "one API for every model",
     "orchestrator": "department delegation for agents",
     "open_webui": "chat in the browser",
+    "comfyui": "image, video and music generation",
+    "kokoro": "text to speech",
 }
 COLORS = {"ok": "#2e9d57", "warn": "#d99a1e", "bad": "#c94a3d", "idle": "#8a8f98"}  # tray icon fills
 FONT = "Segoe UI" if IS_WINDOWS else "TkDefaultFont"
@@ -132,6 +136,7 @@ def ui_links(p: dict) -> dict[str, str]:
         "open_webui": f"http://127.0.0.1:{ports['open_webui']}",
         "phoenix": f"http://127.0.0.1:{ports['phoenix']}",
         "litellm": f"http://127.0.0.1:{ports['litellm']}/ui",
+        "comfyui": f"http://127.0.0.1:{ports['comfyui']}",
     }
 
 
@@ -373,6 +378,25 @@ class TrayApp:
     def toggle(self, svc: str) -> None:
         self._act("stop" if self._running(svc) else "start", [svc])
 
+    def set_gpu_mode(self, mode: str) -> None:
+        """Hand the GPU to chat or to media (plan G1). Runs off the Tk thread: unloading a model takes seconds."""
+        def run() -> None:
+            try:
+                msg = media.gpu_mode(self.profile, mode)
+            except Exception as e:  # noqa: BLE001 - shown on the window, never fatal
+                msg = f"failed: {e}"
+            self.gpu_text = f"{'Chat' if mode == 'chat' else 'Media'}: {msg} ({datetime.now():%H:%M})"
+            self.ui_queue.put(self._render_gpu)
+            self.refresh_soon()
+
+        self.gpu_text = f"Switching to {mode}..."
+        self.ui_queue.put(self._render_gpu)
+        threading.Thread(target=run, daemon=True).start()
+
+    def _render_gpu(self) -> None:
+        if self._window_built() and getattr(self, "gpu_label", None):
+            self.gpu_label.configure(text=self.gpu_text)
+
     def open_url(self, svc: str) -> None:
         webbrowser.open(ui_links(self.profile)[svc])
 
@@ -422,6 +446,10 @@ class TrayApp:
             pystray.MenuItem("Open chat (Open WebUI)", lambda *_: webbrowser.open(links["open_webui"])),
             pystray.MenuItem("Open traces (Phoenix)", lambda *_: webbrowser.open(links["phoenix"])),
             pystray.MenuItem("Open gateway admin (LiteLLM)", lambda *_: webbrowser.open(links["litellm"])),
+            pystray.MenuItem("Open image studio (ComfyUI)", lambda *_: webbrowser.open(links["comfyui"])),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("GPU for chat (free ComfyUI's memory)", lambda *_: self.set_gpu_mode("chat")),
+            pystray.MenuItem("GPU for media (unload Ollama's models)", lambda *_: self.set_gpu_mode("media")),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Start all services", self.start_all),
             pystray.MenuItem("Stop all services", self.stop_all),
@@ -523,7 +551,7 @@ class TrayApp:
         t = self.t
         w = tk.Toplevel(self.root, bg=t["page"])
         w.title("Agent Stack")
-        w.geometry("940x720")
+        w.geometry("940x800")  # seven service rows, the GPU card and the button bar
         w.minsize(760, 560)
         w.protocol("WM_DELETE_WINDOW", w.withdraw)  # closing hides it; the tray keeps running
         if IS_WINDOWS and system_theme() == "dark":
@@ -594,13 +622,24 @@ class TrayApp:
             show.grid_remove()
             self.reason_widgets[svc] = (reason, show)
 
-        models = self._card(tab, "Loaded in Ollama", row=1, column=0, pady=(12, 0))
+        gpu = self._card(tab, "GPU", row=1, column=0, pady=(12, 0))
+        gpu.columnconfigure(0, weight=1)
+        self.gpu_text = getattr(self, "gpu_text", "Chat and media share the card: give it to media before long image "
+                                "or video jobs, back to chat for fast replies.")
+        self.gpu_label = ttk.Label(gpu, text=self.gpu_text, style="Card.Muted.TLabel", wraplength=640, justify="left")
+        self.gpu_label.grid(row=1, column=0, sticky="w")
+        gbtn = ttk.Frame(gpu, style="Card.TFrame")
+        gbtn.grid(row=1, column=1, sticky="e")
+        ttk.Button(gbtn, text="Chat", width=7, command=lambda: self.set_gpu_mode("chat")).pack(side="left", padx=2)
+        ttk.Button(gbtn, text="Media", width=7, command=lambda: self.set_gpu_mode("media")).pack(side="left", padx=2)
+
+        models = self._card(tab, "Loaded in Ollama", row=2, column=0, pady=(12, 0))
         models.columnconfigure(0, weight=1)
         self.loaded_frame = ttk.Frame(models, style="Card.TFrame")
         self.loaded_frame.grid(row=1, column=0, sticky="we")
 
         bar = ttk.Frame(tab, padding=(0, 12, 0, 0))
-        bar.grid(row=2, column=0, sticky="we")
+        bar.grid(row=3, column=0, sticky="we")
         ttk.Button(bar, text="Open chat", style="Accent.TButton", command=lambda: self.open_url("open_webui")).pack(side="left")
         self.start_btn = ttk.Button(bar, text="Start all", command=self.start_all)
         self.start_btn.pack(side="left", padx=(8, 4))

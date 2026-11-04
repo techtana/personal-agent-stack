@@ -205,6 +205,23 @@ SEKAIHOME.
 3. Go to **Admin > Integrations > External Tool Servers**. Add an MCP (Streamable HTTP) server at
    `http://127.0.0.1:8765/mcp`, using the `ORCHESTRATOR_BEARER` value from `.env` as the bearer.
 
+### 6b. Images (optional)
+
+The installer has a **Media** folder field and an option **Install ComfyUI and the image model** (about 16 GB:
+ComfyUI, PyTorch with CUDA and Z-Image-Turbo). The folder is written to `machines/<HOST>.yaml` as `media.root` and
+added to `agent_access.allowed_roots`, the list of folders media tools and agent sessions may use. Setup then:
+
+- clones ComfyUI into `<media.root>\comfyui` and builds its Python environment from the python.org Python (its
+  signed launchers pass Smart App Control), with the uv download cache in `<media.root>\.uv-cache`;
+- downloads the model files listed in `config/comfyui/MODELS.md` (open licences only) into `<media.root>\comfyui\models`;
+- turns on Open WebUI's image button: it writes the ComfyUI address, the saved workflow
+  (`config/comfyui/workflows/z_image_turbo.json`) and its node map into Open WebUI's settings, after a backup
+  `webui.db.bak-<time>-media`. Open WebUI reads them at once; reload the browser page.
+
+From the command line: `uv run scripts/stack.py media check` (path guard and what is missing), `media install`,
+`media provision`. `stack.py build` and setup stop with a "path guard" error when a media folder is outside
+`agent_access.allowed_roots`.
+
 ### 7. External models
 
 Off. The project is private first: every tier runs on local models, and an API key in `.env` changes nothing.

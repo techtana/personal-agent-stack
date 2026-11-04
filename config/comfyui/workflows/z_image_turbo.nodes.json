@@ -1,0 +1,9 @@
+[
+  {"type": "prompt", "key": "text", "node_ids": ["27"]},
+  {"type": "model", "key": "unet_name", "node_ids": ["28"]},
+  {"type": "width", "key": "width", "node_ids": ["13"]},
+  {"type": "height", "key": "height", "node_ids": ["13"]},
+  {"type": "steps", "key": "steps", "node_ids": ["3"]},
+  {"type": "seed", "key": "seed", "node_ids": ["3"]},
+  {"type": "n", "key": "batch_size", "node_ids": ["13"]}
+]
