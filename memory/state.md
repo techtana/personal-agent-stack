@@ -157,6 +157,13 @@ once across a session restart.
    (Node.js here is 24.20.0, below openclaw's >=24.22.1, so the step will upgrade it to 26 LTS via winget with UAC).
    Verified: unit tests (53 passed), `stack.py disks` on C:, D: and E:, and a render of both installer pages. Not run:
    the HF and OpenClaw steps for real (they change user env vars, move the cache and upgrade Node.js).
+17. First-query load time (2026-11-04, branch claude/first-query-load-time-0363f4): the gateway no longer sends
+   keep_alive for chat models (local-small's 30m used to cut local-primary's -1 short on the shared 9B runner), so
+   OLLAMA_KEEP_ALIVE decides for all of them; its default is now 4h. The tray (at autostart, waiting up to 5 min for
+   Ollama) and `stack.py up` (unless --no-warm) load the primary with its gateway num_ctx and options. Verified: unit
+   tests 79 passed; live cold warm-up 23.3 s from D:, the next 32k request loaded in 3 ms and answered in 0.23 s. Not done:
+   this machine's registry still has OLLAMA_KEEP_ALIVE=30m (set 4h in the tray's Settings, which restarts Ollama, or
+   rerun setup), and the live tray runs the new code only after a restart from the main checkout.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

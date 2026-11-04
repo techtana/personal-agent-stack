@@ -32,7 +32,6 @@ model_list:
     model: ollama_chat/qwen3.5:9b
     api_base: http://127.0.0.1:11434
     num_ctx: 32768
-    keep_alive: 30m
   model_info:
     input_cost_per_token: 0
     output_cost_per_token: 0
@@ -48,7 +47,6 @@ model_list:
     model: ollama_chat/qwen3.5:9b
     api_base: http://127.0.0.1:11434
     num_ctx: 32768
-    keep_alive: -1
   model_info:
     input_cost_per_token: 0
     output_cost_per_token: 0
@@ -81,7 +79,6 @@ model_list:
     model: ollama_chat/qwen3.5:9b
     api_base: http://127.0.0.1:11434
     num_ctx: 32768
-    keep_alive: -1
     temperature: 0.2
   model_info:
     input_cost_per_token: 0
@@ -130,7 +127,6 @@ model_list:
     model: ollama_chat/qwen3.5:9b
     api_base: http://127.0.0.1:11434
     num_ctx: 32768
-    keep_alive: -1
     temperature: 0.1
   model_info:
     input_cost_per_token: 0
@@ -180,7 +176,6 @@ model_list:
     model: ollama_chat/qwen3.5:9b
     api_base: http://127.0.0.1:11434
     num_ctx: 32768
-    keep_alive: -1
     temperature: 0.2
   model_info:
     input_cost_per_token: 0
@@ -230,7 +225,6 @@ model_list:
     model: ollama_chat/qwen3.5:9b
     api_base: http://127.0.0.1:11434
     num_ctx: 32768
-    keep_alive: -1
     temperature: 0.3
   model_info:
     input_cost_per_token: 0
@@ -279,7 +273,6 @@ model_list:
     model: ollama_chat/qwen3.5:9b
     api_base: http://127.0.0.1:11434
     num_ctx: 32768
-    keep_alive: -1
     temperature: 0.1
   model_info:
     input_cost_per_token: 0
@@ -331,7 +324,6 @@ model_list:
     model: ollama_chat/qwen3.5:9b
     api_base: http://127.0.0.1:11434
     num_ctx: 32768
-    keep_alive: -1
     temperature: 0.2
   model_info:
     input_cost_per_token: 0
