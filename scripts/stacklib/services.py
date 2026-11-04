@@ -139,6 +139,20 @@ def health_url(profile: dict, svc: str) -> str:
     }[svc]
 
 
+def gateway_label_env(profile: dict) -> dict[str, str]:
+    """Switches for infrastructure/litellm/custom_callbacks.py: trace writing, the model label on chat replies, and
+    the image model named in that label after Open WebUI made an image (it calls ComfyUI directly, not the gateway)."""
+    from . import media
+
+    obs = profile["observability"]
+    label = bool(obs.get("model_label", True))
+    return {
+        "AGENT_STACK_JSONL_TRACES": "1" if obs.get("jsonl_traces", True) else "0",
+        "AGENT_STACK_MODEL_LABEL": "1" if label else "0",
+        "AGENT_STACK_IMAGE_LABEL": media.image_label(profile) if label else "",
+    }
+
+
 def commands(profile: dict) -> dict[str, dict]:
     """Command line, cwd and env for each native service."""
     dotenv = load_dotenv()
@@ -156,6 +170,7 @@ def commands(profile: dict) -> dict[str, dict]:
             "env": {**base_env, "PHOENIX_PORT": str(p["phoenix"]), "PHOENIX_GRPC_PORT": str(p["phoenix_grpc"]), "PHOENIX_HOST": "127.0.0.1", "PHOENIX_WORKING_DIR": str(d / "phoenix")},
         }
     litellm_env = {**base_env, "LITELLM_MASTER_KEY": master, "TRACES_DIR": str(TRACES_DIR / "litellm"), "LITELLM_LOG": "INFO"}
+    litellm_env.update(gateway_label_env(profile))
     if profile["observability"].get("phoenix"):
         litellm_env.update({"OTEL_EXPORTER": "otlp_http", "OTEL_ENDPOINT": f"http://127.0.0.1:{p['phoenix']}/v1/traces", "OTEL_SERVICE_NAME": "litellm"})
     out["litellm"] = {

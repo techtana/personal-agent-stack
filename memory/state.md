@@ -202,6 +202,15 @@ once across a session restart.
    Restart the tray from the main checkout after merging.
 19. Multimodal, after images (2026-11-04): next packages are vision and new departments (M1), speech with Kokoro
    (M2), the Auto router (M3), style transfer (T43), video with audio and music (M5a), web search (M6). Each is one PR.
+20. Model label (2026-11-04, branch claude/expose-model-info-978e1d): every chat reply through the gateway ends with
+   `**Used:** qwen3.5:9b (Local) via <alias>` (router aliases keep their **Route:** line), and after Open WebUI made an
+   image, `**Image:** Z-Image-Turbo int8 (ComfyUI, 1024x1024, 8 steps)`. Open WebUI calls ComfyUI directly, so the gateway
+   spots the image by the `<context>The requested image has been ...created` system text Open WebUI 0.12 adds to the
+   follow-up chat request; the label comes from the profile, not from Open WebUI's admin settings. JSON-mode requests,
+   tool calls and FIM completions get no footer. Switch: `observability.model_label` (tray: Show model in replies).
+   Verified: unit tests 134 passed; a second gateway on port 4010 with this code answered local-primary, app-dev,
+   an image-context request, JSON mode and a streamed reply as expected. Not verified: the image button in the browser.
+   The live gateway shows the new label only after the tray restarts from the main checkout.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

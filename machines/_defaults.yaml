@@ -108,6 +108,7 @@ agent_access:
 observability:
   phoenix: true          # LiteLLM -> OTLP/HTTP -> Phoenix
   jsonl_traces: true     # LiteLLM custom callback -> traces/litellm/*.jsonl
+  model_label: true      # chat replies end with the model that answered (and the image model after an image)
   gpu_exporter: false    # winget install utkuozdemir.nvidia_gpu_exporter (Prometheus :9835)
 
 # External models (off by default) and data classes: policy/privacy.yaml.

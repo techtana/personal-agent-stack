@@ -45,6 +45,8 @@ SETTINGS = [
             "gateway", CTX_CHOICES),
     Setting("observability", "jsonl_traces", "Write usage traces", "bool",
             "The gateway logs each request to traces/litellm/; the Usage tab and retros read them.", "gateway"),
+    Setting("observability", "model_label", "Show model in replies", "bool",
+            "Each chat reply ends with the model that answered, and the image model after an image.", "gateway"),
     Setting("observability", "phoenix", "Phoenix tracing", "bool",
             "Runs Phoenix and sends gateway spans to it. Smart App Control currently blocks Phoenix here.", "phoenix"),
     Setting("services", "open_webui", "Open WebUI (chat)", "bool",
@@ -228,7 +230,8 @@ def apply(old_profile: dict, edits: dict[str, object], log=print) -> dict:
             services.start(profile, ["open_webui"])
         else:
             services.stop(old_profile, ["open_webui"])
-    if effects & {"gateway", "phoenix"}:
+    # comfyui too: the gateway's environment names the image model for the reply label (services.gateway_label_env).
+    if effects & {"gateway", "phoenix", "comfyui"}:
         owned = next(r for r in services.status(profile) if r["service"] == "litellm")
         if "litellm" in supervised:
             log("LiteLLM runs under a scheduled task: restart it with `stack.py tasks stop litellm` then `start`")
