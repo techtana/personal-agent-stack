@@ -217,6 +217,9 @@ class TrayApp:
         self.icon = pystray.Icon("agent-stack", make_icon(COLORS["idle"]), "Agent Stack: starting", menu=self._menu())
         if autostart:
             self._act("start", self.managed)
+            # Load the primary model now, so the first chat after login does not wait for it. Ollama may still be
+            # starting at login, hence the wait.
+            threading.Thread(target=lambda: print(f"[tray] {ollama.warm_primary(self.profile, wait=300)}"), daemon=True).start()
 
     # ---------- state ----------
     def refresh(self) -> None:

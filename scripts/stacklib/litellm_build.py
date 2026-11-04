@@ -37,12 +37,14 @@ def build_config(profile: dict) -> str:
     if m.get("embed"):
         add("local-embed", {"model": f"ollama/{m['embed']}", "api_base": base},
             {"mode": "embedding", "input_cost_per_token": 0, "output_cost_per_token": 0})
+    # No keep_alive on chat deployments: Ollama keeps the last request's value, so local-small's 30m used to cut
+    # local-primary's "forever" short for the shared runner. OLLAMA_KEEP_ALIVE now decides for every one of them.
     if m.get("small"):
-        add("local-small", _ollama(m["small"], base, num_ctx=m["small_num_ctx"], keep_alive="30m"),
+        add("local-small", _ollama(m["small"], base, num_ctx=m["small_num_ctx"]),
             {**LOCAL_INFO, "max_input_tokens": m["small_num_ctx"], "max_output_tokens": 8192})
     primary_opts = m.get("primary_options") or {}
     if m.get("primary"):
-        add("local-primary", _ollama(m["primary"], base, num_ctx=m["primary_num_ctx"], keep_alive=-1, **primary_opts),
+        add("local-primary", _ollama(m["primary"], base, num_ctx=m["primary_num_ctx"], **primary_opts),
             {**LOCAL_INFO, "max_input_tokens": m["primary_num_ctx"], "max_output_tokens": 8192})
     if m.get("reviewer"):
         add("local-reviewer", _ollama(m["reviewer"], base, num_ctx=m["primary_num_ctx"], keep_alive="10m", **(m.get("reviewer_options") or {})),
@@ -61,7 +63,7 @@ def build_config(profile: dict) -> str:
         r = a.get("routing") or {}
         if m.get("primary"):
             # Same model and load options as local-primary so Ollama reuses one runner instead of reloading per department.
-            add(f"{aid}-local", _ollama(m["primary"], base, num_ctx=m["primary_num_ctx"], keep_alive=-1, **primary_opts, **(a.get("local") or {})),
+            add(f"{aid}-local", _ollama(m["primary"], base, num_ctx=m["primary_num_ctx"], **primary_opts, **(a.get("local") or {})),
                 {**LOCAL_INFO, "max_input_tokens": m["primary_num_ctx"], "max_output_tokens": 8192})
         tiers = {}
         for low, up in TIERS.items():

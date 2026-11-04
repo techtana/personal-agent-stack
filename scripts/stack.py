@@ -227,6 +227,9 @@ def cmd_up(a):
     st = services.wait_healthy(p, names, timeout=a.wait)
     for s, ok in st.items():
         info(f"{'healthy    ' if ok else 'NOT healthy'}  {s:<13} {services.health_url(p, s)}")
+    if not a.no_warm:
+        info("loading the primary model so the first request does not wait for it (--no-warm skips this)")
+        info(ollama.warm_primary(p))
 
 
 def cmd_down(a):
@@ -350,7 +353,8 @@ def main(argv=None):
     s = sub.add_parser("openclaw", help="make the gateway OpenClaw's only model endpoint (onboards it if needed)")
     s.add_argument("--check", action="store_true", help="only report where OpenClaw's models point"); s.set_defaults(f=cmd_openclaw)
     s = sub.add_parser("pull"); s.add_argument("--all", action="store_true"); s.set_defaults(f=cmd_pull)
-    s = sub.add_parser("up"); s.add_argument("services", nargs="*"); s.add_argument("--wait", type=float, default=150); s.set_defaults(f=cmd_up)
+    s = sub.add_parser("up"); s.add_argument("services", nargs="*"); s.add_argument("--wait", type=float, default=150)
+    s.add_argument("--no-warm", action="store_true", help="do not load the primary model after starting"); s.set_defaults(f=cmd_up)
     s = sub.add_parser("down"); s.add_argument("services", nargs="*"); s.set_defaults(f=cmd_down)
     s = sub.add_parser("status"); s.set_defaults(f=cmd_status)
     s = sub.add_parser("run"); s.add_argument("service", choices=services.SERVICE_ORDER); s.set_defaults(f=cmd_run)
