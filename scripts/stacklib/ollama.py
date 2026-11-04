@@ -138,6 +138,35 @@ def ps(base: str) -> list[dict]:
         return []
 
 
+def warm(base: str, model: str, num_ctx: int, options: dict | None = None, timeout: float = 900) -> float:
+    """Load `model` with no prompt, so the first real request skips the cold load; returns seconds taken.
+    num_ctx and options must match the gateway deployment, or that request reloads the runner. No keep_alive is sent:
+    OLLAMA_KEEP_ALIVE decides how long the model stays, as it does for gateway requests."""
+    t0 = time.time()
+    api(base, "/api/generate", {"model": model, "stream": False, "options": {"num_ctx": num_ctx, **(options or {})}}, timeout=timeout)
+    return time.time() - t0
+
+
+def warm_primary(profile: dict, wait: float = 0) -> str:
+    """Warm the model behind local-primary (or local-small when there is no primary) and say what happened.
+    `wait` is how long to wait for Ollama to answer first, for callers that start before it does (the tray at login)."""
+    m = profile["models"]
+    model, num_ctx = (m.get("primary"), m["primary_num_ctx"]) if m.get("primary") else (m.get("small"), m.get("small_num_ctx"))
+    if not model:
+        return "warm-up skipped: no local chat model in this profile"
+    base = f"http://127.0.0.1:{profile['ports']['ollama']}"
+    deadline = time.time() + wait
+    while version(base) is None:
+        if time.time() >= deadline:
+            return "warm-up skipped: Ollama is not answering"
+        time.sleep(5)
+    try:
+        secs = warm(base, model, num_ctx, m.get("primary_options") if m.get("primary") else None)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return f"warm-up of {model} failed: {e}"
+    return f"warmed {model} (num_ctx {num_ctx}) in {secs:.1f} s"
+
+
 def nvidia_used_mib() -> int | None:
     try:
         out = subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10).stdout

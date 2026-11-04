@@ -62,7 +62,7 @@ ollama_env:
   OLLAMA_MAX_LOADED_MODELS: "{auto}"
   OLLAMA_MAX_QUEUE: "32"
   OLLAMA_CONTEXT_LENGTH: "{auto}"
-  OLLAMA_KEEP_ALIVE: "30m"
+  OLLAMA_KEEP_ALIVE: "4h"     # the gateway sends no keep_alive for chat models, so this governs them; the tray warms the primary at start
   OLLAMA_GPU_OVERHEAD: "536870912"
   OLLAMA_LOAD_TIMEOUT: "15m"   # default 5m is too short for a 22 GB MoE read from a USB SSD under memory pressure
   # LLAMA_ARG_N_CPU_MOE: "24"   # optional manual expert-offload override passed through to llama-server (see bench)

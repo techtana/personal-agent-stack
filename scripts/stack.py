@@ -152,14 +152,20 @@ def install_in_terminal():
         tools_need = install.TOOLS_GB if d["tools_missing"] else 0.1
         tool_dir = ask_dir("Python tools folder (LiteLLM, Phoenix, Open WebUI)", d["tool_dir"], tools_need)
         tool_dir = "" if d["tool_dir"] and Path(tool_dir) == Path(d["tool_dir"]) else tool_dir
+        if not d["openclaw_installed"]:
+            openclaw = ask_yes("Install OpenClaw with npm and point it at this stack's gateway "
+                               "(upgrades Node.js with winget first if it is too old)?")
+        else:
+            openclaw = bool(d["openclaw_state"]) and ask_yes(
+                f"OpenClaw: {d['openclaw_state'].lower()}. Point it at this stack's gateway (keeps a backup)?")
         plan = install.Plan(model_store=store, tool_dir=tool_dir, move_models_from=move,
                             install_ollama=d["ollama_missing"] and ask_yes("Ollama is not installed. Install it with winget?"),
                             pull=pull,
                             check_disks=ask_yes("Check how fast each drive is (writes a 256 MB test file per drive)?"),
                             setup_huggingface=ask_yes(f"Put the Hugging Face cache in {install.default_hf_home(store)} "
                                                       "and install the hf command?"),
-                            install_openclaw=not d["openclaw_installed"] and ask_yes(
-                                "Install OpenClaw with npm (upgrades Node.js with winget first if it is too old)?"),
+                            install_openclaw=not d["openclaw_installed"] and openclaw,
+                            setup_openclaw=openclaw,
                             setup_media=ask_yes(f"Install ComfyUI and the image model (about {install.MEDIA_GB:.0f} GB) "
                                                 f"in {d['media_root']}? Agent sessions and media tools may use only that folder."),
                             media_root=d["media_root"],
@@ -203,6 +209,19 @@ def cmd_disks(a):
         info(line)
 
 
+def cmd_openclaw(a):
+    from stacklib import clients
+
+    p = prof.resolve_profile()
+    if not a.check:
+        try:
+            info(clients.setup_openclaw(p, lambda m: info(m)))
+        except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as e:
+            die(f"OpenClaw setup failed: {e}")
+    s = clients.openclaw(p["ports"]["litellm"])
+    (info if s.level in ("ok", "off") else warn)(f"OpenClaw: {s.state}. {s.detail}")
+
+
 def cmd_pull(a):
     p = prof.resolve_profile()
     m = p["models"]
@@ -218,6 +237,9 @@ def cmd_up(a):
     st = services.wait_healthy(p, names, timeout=a.wait)
     for s, ok in st.items():
         info(f"{'healthy    ' if ok else 'NOT healthy'}  {s:<13} {services.health_url(p, s)}")
+    if not a.no_warm:
+        info("loading the primary model so the first request does not wait for it (--no-warm skips this)")
+        info(ollama.warm_primary(p))
 
 
 def cmd_down(a):
@@ -363,8 +385,11 @@ def main(argv=None):
     s.add_argument("--worker", help=argparse.SUPPRESS); s.set_defaults(f=cmd_install)
     s = sub.add_parser("disks", help="measure drive speeds and suggest where models, tools and caches go")
     s.add_argument("drives", nargs="*", help="drive roots such as C:\\ D:\\ (default: every local drive)"); s.set_defaults(f=cmd_disks)
+    s = sub.add_parser("openclaw", help="make the gateway OpenClaw's only model endpoint (onboards it if needed)")
+    s.add_argument("--check", action="store_true", help="only report where OpenClaw's models point"); s.set_defaults(f=cmd_openclaw)
     s = sub.add_parser("pull"); s.add_argument("--all", action="store_true"); s.set_defaults(f=cmd_pull)
-    s = sub.add_parser("up"); s.add_argument("services", nargs="*"); s.add_argument("--wait", type=float, default=150); s.set_defaults(f=cmd_up)
+    s = sub.add_parser("up"); s.add_argument("services", nargs="*"); s.add_argument("--wait", type=float, default=150)
+    s.add_argument("--no-warm", action="store_true", help="do not load the primary model after starting"); s.set_defaults(f=cmd_up)
     s = sub.add_parser("down"); s.add_argument("services", nargs="*"); s.set_defaults(f=cmd_down)
     s = sub.add_parser("status"); s.set_defaults(f=cmd_status)
     s = sub.add_parser("run"); s.add_argument("service", choices=services.SERVICE_ORDER); s.set_defaults(f=cmd_run)

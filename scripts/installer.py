@@ -77,7 +77,7 @@ class Installer:
         self.start = tk.BooleanVar(value=True)
         self.disks = tk.BooleanVar(value=True)
         self.hf = tk.BooleanVar(value=True)
-        self.openclaw = tk.BooleanVar(value=not d["openclaw_installed"])
+        self.openclaw = tk.BooleanVar(value=not d["openclaw_installed"] or bool(d["openclaw_state"]))
         self.media_root = tk.StringVar(value=d["media_root"])
         self.media = tk.BooleanVar(value=True)
 
@@ -106,8 +106,11 @@ class Installer:
         self.hf_box = ttk.Checkbutton(opts, variable=self.hf)
         self.hf_box.grid(sticky="w")
         if not d["openclaw_installed"]:
-            ttk.Checkbutton(opts, variable=self.openclaw, text="Install OpenClaw with npm (upgrades Node.js with winget "
-                            "first if it is too old; Windows asks for admin)").grid(sticky="w")
+            ttk.Checkbutton(opts, variable=self.openclaw, text="Install OpenClaw with npm and point it at this stack's "
+                            "gateway (upgrades Node.js with winget first if it is too old; Windows asks for admin)").grid(sticky="w")
+        elif d["openclaw_state"]:
+            ttk.Checkbutton(opts, variable=self.openclaw, text=f"Point OpenClaw at this stack's gateway (now: "
+                            f"{d['openclaw_state'].lower()}; OpenClaw keeps a backup of its config)").grid(sticky="w")
         ttk.Checkbutton(opts, variable=self.media, command=self.validate,
                         text=f"Install ComfyUI and the image model in the media folder (about {install.MEDIA_GB:.0f} GB)").grid(sticky="w")
         ttk.Checkbutton(opts, variable=self.start, text="Start the stack when setup finishes (tray app)").grid(sticky="w")
@@ -201,6 +204,7 @@ class Installer:
                 check_disks=self.disks.get(),
                 setup_huggingface=self.hf.get(),
                 install_openclaw=not self.d["openclaw_installed"] and self.openclaw.get(),
+                setup_openclaw=self.openclaw.get(),
                 setup_media=self.media.get(),
                 media_root=str(Path(self.media_root.get().strip()).expanduser()) if self.media.get() else "",
             )

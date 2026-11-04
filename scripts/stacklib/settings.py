@@ -53,7 +53,7 @@ SETTINGS = [
             "Run ComfyUI at http://127.0.0.1:8188 for the chat's image button. Needs media.root and `stack.py setup`.",
             "comfyui", on_off=("native", "off")),
     Setting("ollama_env", "OLLAMA_KEEP_ALIVE", "Keep models loaded for", "choice",
-            "How long Ollama keeps an idle model in memory.", "ollama", ["5m", "30m", "1h", "4h", "-1"]),
+            "How long an idle chat model stays in memory, gateway requests included; -1 holds its VRAM until Ollama stops.", "ollama", ["5m", "30m", "1h", "4h", "-1"]),
     Setting("ollama_env", "OLLAMA_KV_CACHE_TYPE", "KV cache precision", "choice",
             "q8_0 halves cache VRAM versus f16 with little quality loss; q4_0 saves more.", "ollama",
             ["f16", "q8_0", "q4_0"]),
