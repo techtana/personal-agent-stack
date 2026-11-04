@@ -145,14 +145,20 @@ def install_in_terminal():
         tools_need = install.TOOLS_GB if d["tools_missing"] else 0.1
         tool_dir = ask_dir("Python tools folder (LiteLLM, Phoenix, Open WebUI)", d["tool_dir"], tools_need)
         tool_dir = "" if d["tool_dir"] and Path(tool_dir) == Path(d["tool_dir"]) else tool_dir
+        if not d["openclaw_installed"]:
+            openclaw = ask_yes("Install OpenClaw with npm and point it at this stack's gateway "
+                               "(upgrades Node.js with winget first if it is too old)?")
+        else:
+            openclaw = bool(d["openclaw_state"]) and ask_yes(
+                f"OpenClaw: {d['openclaw_state'].lower()}. Point it at this stack's gateway (keeps a backup)?")
         plan = install.Plan(model_store=store, tool_dir=tool_dir, move_models_from=move,
                             install_ollama=d["ollama_missing"] and ask_yes("Ollama is not installed. Install it with winget?"),
                             pull=pull,
                             check_disks=ask_yes("Check how fast each drive is (writes a 256 MB test file per drive)?"),
                             setup_huggingface=ask_yes(f"Put the Hugging Face cache in {install.default_hf_home(store)} "
                                                       "and install the hf command?"),
-                            install_openclaw=not d["openclaw_installed"] and ask_yes(
-                                "Install OpenClaw with npm (upgrades Node.js with winget first if it is too old)?"),
+                            install_openclaw=not d["openclaw_installed"] and openclaw,
+                            setup_openclaw=openclaw,
                             start_stack=ask_yes("Start the stack when setup finishes?"))
         install.save_paths(p, store)
         install.spawn_worker(plan)
@@ -191,6 +197,19 @@ def cmd_disks(a):
         info(f"no slow drives; models in {store}")
     for line in disks.winsat_howto(speeds):
         info(line)
+
+
+def cmd_openclaw(a):
+    from stacklib import clients
+
+    p = prof.resolve_profile()
+    if not a.check:
+        try:
+            info(clients.setup_openclaw(p, lambda m: info(m)))
+        except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as e:
+            die(f"OpenClaw setup failed: {e}")
+    s = clients.openclaw(p["ports"]["litellm"])
+    (info if s.level in ("ok", "off") else warn)(f"OpenClaw: {s.state}. {s.detail}")
 
 
 def cmd_pull(a):
@@ -328,6 +347,8 @@ def main(argv=None):
     s.add_argument("--worker", help=argparse.SUPPRESS); s.set_defaults(f=cmd_install)
     s = sub.add_parser("disks", help="measure drive speeds and suggest where models, tools and caches go")
     s.add_argument("drives", nargs="*", help="drive roots such as C:\\ D:\\ (default: every local drive)"); s.set_defaults(f=cmd_disks)
+    s = sub.add_parser("openclaw", help="make the gateway OpenClaw's only model endpoint (onboards it if needed)")
+    s.add_argument("--check", action="store_true", help="only report where OpenClaw's models point"); s.set_defaults(f=cmd_openclaw)
     s = sub.add_parser("pull"); s.add_argument("--all", action="store_true"); s.set_defaults(f=cmd_pull)
     s = sub.add_parser("up"); s.add_argument("services", nargs="*"); s.add_argument("--wait", type=float, default=150); s.set_defaults(f=cmd_up)
     s = sub.add_parser("down"); s.add_argument("services", nargs="*"); s.set_defaults(f=cmd_down)

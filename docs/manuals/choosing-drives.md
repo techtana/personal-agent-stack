@@ -198,8 +198,8 @@ reformatting erases the drive.
 
 ## OpenClaw
 
-The installer's option **Install OpenClaw with npm** (on by default when OpenClaw is not installed) runs the step
-**Install OpenClaw**:
+The installer's option **Install OpenClaw with npm and point it at this stack's gateway** (on by default when OpenClaw
+is not installed) runs the step **Install OpenClaw**:
 
 1. Checks the Node.js version. OpenClaw 2026.10.9 needs Node.js 24.22.1 or later in the 24 line, or 26.12.1 or later.
 2. If Node.js is older, runs `winget install --id OpenJS.NodeJS.LTS`, which upgrades it to the current LTS (26.13.0 on
@@ -207,15 +207,40 @@ The installer's option **Install OpenClaw with npm** (on by default when OpenCla
 3. Runs `npm install -g openclaw@latest`. npm puts it in your user profile on the system drive, which is where it
    belongs: it runs in the background and keeps its settings and keys there.
 
-It does not set OpenClaw up. Afterwards, run:
+4. Points OpenClaw at the gateway. By the repository's rules, OpenClaw counts as private only while the gateway is
+   its only model endpoint, so this step:
+   - Onboards OpenClaw if it has no `~/.openclaw/openclaw.json` yet. This runs without questions and creates a
+     workspace and a local OpenClaw gateway that listens only on this PC. It installs no background service and sets
+     up no chat channels, skills or web search. Add those later with `openclaw configure`.
+   - Adds a provider named `agent-stack` (`http://127.0.0.1:4000/v1`) with the six departments and `local-primary`.
+     It makes `agent-stack/app-dev` the default model with no fallbacks. It also removes any image, utility or PDF
+     model, and any per-agent model, that points somewhere else. OpenClaw saves the config it replaces as
+     `openclaw.json.bak`.
+   - Writes the gateway key (`LITELLM_MASTER_KEY` from `.env`) to `~/.openclaw/.env`, which OpenClaw reads.
+     `openclaw.json` refers to the key by name only.
+
+If OpenClaw is already installed, the installer offers only step 4, and only when OpenClaw sends prompts somewhere
+other than the gateway.
+
+Afterwards, open OpenClaw with `openclaw dashboard` (in the browser) or `openclaw chat` (in the terminal). Inside a chat,
+`/model` switches between departments.
+
+**Checking it later.** The tray's Overview tab has an OpenClaw row:
+
+- **Gateway only** (green): every model OpenClaw calls goes through the gateway.
+- **Not set up** (amber): OpenClaw is installed but has not been onboarded yet.
+- **Bypasses the gateway** (amber): a model talks to Ollama or another local server directly. The prompt stays on this
+  PC, but it skips the gateway's traces and policy.
+- **Uses an outside model** (red): a model sends prompts off this machine.
+
+Whenever the row is not green, a **Use gateway** button appears, and it runs step 4. In a terminal the same is:
 
 ```powershell
-openclaw onboard
+uv run scripts/stack.py openclaw          # set it up
+uv run scripts/stack.py openclaw --check  # only report where its models point
 ```
 
-When it asks for a model provider, give it only the gateway, `http://127.0.0.1:4000/v1`, so chats stay on this
-machine. By the repository's rules, OpenClaw counts as private only while the gateway is its only model endpoint. Large
-files it downloads or creates can go on the second drive, in a short path such as `D:\openclaw-files`.
+Large files OpenClaw downloads or creates can go on the second drive, in a short path such as `D:\openclaw-files`.
 
 ## Related
 
