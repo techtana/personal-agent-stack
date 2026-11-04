@@ -1,6 +1,6 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+Updated: 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
@@ -157,6 +157,22 @@ once across a session restart.
    (Node.js here is 24.20.0, below openclaw's >=24.22.1, so the step will upgrade it to 26 LTS via winget with UAC).
    Verified: unit tests (53 passed), `stack.py disks` on C:, D: and E:, and a render of both installer pages. Not run:
    the HF and OpenClaw steps for real (they change user env vars, move the cache and upgrade Node.js).
+17. Tray Hugging Face / OpenClaw status (2026-11-03, branch claude/agent-stack-tray-huggingface-d205d0): the Overview
+   tab has a third card. The Hugging Face row shows HF_HOME, its size, and whether its drive is plugged in. The OpenClaw
+   row shows where its models point: Gateway only, Not set up, Bypasses the gateway, or Uses an outside model. Its
+   **Use gateway** button (also `stack.py openclaw`, and the installer's OpenClaw step) runs `stacklib/clients.setup_openclaw`.
+   That onboards OpenClaw non-interactively if needed, then `openclaw config patch` adds provider `agent-stack`
+   (127.0.0.1:4000/v1, the six departments plus local-primary), sets primary `agent-stack/app-dev` with no fallbacks,
+   and removes off-gateway image/utility/pdf and per-agent models. The key goes to `~/.openclaw/.env`
+   (LITELLM_MASTER_KEY; the json only names it). The window is now 860 px tall so the action bar fits.
+   Verified: 22 unit tests (`uv run --with pytest pytest -q`: 96 passed). Fresh onboard and repair of a cloud config
+   ran against a sandbox USERPROFILE. A real `openclaw agent --local` prompt went OpenClaw -> gateway ->
+   qwen3.5:9b and back (PONG, 80 s cold). A render harness with stubbed services showed red -> Setting up... -> green.
+   The owner's real `~/.openclaw` is set up (2026-11-04, owner approved): `stack.py openclaw --check` reports Gateway only,
+   and a real `openclaw agent --local` prompt returned PONG through agent-stack/app-dev -> qwen3.5:9b (95 s cold). It was
+   first written on 2026-11-03, before approval: a test whose mocks closed early ran the real setup. The original
+   config is `~/.openclaw/openclaw.json.bak.3`. tests/test_clients.py now blocks the real setup module-wide.
+   Restart the tray from the main checkout after merging.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

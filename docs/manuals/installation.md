@@ -75,7 +75,8 @@ Which drive to pick for each: [choosing-drives.md](choosing-drives.md). In short
 can go on a second or USB drive that reads at 200 MB/s or more; the Python tools stay on the internal drive.
 
 Under **Options** you can also choose to check each drive's speed, put the Hugging Face cache next to the models, and
-install OpenClaw. All three are on by default (OpenClaw only when it is not installed yet).
+install OpenClaw and point it at the gateway. All three are on by default. When OpenClaw is already installed, the
+OpenClaw option appears only if it still sends prompts somewhere other than the gateway, and then it offers to fix that.
 
 Under each folder it shows the free space on that drive; **Install** stays disabled until both folders are usable.
 It writes the models folder into `machines/<HOST>.yaml` (`model_store` and `ollama_env.OLLAMA_MODELS`), then starts
@@ -99,8 +100,8 @@ Setup does the following, in this order:
    keeps the token on the internal drive, and installs the `hf` command
    ([details](choosing-drives.md#hugging-face-cache)).
 10. **Install OpenClaw**: upgrades Node.js with winget if it is older than OpenClaw needs (Windows asks for
-    administrator approval), then runs `npm install -g openclaw@latest`. Run `openclaw onboard` afterwards
-    ([details](choosing-drives.md#openclaw)).
+    administrator approval), runs `npm install -g openclaw@latest`, then sets OpenClaw up with the gateway as its only
+    model provider ([details](choosing-drives.md#openclaw)).
 
 A failed step does not stop the others; the window marks it with a cross and Ollama's or uv's message, and
 **Change folders and run again** goes back to the questions. Steps that already ran are quick the second time.

@@ -77,7 +77,7 @@ class Installer:
         self.start = tk.BooleanVar(value=True)
         self.disks = tk.BooleanVar(value=True)
         self.hf = tk.BooleanVar(value=True)
-        self.openclaw = tk.BooleanVar(value=not d["openclaw_installed"])
+        self.openclaw = tk.BooleanVar(value=not d["openclaw_installed"] or bool(d["openclaw_state"]))
 
         self.store_msg = self._folder(f, "Models (Ollama)", "Downloaded models live here. Needs the most space; "
                                       "a fast internal drive loads models quicker than a USB one.", self.store, d["model_note"])
@@ -100,8 +100,11 @@ class Installer:
         self.hf_box = ttk.Checkbutton(opts, variable=self.hf)
         self.hf_box.grid(sticky="w")
         if not d["openclaw_installed"]:
-            ttk.Checkbutton(opts, variable=self.openclaw, text="Install OpenClaw with npm (upgrades Node.js with winget "
-                            "first if it is too old; Windows asks for admin)").grid(sticky="w")
+            ttk.Checkbutton(opts, variable=self.openclaw, text="Install OpenClaw with npm and point it at this stack's "
+                            "gateway (upgrades Node.js with winget first if it is too old; Windows asks for admin)").grid(sticky="w")
+        elif d["openclaw_state"]:
+            ttk.Checkbutton(opts, variable=self.openclaw, text=f"Point OpenClaw at this stack's gateway (now: "
+                            f"{d['openclaw_state'].lower()}; OpenClaw keeps a backup of its config)").grid(sticky="w")
         ttk.Checkbutton(opts, variable=self.start, text="Start the stack when setup finishes (tray app)").grid(sticky="w")
 
         self.error = ttk.Label(f, text="", foreground=ERROR_FG, wraplength=640)
@@ -187,6 +190,7 @@ class Installer:
                 check_disks=self.disks.get(),
                 setup_huggingface=self.hf.get(),
                 install_openclaw=not self.d["openclaw_installed"] and self.openclaw.get(),
+                setup_openclaw=self.openclaw.get(),
             )
             install.spawn_worker(plan)
         except (OSError, ValueError, RuntimeError) as e:
