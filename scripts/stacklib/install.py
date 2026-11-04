@@ -22,7 +22,7 @@ from pathlib import Path
 import yaml
 
 from . import ENV_FILE, IS_WINDOWS, REPO, info, load_dotenv, warn, which
-from . import agents_build, claude_env, disks, litellm_build, ollama, services, winget_build
+from . import agents_build, claude_env, clients, disks, litellm_build, ollama, services, winget_build
 from . import profile as prof
 
 INSTALL_DIR = REPO / ".run" / "install"   # under the repository, not data_dir: it must not move while setup runs
@@ -58,6 +58,7 @@ class Plan:
     setup_huggingface: bool = True
     hf_home: str = ""               # HF_HOME; "" puts it next to the models (<models drive>\\huggingface on Windows)
     install_openclaw: bool = False  # may upgrade Node.js machine-wide, so only when chosen in the installer
+    setup_openclaw: bool = False    # onboard OpenClaw if needed and make the gateway its only model endpoint
 
 
 @dataclass
@@ -163,6 +164,7 @@ def defaults(profile: dict) -> dict:
         "tools_missing": tools_missing(profile, current_tool_dir()),
         "ollama_missing": not which("ollama"),
         "openclaw_installed": bool(which("openclaw")),
+        "openclaw_state": openclaw_state(profile),
         "models": models,
         "models_gb": pull_size_gb(profile, models),
     }
@@ -479,9 +481,32 @@ def _dotted(v: tuple | None) -> str:
     return ".".join(map(str, v)) if v else "not installed"
 
 
+def openclaw_state(profile: dict) -> str:
+    """"" when OpenClaw is missing or already uses only the gateway; otherwise its status, for the installer's offer."""
+    if not which("openclaw"):
+        return ""
+    try:
+        s = clients.openclaw(profile["ports"]["litellm"])
+    except Exception as e:  # noqa: BLE001 - the offer is optional; never block the installer on it
+        return f"not checked ({e})"
+    return "" if s.level == "ok" else s.state
+
+
+def _point_openclaw_at_gateway(profile: dict, report, done: str) -> str:
+    try:
+        return f"{done}{clients.setup_openclaw(profile, report)}"
+    except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as e:
+        raise Warn(f"{done}pointing it at the gateway failed: {e}. Fix it with `uv run scripts/stack.py openclaw` "
+                   "or Use gateway in the tray") from e
+
+
 def step_openclaw(plan: Plan, profile: dict, report) -> str:
     if which("openclaw"):
-        raise Skip("already installed")
+        if not plan.setup_openclaw:
+            raise Skip("already installed")
+        if not openclaw_state(profile):
+            raise Skip("already installed and uses only the gateway")
+        return _point_openclaw_at_gateway(profile, report, "")
     if not plan.install_openclaw:
         raise Skip("not chosen")
     node = _node_version()
@@ -505,8 +530,10 @@ def step_openclaw(plan: Plan, profile: dict, report) -> str:
     r = subprocess.run([npm, "install", "-g", "openclaw@latest"], check=False)
     if r.returncode:
         raise RuntimeError(f"npm install -g openclaw exited with code {r.returncode}; the log has npm's message")
-    return (f"installed (Node.js {_dotted(node)}). Next: run `openclaw onboard` and give it the gateway "
-            f"http://127.0.0.1:{profile['ports']['litellm']}/v1 as its only model provider, so chats stay on this machine")
+    if plan.setup_openclaw:
+        return _point_openclaw_at_gateway(profile, report, f"installed (Node.js {_dotted(node)}). ")
+    return (f"installed (Node.js {_dotted(node)}). Next: `uv run scripts/stack.py openclaw` makes the gateway its only "
+            "model provider, so chats stay on this machine")
 
 
 def step_build(plan: Plan, profile: dict, report) -> str:

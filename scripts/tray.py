@@ -3,7 +3,9 @@
 
 It lives in the notification area (on Windows it starts among the hidden icons). Left-click or "Show status" opens a
 window with three tabs:
-  Overview  each service's health with start/stop and links into the UIs, plus the models loaded in Ollama
+  Overview  each service's health with start/stop and links into the UIs, the models loaded in Ollama, and the
+            Hugging Face cache and OpenClaw (where the cache is; whether OpenClaw uses only the gateway, with a
+            Use gateway button that makes it so)
   Usage     requests, tokens, speed and cost per model from the gateway traces, with a tokens-per-day chart
   Settings  models, context sizes, tracing and Ollama runtime options; Apply writes machines/<HOST>.yaml,
             rebuilds the generated configs and restarts what the change affects
@@ -83,11 +85,12 @@ import psutil  # noqa: E402
 import pystray  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
-from stacklib import IS_WINDOWS, ollama, process_metrics, profile as prof, services  # noqa: E402
+from stacklib import IS_WINDOWS, clients, ollama, process_metrics, profile as prof, services  # noqa: E402
 from stacklib import settings as cfg  # noqa: E402
 from stacklib import startup, usage  # noqa: E402
 
 POLL_SECONDS = 10
+CLIENT_SECONDS = 60  # between Hugging Face / OpenClaw checks: measuring the cache walks every file in it
 START_TIMEOUT = 180  # seconds a started service gets to answer its health check
 RESOURCE_SECONDS = 5  # pause between process samples while the Resources tab is on screen
 RESOURCES_TAB = 3
@@ -105,6 +108,8 @@ ROLES = {
     "orchestrator": "department delegation for agents",
     "open_webui": "chat in the browser",
 }
+CLIENTS = (("huggingface", "Hugging Face cache", "model weights for Python tools"),
+           ("openclaw", "OpenClaw", "agent client; private only through the gateway"))
 COLORS = {"ok": "#2e9d57", "warn": "#d99a1e", "bad": "#c94a3d", "idle": "#8a8f98"}  # tray icon fills
 FONT = "Segoe UI" if IS_WINDOWS else "TkDefaultFont"
 
@@ -181,6 +186,10 @@ class TrayApp:
         self.row_checked: dict[str, float] = {}  # service -> when the check behind its row began (monotonic)
         self.rows_lock = threading.Lock()
         self.loaded: list[dict] = []
+        self.client_status: dict[str, clients.ClientStatus] = {}
+        self.clients_checked = 0.0  # monotonic; 0 = never
+        self.openclaw_busy = False
+        self.openclaw_result = ""  # why the last Use gateway click failed, shown until the next click
         self.usage_data: dict | None = None
         self.usage_days = 7
         self.usage_group = "alias"
@@ -218,6 +227,9 @@ class TrayApp:
         rows = services.status(self.profile)
         self.loaded = ollama.ps(f"http://127.0.0.1:{self.profile['ports']['ollama']}")
         self._store_rows(rows, checked)
+        if checked - self.clients_checked >= CLIENT_SECONDS or not self.clients_checked:
+            self.clients_checked = checked
+            self.client_status = self._check_clients()
         self.checked_at = datetime.now().strftime("%H:%M:%S")
         # Refreshes come from the poller and from start/stop threads; pystray's Windows backend frees the old icon
         # handle on every swap, so two concurrent swaps fail with WinError 1402. Serialise, and swap only on change.
@@ -239,6 +251,16 @@ class TrayApp:
             self.icon.update_menu()
         self.ui_queue.put(self._render_window)
         self.refresh_usage()
+
+    def _check_clients(self) -> dict[str, clients.ClientStatus]:
+        out = {}
+        for key, fn in (("huggingface", clients.huggingface),
+                        ("openclaw", lambda: clients.openclaw(self.profile["ports"]["litellm"]))):
+            try:
+                out[key] = fn()
+            except Exception as e:  # noqa: BLE001 - a bad config file must not stop the poller
+                out[key] = clients.ClientStatus("warn", "Not checked", str(e) or type(e).__name__)
+        return out
 
     def _store_rows(self, rows: list[dict], checked: float) -> None:
         """Keep each service's newest reading, so a slow poll that began before an action finished cannot undo it."""
@@ -526,7 +548,7 @@ class TrayApp:
         t = self.t
         w = tk.Toplevel(self.root, bg=t["page"])
         w.title("Agent Stack")
-        w.geometry("940x720")
+        w.geometry(f"940x{min(860, w.winfo_screenheight() - 80)}")  # Overview: services, loaded models, HF and OpenClaw, action bar
         w.minsize(760, 560)
         w.protocol("WM_DELETE_WINDOW", w.withdraw)  # closing hides it; the tray keeps running
         if IS_WINDOWS and system_theme() == "dark":
@@ -602,8 +624,30 @@ class TrayApp:
         self.loaded_frame = ttk.Frame(models, style="Card.TFrame")
         self.loaded_frame.grid(row=1, column=0, sticky="we")
 
+        extras = self._card(tab, "Hugging Face and OpenClaw", row=2, column=0, pady=(12, 0))
+        extras.columnconfigure(1, weight=1)
+        self.client_widgets: dict[str, tuple] = {}
+        for n, (key, label, role) in enumerate(CLIENTS):
+            i = 2 * n + 1
+            dot = tk.Label(extras, text="●", font=(FONT, 12), bg=self.t["card"])
+            dot.grid(row=i, column=0, padx=(0, 10), pady=(5, 0), sticky="n")
+            names = ttk.Frame(extras, style="Card.TFrame")
+            names.grid(row=i, column=1, sticky="w")
+            ttk.Label(names, text=label, style="Card.TLabel", font=(FONT, 10, "bold")).pack(anchor="w")
+            ttk.Label(names, text=role, style="Card.Muted.TLabel").pack(anchor="w")
+            state = ttk.Label(extras, text="Checking...", style="Card.Sub.TLabel", width=-18)
+            state.grid(row=i, column=2, sticky="w", padx=8)
+            detail = ttk.Label(extras, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
+            detail.grid(row=i + 1, column=1, columnspan=2, sticky="w", pady=(0, 6))
+            fix = None
+            if key == "openclaw":
+                fix = ttk.Button(extras, text="Use gateway", command=self.openclaw_use_gateway)
+                fix.grid(row=i, column=3, sticky="e", padx=2)
+                fix.grid_remove()
+            self.client_widgets[key] = (dot, state, detail, fix)
+
         bar = ttk.Frame(tab, padding=(0, 12, 0, 0))
-        bar.grid(row=2, column=0, sticky="we")
+        bar.grid(row=3, column=0, sticky="we")
         ttk.Button(bar, text="Open chat", style="Accent.TButton", command=lambda: self.open_url("open_webui")).pack(side="left")
         self.start_btn = ttk.Button(bar, text="Start all", command=self.start_all)
         self.start_btn.pack(side="left", padx=(8, 4))
@@ -635,6 +679,7 @@ class TrayApp:
         self.head_sub.configure(text=f"{self.profile['name']}  ·  primary {m.get('primary')} @ {compact(m.get('primary_num_ctx', 0))} ctx  ·  {cloud}")
         self.startup_var.set(startup.is_installed())
         self._render_loaded()
+        self._render_clients()
         if any(r["state"] == "starting" for r in self.rows.values()):
             self._tick_soon()
 
@@ -693,6 +738,53 @@ class TrayApp:
         can_stop = any(self._running(s) and self.pending.get(s, ("",))[0] != "stop" for s in self.managed)
         self.start_btn.configure(state="normal" if can_start and not self.busy else "disabled")
         self.stop_btn.configure(state="normal" if can_stop and not self.busy else "disabled")
+
+    def _render_clients(self) -> None:
+        t = self.t
+        colour = {"ok": t["good"], "warn": t["warn"], "bad": t["bad"], "off": t["muted"]}
+        style = {"warn": "Warn.TLabel", "bad": "Bad.TLabel"}
+        for key, (dot, state, detail, fix) in self.client_widgets.items():
+            s = self.client_status.get(key)
+            if key == "openclaw" and self.openclaw_busy:
+                dot.configure(fg=t["warn"])
+                state.configure(text="Setting up...", style="Warn.TLabel")
+            elif s:
+                dot.configure(fg=colour.get(s.level, t["muted"]))
+                state.configure(text=s.state, style=style.get(s.level, "Card.Sub.TLabel"))
+                detail.configure(text=(self.openclaw_result + "  " if key == "openclaw" and self.openclaw_result else "")
+                                 + s.detail)
+            if fix is not None:
+                # Shown while OpenClaw is installed but not gateway-only; a failure keeps it up so the owner can retry.
+                if self.openclaw_busy or (s and s.level in ("warn", "bad") and s.state != "Not checked"):
+                    fix.configure(state="disabled" if self.openclaw_busy else "normal")
+                    fix.grid()
+                else:
+                    fix.grid_remove()
+
+    def openclaw_use_gateway(self) -> None:
+        """Onboard OpenClaw if needed and make the gateway its only model endpoint (clients.setup_openclaw). No
+        confirmation: the button says what it does and OpenClaw keeps the replaced config as openclaw.json.bak."""
+        if self.openclaw_busy:
+            return
+        self.openclaw_busy = True
+        self.openclaw_result = ""
+        self._render_clients()
+
+        def run() -> None:
+            try:
+                result = clients.setup_openclaw(self.profile, lambda m: print(f"[tray] openclaw: {m}"))
+            except Exception as e:  # noqa: BLE001 - shown on the row; the log has the trace
+                traceback.print_exc()
+                result = f"Use gateway failed: {e}"
+            status = self._check_clients()
+
+            def done() -> None:
+                self.openclaw_busy = False
+                self.openclaw_result = result if result.startswith("Use gateway failed") else ""
+                self.client_status = status
+                self._render_clients()
+            self._on_ui(done)
+        threading.Thread(target=run, daemon=True, name="openclaw-setup").start()
 
     def _render_loaded(self) -> None:
         for child in self.loaded_frame.winfo_children():
