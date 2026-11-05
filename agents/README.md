@@ -42,6 +42,7 @@ opencode:
   permission: {edit: allow, bash: ask}
 openwebui:
   suggestion_prompts: ["..."]
+  tool_ids: []              # optional; default ["server:mcp:personal-agent-stack"] (orchestrator on in new chats)
 system_prompt: |
   ...
 evals:
