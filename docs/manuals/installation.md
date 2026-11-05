@@ -204,7 +204,10 @@ SEKAIHOME.
 1. Open http://127.0.0.1:3000 and create the admin user.
 2. Go to **Workspace > Models > Import** and import each file in `config/openwebui/`.
 3. Go to **Admin > Integrations > External Tool Servers**. Add an MCP (Streamable HTTP) server at
-   `http://127.0.0.1:8765/mcp`, using the `ORCHESTRATOR_BEARER` value from `.env` as the bearer.
+   `http://127.0.0.1:8765/mcp`, using the `ORCHESTRATOR_BEARER` value from `.env` as the bearer, and give it the
+   ID `personal-agent-stack`. The imported department models name that ID, so the orchestrator tools are switched
+   on in every new chat with them (you can still switch them off per chat under **Tools**). Other models, such as
+   the plain `local-primary`, start with the tools off.
 
 ### 6b. Images (optional)
 

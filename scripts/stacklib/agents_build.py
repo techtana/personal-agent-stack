@@ -62,8 +62,14 @@ def build_opencode_agent(agent: dict) -> str:
     return "---\n" + yaml.safe_dump(fm, sort_keys=False, allow_unicode=True) + "---\n" + f"<!-- {GENERATED_NOTE.format(id=agent['id'])} -->\n\n" + full_prompt(agent)
 
 
+# Open WebUI names an MCP tool server "server:mcp:<ID>", where <ID> is the ID typed when the server is added under
+# Admin > Integrations > External Tool Servers. A model's meta.toolIds are switched on in every new chat with it.
+ORCHESTRATOR_TOOL_ID = "server:mcp:personal-agent-stack"
+
+
 def build_openwebui_model(agent: dict) -> list[dict]:
     w = agent.get("openwebui", {})
+    tool_ids = w.get("tool_ids", [ORCHESTRATOR_TOOL_ID])
     return [
         {
             "id": agent["id"],
@@ -83,8 +89,10 @@ def build_openwebui_model(agent: dict) -> list[dict]:
                 },
                 "suggestion_prompts": [{"content": s} for s in w.get("suggestion_prompts", [])],
                 "tags": [{"name": "department"}],
+                "toolIds": tool_ids,
             },
-            "params": {"system": full_prompt(agent)},
+            # Native: tools go to the gateway as OpenAI tool definitions, which LiteLLM passes to Ollama.
+            "params": {"system": full_prompt(agent), "function_calling": "native"},
             "is_active": True,
         }
     ]
