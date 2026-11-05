@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import time
 from collections.abc import AsyncGenerator, Mapping
 from datetime import datetime, timezone
@@ -143,29 +144,88 @@ def _model_location(data: dict) -> str | None:
     return None
 
 
-def _routing_footer(data: dict) -> str | None:
+def _flag(name: str) -> bool:
+    """Environment switches written by `stack.py up` from machines/<HOST>.yaml; on unless set to 0."""
+    return os.environ.get(name, "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def _routing_decision(data: dict) -> Mapping | None:
     for metadata_key in ("litellm_metadata", "metadata"):
         metadata = data.get(metadata_key)
         if not isinstance(metadata, Mapping):
             continue
         decision = metadata.get("routing_decision")
-        if not isinstance(decision, Mapping):
-            continue
-        tier = decision.get("tier_label") or decision.get("tier")
-        target = decision.get("routed_model")
-        if not tier and not target:
-            continue
-        model = _deployed_model(data) or (str(target) if target else None)
+        if isinstance(decision, Mapping) and (decision.get("tier_label") or decision.get("tier") or decision.get("routed_model")):
+            return decision
+    return None
+
+
+def _short_model(model: str) -> str:
+    for prefix in ("ollama_chat/", "ollama/"):
+        if model.startswith(prefix):
+            return model[len(prefix):]
+    return model
+
+
+# Open WebUI 0.12 puts one of these into the system message of the chat request that follows an image it made
+# (utils/middleware.py, chat_image_generation_handler). The image itself never passes through the gateway.
+_IMAGE_CONTEXT = re.compile(r"<context>The requested image has been (?:edited and )?created")
+
+
+def _system_text(data: dict) -> str:
+    messages = data.get("messages")
+    if not isinstance(messages, list) or not messages or not isinstance(messages[0], Mapping):
+        return ""
+    first = messages[0]
+    if first.get("role") != "system":
+        return ""
+    content = first.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(str(part.get("text") or "") for part in content if isinstance(part, Mapping))
+    return ""
+
+
+def _image_line(data: dict) -> str | None:
+    label = os.environ.get("AGENT_STACK_IMAGE_LABEL", "").strip()
+    if not label or not _IMAGE_CONTEXT.search(_system_text(data)):
+        return None
+    return f"**Image:** {label}"
+
+
+def _routing_footer(data: dict) -> str | None:
+    """The markdown footer naming the model behind a chat reply (and the image model when Open WebUI just made an
+    image). Router aliases also show the route; plain aliases show which alias was asked for. None means no footer:
+    the label is switched off, or the request asked for JSON output that text after it would break."""
+    if not _flag("AGENT_STACK_MODEL_LABEL") or data.get("response_format"):
+        return None
+    lines = []
+    decision = _routing_decision(data)
+    target = decision.get("routed_model") if decision else None
+    model = _deployed_model(data) or (str(target) if target else None)
+    if model:
+        used = f"**Used:** {_short_model(model)}"
         location = _model_location(data)
-        used = f"**Used:** {model}"
         if location:
             used += f" ({location})"
+        alias = data.get("model")
+        if not decision and isinstance(alias, str) and alias and alias not in (model, _short_model(model)):
+            used += f" via {alias}"
+        lines.append(used)
+    if decision:
+        tier = decision.get("tier_label") or decision.get("tier")
         route = " -> ".join(str(value) for value in (tier, target) if value)
         cause = decision.get("cause")
         if cause:
             route += f" ({str(cause).replace('_', ' ')})"
-        return f"\n\n---\n{used}\n**Route:** {route}"
-    return None
+        lines.append(f"**Route:** {route}")
+    image = _image_line(data)
+    if image:
+        lines.append(image)
+    if not lines:
+        return None
+    return "\n\n---\n" + "  \n".join(lines)
 
 
 def _append_route_footer(response, footer: str) -> bool:
@@ -208,6 +268,8 @@ def _route_footer_chunk(chunk, footer: str) -> ModelResponseStream:
 
 class TraceLogger(CustomLogger):
     def _write(self, kwargs, response_obj, start_time, end_time, status: str):
+        if not _flag("AGENT_STACK_JSONL_TRACES"):
+            return
         try:
             slo = kwargs.get("standard_logging_object") or {}
             usage = _usage(response_obj)

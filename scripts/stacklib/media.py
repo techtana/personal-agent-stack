@@ -153,6 +153,21 @@ def image_settings(profile: dict) -> dict[str, object]:
     }
 
 
+# Display names for the chat's image label; a workflow without one is named after its diffusion model file.
+WORKFLOW_LABELS = {"z_image_turbo": "Z-Image-Turbo int8"}
+
+
+def image_label(profile: dict) -> str:
+    """What the gateway appends to the chat reply after Open WebUI made an image, e.g.
+    "Z-Image-Turbo int8 (ComfyUI, 1024x1024, 8 steps)"; '' when image generation is off."""
+    s = image_settings(profile)
+    if not s:
+        return ""
+    workflow = media(profile).get("image_workflow") or "z_image_turbo"
+    name = WORKFLOW_LABELS.get(workflow) or Path(str(s["image_generation.model"])).stem or workflow
+    return f"{name} (ComfyUI, {s['image_generation.size']}, {s['image_generation.steps']} steps)"
+
+
 def openwebui_env(profile: dict) -> dict[str, str]:
     """The same settings as environment variables. Open WebUI reads them only for keys its database does not have
     yet (a fresh install); `provision_openwebui` writes them into an existing database."""

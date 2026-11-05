@@ -100,7 +100,8 @@ def build_config(profile: dict) -> str:
         router_settings["context_window_fallbacks"] = cw
 
     callbacks = []
-    if profile["observability"].get("jsonl_traces", True):
+    # The same callback writes the traces and adds the model label; each part has its own switch (services.py).
+    if profile["observability"].get("jsonl_traces", True) or profile["observability"].get("model_label", True):
         callbacks.append("custom_callbacks.proxy_handler_instance")
     if profile["observability"].get("phoenix"):
         callbacks.append("otel")
