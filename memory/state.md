@@ -211,6 +211,15 @@ once across a session restart.
    Verified: unit tests 134 passed; a second gateway on port 4010 with this code answered local-primary, app-dev,
    an image-context request, JSON mode and a streamed reply as expected. Not verified: the image button in the browser.
    The live gateway shows the new label only after the tray restarts from the main checkout.
+21. Tray Usage breakdown (2026-11-04, branch claude/3060-performance-34932a): every request still counts, and each
+   row expands into one row per client (Open WebUI, Claude Code, OpenClaw, Orchestrator, Stack scripts, curl, from
+   the User-Agent); "Group by Client" flips it. Output tok/s became Decode tok/s (Ollama's own eval time, timed requests
+   only) and Overall tok/s (all output over all wall-clock time). A line under the table splits the selected row's time
+   into load + prompt + generate + gateway/queue for timed requests, and the average wall clock of untimed ones.
+   On this box that day: decode 50-52 tok/s on every timed request; Open WebUI's untimed calls (~7k-token prompts,
+   ~230-token replies, likely title/tag tasks) waited behind chat replies (NUM_PARALLEL=1), so overall was 33 tok/s.
+   Traces now record `stream`, to show whether the untimed requests are the streamed ones (gateway restart needed).
+   Verified: unit tests, a render of the Usage tab from the worktree with stubbed services and real traces.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

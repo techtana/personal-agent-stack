@@ -133,6 +133,7 @@ THEMES = {
     },
 }
 RANGES = [("Today", 1), ("7 days", 7), ("30 days", 30)]
+SEP = "\x1f"  # joins a model and a client in a Usage table row id
 
 
 def ui_links(p: dict) -> dict[str, str]:
@@ -941,7 +942,7 @@ class TrayApp:
             ttk.Radiobutton(tools, text=label, value=days, variable=self.range_var, style="Seg.TRadiobutton",
                             command=self._usage_changed).pack(side="left")
         ttk.Label(tools, text="Group by", style="Card.Muted.TLabel").pack(side="left", padx=(24, 6))
-        for label, val in (("Gateway alias", "alias"), ("Served model", "served")):
+        for label, val in (("Gateway alias", "alias"), ("Served model", "served"), ("Client", "client")):
             ttk.Radiobutton(tools, text=label, value=val, variable=self.group_var, style="Seg.TRadiobutton",
                             command=self._usage_changed).pack(side="left")
         self.cost_note = ttk.Label(tools, text="", style="Card.Muted.TLabel")
@@ -966,22 +967,30 @@ class TrayApp:
         table = self._card(body, row=0, column=0)
         table.columnconfigure(0, weight=1)
         table.rowconfigure(0, weight=1)
-        cols = [("model", "Model", 160, "w"), ("requests", "Requests", 80, "e"), ("errors", "Errors", 60, "e"),
-                ("prompt_tokens", "Input tok", 90, "e"), ("completion_tokens", "Output tok", 90, "e"),
-                ("avg_latency_ms", "Avg latency", 90, "e"), ("tok_per_s", "Output tok/s", 90, "e"),
-                ("cost", "Cost", 70, "e"), ("last", "Last used", 80, "e")]
+        # Each model row expands into one row per client (per alias when grouped by client).
+        # Decode = Ollama's generation time only; Overall = wall clock of every request (load, prompt, queue too).
+        cols = [("requests", "Requests", 75, "e"), ("errors", "Errors", 50, "e"),
+                ("prompt_tokens", "Input tok", 70, "e"), ("completion_tokens", "Output tok", 80, "e"),
+                ("avg_latency_ms", "Avg latency", 80, "e"), ("decode_tok_s", "Decode tok/s", 90, "e"),
+                ("e2e_tok_s", "Overall tok/s", 90, "e"), ("cost", "Cost", 45, "e"), ("last", "Last used", 80, "e")]
         self.usage_sort = ("total", True)
-        self.tree = ttk.Treeview(table, columns=[c[0] for c in cols], show="headings", selectmode="browse", height=6)
+        self.tree = ttk.Treeview(table, columns=[c[0] for c in cols], show="tree headings", selectmode="browse", height=6)
+        self.tree.heading("#0", text="Model", anchor="w", command=lambda: self._sort_usage("model"))
+        self.tree.column("#0", width=140, minwidth=120, anchor="w", stretch=True)
         for key, label, width, anchor in cols:
             self.tree.heading(key, text=label, anchor=anchor, command=lambda k=key: self._sort_usage(k))
-            self.tree.column(key, width=width, anchor=anchor, stretch=key == "model")
+            self.tree.column(key, width=width, anchor=anchor, stretch=False)
         self.tree.grid(row=0, column=0, sticky="nsew")
         sb = ttk.Scrollbar(table, orient="vertical", command=self.tree.yview)
         sb.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=sb.set)
-        self.tree.bind("<<TreeviewSelect>>", lambda _e: self._draw_chart())
+        self.tree.bind("<<TreeviewSelect>>", lambda _e: (self._draw_chart(), self._render_breakdown()))
         self.tree.tag_configure("err", foreground=self.t["bad"])
+        self.tree.tag_configure("sub", foreground=self.t["muted"])
         self.usage_empty = ttk.Label(table, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
+        # Where the time went for the selected row (or all requests): Ollama's own timings versus the rest.
+        self.breakdown = ttk.Label(table, text="", style="Card.Muted.TLabel", wraplength=820, justify="left")
+        self.breakdown.grid(row=2, column=0, columnspan=2, sticky="we", pady=(8, 0))
 
         chart = self._card(body, row=1, column=0, pady=(12, 0))
         chart.columnconfigure(0, weight=1)
@@ -1016,17 +1025,35 @@ class TrayApp:
         self.cost_note.configure(text="Local models cost $0; cost is cloud API spend.")
         selected = self.tree.selection()
         keep = selected[0] if selected else None
+        self.tree.heading("#0", text={"client": "Client", "served": "Served model"}.get(self.usage_group, "Model"))
+        open_rows = {i for i in self.tree.get_children() if self.tree.item(i, "open")}
         self.tree.delete(*self.tree.get_children())
         key, rev = self.usage_sort
-        rows = sorted(data["models"], key=lambda m: (m["prompt_tokens"] + m["completion_tokens"]) if key == "total"
-                      else (m[key] if m[key] is not None else -1), reverse=rev)
-        for m in rows:
-            self.tree.insert("", "end", iid=m["model"], tags=("err",) if m["errors"] and m["errors"] == m["requests"] else (), values=(
-                m["model"], f"{m['requests']:,}", m["errors"] or "", compact(m["prompt_tokens"]), compact(m["completion_tokens"]),
-                f"{m['avg_latency_ms'] / 1000:.1f} s", f"{m['tok_per_s']:.0f}" if m["tok_per_s"] else "-",
-                f"${m['cost']:.4f}" if m["cost"] else "-", usage.ago(m["last"])))
+        rows = data["models"]
+
+        def order(items: list[dict]) -> list[dict]:
+            if key == "model":
+                return sorted(items, key=lambda m: m["model"].lower(), reverse=rev)
+            return sorted(items, key=lambda m: (m["prompt_tokens"] + m["completion_tokens"]) if key == "total"
+                          else (m[key] if m[key] is not None else -1), reverse=rev)
+
+        def values(m: dict) -> tuple:
+            return (f"{m['requests']:,}", m["errors"] or "", compact(m["prompt_tokens"]), compact(m["completion_tokens"]),
+                    f"{m['avg_latency_ms'] / 1000:.1f} s", f"{m['decode_tok_s']:.0f}" if m["decode_tok_s"] else "-",
+                    f"{m['e2e_tok_s']:.0f}" if m["e2e_tok_s"] else "-",
+                    f"${m['cost']:.4f}" if m["cost"] else "-", usage.ago(m["last"]))
+
+        for m in order(rows):
+            err = ("err",) if m["errors"] and m["errors"] == m["requests"] else ()
+            self.tree.insert("", "end", iid=m["model"], text=m["model"], tags=err, values=values(m),
+                             open=m["model"] in open_rows)
+            for c in order(m["clients"]):
+                self.tree.insert(m["model"], "end", iid=f"{m['model']}{SEP}{c['model']}", text=c["model"],
+                                 tags=("sub", *(("err",) if c["errors"] and c["errors"] == c["requests"] else ())),
+                                 values=values(c))
         if keep and self.tree.exists(keep):
             self.tree.selection_set(keep)
+        self._render_breakdown()
         if rows:
             self.usage_empty.grid_forget()
         else:
@@ -1036,6 +1063,25 @@ class TrayApp:
             self.usage_empty.grid(row=1, column=0, sticky="w", pady=(8, 0))
         self._draw_chart()
 
+    def _selected_usage_row(self) -> dict | None:
+        """The usage figures behind the selected table row: a model, or one client under it."""
+        sel = self.tree.selection() if hasattr(self, "tree") else ()
+        if not sel or self.usage_data is None:
+            return None
+        name, _, client = sel[0].partition(SEP)
+        model = next((m for m in self.usage_data["models"] if m["model"] == name), None)
+        if model and client:
+            return next((c for c in model["clients"] if c["model"] == client), None)
+        return model
+
+    def _render_breakdown(self) -> None:
+        if self.usage_data is None or not hasattr(self, "breakdown"):
+            return
+        m = self._selected_usage_row()
+        sel = self.tree.selection()
+        title = sel[0].replace(SEP, "  ·  ") if m and sel else "All requests"
+        self.breakdown.configure(text=usage.breakdown_text(m or self.usage_data["totals"], title))
+
     def _draw_chart(self) -> None:
         if self.usage_data is None or not hasattr(self, "canvas"):
             return
@@ -1044,9 +1090,9 @@ class TrayApp:
         sel = self.tree.selection()
         days = self.usage_data["days"]
         if sel:
-            model = next((m for m in self.usage_data["models"] if m["model"] == sel[0]), None)
+            model = self._selected_usage_row()
             values = model["daily"] if model else [0] * len(days)
-            self.chart_title.configure(text=f"Tokens per day  ·  {sel[0]}")
+            self.chart_title.configure(text=f"Tokens per day  ·  {sel[0].replace(SEP, '  ·  ')}")
         else:
             values = self.usage_data["totals"]["daily"]
             self.chart_title.configure(text="Tokens per day  ·  all models (select a row to filter)")

@@ -287,6 +287,7 @@ class TraceLogger(CustomLogger):
                 "process": "ollama" if is_ollama else str(provider or "unknown"),
                 "api_base": slo.get("api_base"),
                 "call_type": slo.get("call_type") or kwargs.get("call_type"),
+                "stream": bool(kwargs.get("stream") or (kwargs.get("optional_params") or {}).get("stream")),
                 "prompt_tokens": slo.get("prompt_tokens") or usage.get("prompt_tokens") or 0,
                 "completion_tokens": slo.get("completion_tokens") or usage.get("completion_tokens") or 0,
                 "cost": slo.get("response_cost") or kwargs.get("response_cost") or 0.0,
