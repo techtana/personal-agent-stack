@@ -1,6 +1,6 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+Updated: 2026-11-07 (voice typing in every app; open item 22). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
@@ -223,6 +223,21 @@ once across a session restart.
    ~230-token replies, likely title/tag tasks) waited behind chat replies (NUM_PARALLEL=1), so overall was 33 tok/s.
    Traces now record `stream`, to show whether the untimed requests are the streamed ones (gateway restart needed).
    Verified: unit tests, a render of the Usage tab from the worktree with stubbed services and real traces.
+22. Voice typing (2026-11-07, branch claude/whisper-speech-to-text-extension-99ad1f): service `dictation`
+   (scripts/stacklib/dictation, port 8790 for health and control), a floating mic button and Ctrl+Alt+D type speech
+   into the focused app. faster-whisper 1.2.1 + CTranslate2 4.8.5 in `D:\media\dictation\.venv` (python.org 3.14;
+   every compiled module loaded under Smart App Control); large-v3-turbo from `D:\huggingface` (already cached) on the
+   GPU through Ollama's `lib\ollama\cuda_v12\cublas64_12.dll`. Load 5-8 s; 0.3 s for 3.5 s of speech, 0.6 s for
+   15 s; +1.2 GB VRAM (9.2 of 12 GB with the 9B). CPU turbo: 9.7 s for 15 s, so `cpu_model: small`. Cleanup via
+   `local-small` with `think: false` and JSON mode: 0.55-1.2 s. `services.dictation: native` is set in
+   machines/SEKAIHOME.yaml. Verified: 39 new unit tests (180 passed in total); `stack.py dictate transcribe` on Windows
+   TTS recordings (phrases, silence stop, Thursday->Friday correction); the running app with a replayed recording
+   pasting into a Tk test window (clipboard restored) and typing live phrases. Ctrl+Alt+Space is taken here (Claude
+   desktop quick entry), hence Ctrl+Alt+D. Not verified: a live microphone and hand-pressed hotkey, the bubble's look
+   (screen capture refused), pasting into Logseq/Word/Notion, Thai, the tray's new row and settings in the live tray.
+   Also verified: cancel, a second instance, hold-to-talk with injected Ctrl+Alt+D (live text typed at release). A
+   code review's eight findings and its clipboard-owner risk were fixed (owner window per clipboard operation; restore
+   after 1 s). At the end of the session the app was left running from the worktree (pid file in the worktree's .run).
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

@@ -102,6 +102,7 @@ LABELS = {
     "open_webui": "Open WebUI",
     "comfyui": "ComfyUI",
     "kokoro": "Kokoro",
+    "dictation": "Voice typing",
 }
 ROLES = {
     "ollama": "runs the local models",
@@ -111,6 +112,7 @@ ROLES = {
     "open_webui": "chat in the browser",
     "comfyui": "image, video and music generation",
     "kokoro": "text to speech",
+    "dictation": "speak into any app (Whisper)",
 }
 CLIENTS = (("huggingface", "Hugging Face cache", "model weights for Python tools"),
            ("openclaw", "OpenClaw", "agent client; private only through the gateway"))
@@ -196,6 +198,7 @@ class TrayApp:
         self.clients_checked = 0.0  # monotonic; 0 = never
         self.openclaw_busy = False
         self.openclaw_result = ""  # why the last Use gateway click failed, shown until the next click
+        self.dictation_button: bool | None = None  # floating mic button visible? None while voice typing is down
         self.usage_data: dict | None = None
         self.usage_days = 7
         self.usage_group = "alias"
@@ -233,6 +236,7 @@ class TrayApp:
         rows = services.status(self.profile)
         self.loaded = ollama.ps(f"http://127.0.0.1:{self.profile['ports']['ollama']}")
         self._store_rows(rows, checked)
+        self._check_dictation()
         if checked - self.clients_checked >= CLIENT_SECONDS or not self.clients_checked:
             self.clients_checked = checked
             self.client_status = self._check_clients()
@@ -257,6 +261,18 @@ class TrayApp:
             self.icon.update_menu()
         self.ui_queue.put(self._render_window)
         self.refresh_usage()
+
+    def _check_dictation(self) -> None:
+        """Whether voice typing's floating button is showing, from its own control endpoint."""
+        if not self.rows.get("dictation", {}).get("healthy"):
+            self.dictation_button = None
+            return
+        from stacklib.dictation import control
+
+        try:
+            self.dictation_button = bool(control.call(int(self.profile["ports"]["dictation"]), "health", 1.5).get("button", True))
+        except (OSError, ValueError):
+            self.dictation_button = None
 
     def _check_clients(self) -> dict[str, clients.ClientStatus]:
         out = {}
@@ -474,6 +490,9 @@ class TrayApp:
             pystray.MenuItem("Open gateway admin (LiteLLM)", lambda *_: webbrowser.open(links["litellm"])),
             pystray.MenuItem("Open image studio (ComfyUI)", lambda *_: webbrowser.open(links["comfyui"])),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Voice typing button", lambda *_: self.set_dictation_button(not self.dictation_button),
+                             checked=lambda _item: bool(self.dictation_button),
+                             visible=lambda _item: self.dictation_button is not None),
             pystray.MenuItem("GPU for chat (free ComfyUI's memory)", lambda *_: self.set_gpu_mode("chat")),
             pystray.MenuItem("GPU for media (unload Ollama's models)", lambda *_: self.set_gpu_mode("media")),
             pystray.Menu.SEPARATOR,
@@ -485,6 +504,23 @@ class TrayApp:
             pystray.MenuItem("Quit (keep services running)", lambda *_: self.quit(False)),
             pystray.MenuItem("Stop services and quit", lambda *_: self.quit(True)),
         )
+
+    def set_dictation_button(self, visible: bool) -> None:
+        """Show or hide voice typing's floating mic button. The app shows or hides it at once and saves the choice
+        (dictation.button), so it survives a restart; hiding it from its own menu can be undone here."""
+        from stacklib.dictation import control
+
+        self.dictation_button = visible  # the window and menu follow the click at once
+        self.ui_queue.put(self._render_services)  # called from the tray menu's thread too: draw on the Tk thread
+
+        def run() -> None:
+            try:
+                control.call(int(self.profile["ports"]["dictation"]), "show" if visible else "hide")
+            except (OSError, ValueError) as e:
+                print(f"[tray] could not {'show' if visible else 'hide'} the voice typing button: {e}")
+            self.refresh_soon()
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _toggle_startup(self) -> None:
         startup.remove() if startup.is_installed() else startup.install()
@@ -636,6 +672,11 @@ class TrayApp:
             buttons.grid(row=i, column=3, sticky="e")
             if svc in links:
                 ttk.Button(buttons, text="Open", width=7, command=lambda s=svc: self.open_url(s)).pack(side="left", padx=2)
+            if svc == "dictation":
+                # Bring back (or hide) the floating mic button without opening Settings.
+                self.dictation_btn = ttk.Button(buttons, text="Hide button", width=12,
+                                                command=lambda: self.set_dictation_button(not self.dictation_button))
+                self.dictation_btn.pack(side="left", padx=2)
             toggle = ttk.Button(buttons, text="Stop", width=7, command=lambda s=svc: self.toggle(s))
             if svc != "ollama":
                 toggle.pack(side="left", padx=2)
@@ -767,6 +808,12 @@ class TrayApp:
             else:
                 reason.grid_remove()
                 show.grid_remove()
+        btn = getattr(self, "dictation_btn", None)
+        if btn is not None:
+            if self.dictation_button is None:
+                btn.configure(text="Show button", state="disabled")
+            else:
+                btn.configure(text="Hide button" if self.dictation_button else "Show button", state="normal")
         total = sum(1 for s in self.row_widgets if s == "ollama" or s in self.managed)
         self.pill_dot.configure(fg=t["good"] if up == total else (t["warn"] if up else t["bad"]))
         activity = self._activity()
@@ -1175,7 +1222,8 @@ class TrayApp:
         form.columnconfigure(1, weight=1)
         self.form = form
 
-        groups = [("Models", "models"), ("Tracing and services", ("observability", "services")), ("Ollama runtime", "ollama_env")]
+        groups = [("Models", "models"), ("Tracing and services", ("observability", "services")),
+                  ("Voice typing", "dictation"), ("Ollama runtime", "ollama_env")]
         self.setting_vars: dict[str, tk.Variable] = {}
         self.model_boxes: list[ttk.Combobox] = []
         self.changed_marks: dict[str, ttk.Label] = {}

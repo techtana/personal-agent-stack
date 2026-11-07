@@ -121,6 +121,62 @@ holds the card, which is slower.
 The chat model itself (`local-primary`) still cannot draw; it is a text model. "Draw me a picture" in a plain chat
 gets a text answer unless the image button is on.
 
+## Voice typing
+
+Speak instead of typing, in any app: Logseq, Word, Notion, a browser text field, Open WebUI. Whisper runs on this
+PC (on the GPU when it can) and the cleanup uses the gateway's local model, so nothing leaves the machine.
+
+Set it up once with `uv run scripts/stack.py dictate install`. It builds its own Python environment under
+`<media.root>\dictation`, fetches the Whisper model into `HF_HOME` if it is not there yet (1.6 GB) and turns voice
+typing on in `machines/<HOST>.yaml`. From then on the tray starts it with the other services (the **Voice typing** row
+on the Overview tab). To start it right away: `uv run scripts/stack.py dictate start`.
+
+1. Click where the text should go.
+2. Press **Ctrl+Alt+D**, or click the round mic button at the bottom right, and speak. The button turns red, and the
+   bubble above it shows what Whisper hears.
+3. Stop talking. After 3 seconds of quiet it stops by itself; or press Ctrl+Alt+D again. To talk only while you hold
+   the keys, hold Ctrl+Alt+D. **Esc** cancels.
+4. The text appears at the caret.
+
+Two modes, chosen with a right-click on the button (or in the tray's Settings tab):
+
+- **Type when I finish, cleaned up** (the default, `polish`): the local model removes um, uh, "you know", false starts
+  and self-corrections ("Tuesday, no wait, Wednesday" becomes "Wednesday") and fixes punctuation. **Concise** also
+  shortens sentences; **Verbatim** types exactly what Whisper heard. It adds about a second after you stop.
+- **Type as I speak** (`live`): each phrase is typed when you pause for 0.7 seconds. Only the filler sounds (um, uh)
+  are removed; there is no model cleanup.
+
+On SEKAIHOME (RTX 3060 with the 9B chat model loaded) Whisper takes 0.3 to 0.5 s per phrase and the cleanup about
+1 s. Whisper holds about 1.2 GB of VRAM and frees it after 30 idle minutes; the next dictation loads it again (5 s,
+while you are already talking).
+
+Good to know:
+
+- **Pasting.** The text goes in with Ctrl+V: the clipboard is saved first and restored a second later, and your
+  dictations stay out of clipboard history (Win+V). For an app that blocks pasting, choose **Insert by: typing** in the
+  button's menu. Typed keystrokes can double brackets in Logseq, which pairs them automatically; pasting does not.
+- **The right window.** If you switch windows while it works, it does not type into the new window: the text goes to
+  the clipboard and the bubble says so. Programs running as administrator cannot receive typed input from a normal
+  program, so their text goes to the clipboard too. In live mode with the hotkey held down, the phrases are typed when
+  you let go (keys still held would turn Ctrl+V into Ctrl+Alt+V).
+- **Privacy.** The microphone is open only while the button is red (Windows shows its microphone icon in the taskbar
+  then). Audio stays in memory and is never saved; the log keeps lengths and timings, not words.
+- **Names and jargon.** Add words Whisper should expect to `dictation.vocabulary` in `machines/<HOST>.yaml`, for
+  example `vocabulary: 'Logseq, LiteLLM, Ollama'`. In a test, "Logseq" came out as "Logsake" without it.
+- **Language.** It is detected from your first phrase. If short phrases come out in the wrong language, set one under
+  **Language** in the button's menu. Thai works with the default model.
+- **Hotkey.** Ctrl+Alt+D by default, because the Claude desktop app uses Ctrl+Alt+Space for its quick entry. Change
+  it in the tray's Settings tab. If another program already has the key, the bubble says so at start; the button still
+  works.
+- **Starting and hiding.** The tray starts voice typing with the other services. **Hide button** in the button's
+  menu keeps only the hotkey; bring it back with **Show button** on the **Voice typing** row of the tray window's
+  Overview tab, or the tray menu's **Voice typing button** check item. Either one switches it at once and remembers
+  the choice (`dictation.button`).
+- **Try it on a recording.** `uv run scripts/stack.py dictate transcribe note.wav --style concise` prints each phrase,
+  the transcript and the cleaned text. `stack.py dictate check` lists the microphones and shows whether the GPU is used.
+
+Every setting is under `dictation:` in `machines/_defaults.yaml`; copy a line into `machines/<HOST>.yaml` to change it.
+
 ## Working with the departments
 
 There are six department agents: `app-dev`, `testing`, `security`, `devops`, `code-review` and `docs`.

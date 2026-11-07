@@ -1,0 +1,427 @@
+"""Tests for voice typing (scripts/stacklib/dictation): the parts that need no microphone, model or Windows desktop.
+
+Hotkey parsing, the silence and phrase rules, filler removal, the cleanup request and its safety checks (against a local
+fake gateway), the control endpoint's request rules, configuration, the service command and the tray settings.
+"""
+from __future__ import annotations
+
+import json
+import os
+import socket
+import sys
+import tempfile
+import threading
+import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from stacklib import dictation, services, settings, yamledit  # noqa: E402
+from stacklib.dictation import cleanup, control, gpu, hotkey, models, textops  # noqa: E402
+from stacklib.dictation.segment import FRAME_S, Segmenter  # noqa: E402
+
+
+def frames(seconds: float) -> int:
+    return round(seconds / FRAME_S)
+
+
+def run(seg: Segmenter, pattern: list[tuple[float, float]]) -> list[tuple[int, object]]:
+    """Feed (probability, seconds) runs; return (frame index, event) pairs."""
+    out, i = [], 0
+    for prob, secs in pattern:
+        for _ in range(frames(secs)):
+            out += [(i, ev) for ev in seg.push(prob)]
+            i += 1
+    return out
+
+
+def kinds(events) -> list[str]:
+    return [ev.kind for _, ev in events]
+
+
+class Hotkeys(unittest.TestCase):
+    def test_combos(self):
+        self.assertEqual(hotkey.parse("ctrl+alt+d"), (hotkey.MOD_CONTROL | hotkey.MOD_ALT, ord("D")))
+        self.assertEqual(hotkey.parse("Ctrl + Alt + Space"), (hotkey.MOD_CONTROL | hotkey.MOD_ALT, 0x20))
+        self.assertEqual(hotkey.parse("alt+`"), (hotkey.MOD_ALT, 0xC0))
+        self.assertEqual(hotkey.parse("f9"), (0, 0x78))
+        self.assertEqual(hotkey.parse("pause"), (0, 0x13))
+
+    def test_refuses_keys_that_would_swallow_typing(self):
+        for bad in ("d", "space", "shift+a", "enter"):
+            with self.assertRaises(hotkey.HotkeyError, msg=bad):
+                hotkey.parse(bad)
+
+    def test_refuses_nonsense(self):
+        for bad in ("", "ctrl", "ctrl+alt", "ctrl+banana", "hyper+d"):
+            with self.assertRaises(hotkey.HotkeyError, msg=bad):
+                hotkey.parse(bad)
+
+    def test_every_offered_choice_parses(self):
+        for choice in hotkey.CHOICES + settings.HOTKEY_CHOICES:
+            hotkey.parse(choice)
+        self.assertEqual(dictation.Config().hotkey, hotkey.CHOICES[0])
+
+    def test_label(self):
+        self.assertEqual(hotkey.label("ctrl+alt+d"), "Ctrl+Alt+D")
+        self.assertEqual(hotkey.label("alt+`"), "Alt+`")
+
+
+class Segmenting(unittest.TestCase):
+    def test_phrases_and_silence_stop(self):
+        seg = Segmenter(phrase_pause_s=0.7, silence_stop_s=3.0)
+        events = run(seg, [(0.0, 0.3), (0.9, 1.3), (0.1, 0.9), (0.9, 0.6), (0.0, 4.0)])
+        self.assertEqual(kinds(events), ["speech", "phrase", "phrase", "stop"])
+        first, second = events[1][1], events[2][1]
+        self.assertEqual((first.start, first.end), (frames(0.3), frames(0.3) + frames(1.3)))
+        self.assertGreater(second.start, first.end)
+        stop_frame, stop = events[3]
+        self.assertEqual(stop.reason, "silence")
+        quiet = (stop_frame - (second.end - 1)) * FRAME_S
+        self.assertAlmostEqual(quiet, 3.0, delta=FRAME_S * 1.5)
+
+    def test_short_pause_keeps_one_phrase(self):
+        seg = Segmenter(phrase_pause_s=0.7, silence_stop_s=3.0)
+        events = run(seg, [(0.9, 1.0), (0.1, 0.4), (0.9, 1.0), (0.0, 3.5)])
+        self.assertEqual(kinds(events), ["speech", "phrase", "stop"])
+
+    def test_no_speech_times_out(self):
+        seg = Segmenter(start_timeout_s=2.0)
+        events = run(seg, [(0.1, 3.0)])
+        self.assertEqual(kinds(events), ["stop"])
+        self.assertEqual(events[0][1].reason, "no_speech")
+        self.assertAlmostEqual(events[0][0] * FRAME_S, 2.0, delta=FRAME_S * 1.5)
+
+    def test_clicks_are_not_speech(self):
+        seg = Segmenter(min_speech_s=0.12, start_timeout_s=2.0)
+        events = run(seg, [(0.0, 0.5), (0.95, 0.064), (0.0, 2.0)])  # two loud frames: a click
+        self.assertEqual(kinds(events), ["stop"])
+        self.assertEqual(events[0][1].reason, "no_speech")
+
+    def test_hold_to_talk_never_stops_on_silence(self):
+        seg = Segmenter(silence_stop_s=1.0, start_timeout_s=1.0, auto_stop=False)
+        events = run(seg, [(0.0, 2.0), (0.9, 1.0), (0.0, 5.0)])
+        self.assertEqual(kinds(events), ["speech", "phrase"])
+        self.assertEqual(kinds([(0, ev) for ev in seg.finish("released")]), ["stop"])
+
+    def test_finish_closes_the_open_phrase(self):
+        seg = Segmenter()
+        run(seg, [(0.9, 1.0)])
+        events = seg.finish("manual")
+        self.assertEqual([e.kind for e in events], ["phrase", "stop"])
+        self.assertEqual(events[0].end, seg.n)
+        self.assertEqual(seg.finish(), [])
+        self.assertEqual(seg.push(0.9), [])
+
+    def test_manual_stop_without_speech_says_so(self):
+        seg = Segmenter()
+        run(seg, [(0.0, 1.0)])
+        self.assertEqual(seg.finish("manual")[-1].reason, "no_speech")
+
+    def test_max_length(self):
+        seg = Segmenter(max_s=2.0, auto_stop=False)
+        events = run(seg, [(0.9, 3.0)])
+        self.assertEqual(kinds(events), ["speech", "phrase", "stop"])
+        self.assertEqual(events[-1][1].reason, "max_length")
+
+    def test_long_phrase_is_cut(self):
+        seg = Segmenter(max_phrase_s=5.0, auto_stop=False)
+        events = run(seg, [(0.9, 12.0)])
+        phrases = [ev for _, ev in events if ev.kind == "phrase"]
+        self.assertEqual(len(phrases), 2)
+        self.assertEqual(phrases[1].start, phrases[0].end)
+
+
+class TextRules(unittest.TestCase):
+    def test_fillers(self):
+        cases = {
+            "Um, so, I was thinking that, uh, we should go.": "So, I was thinking that we should go.",
+            "And, um, can you send the agenda?": "And can you send the agenda?",
+            "Hmm, okay. Erm, yes": "Okay. Yes",
+            "We need, uh, 3 things: uh, A, B and C.": "We need 3 things: A, B and C.",
+            "I said um.": "I said.",
+            "Uh.": "",
+            "um um um the plan": "The plan",
+        }
+        for raw, want in cases.items():
+            self.assertEqual(textops.strip_fillers(raw), want, raw)
+
+    def test_real_words_survive(self):
+        for text in ("The umbrella is under the hum of the drum.", "Uhuru and Erma met in Ahmedabad.", "Hello world",
+                     "Like, you know, I mean it."):
+            self.assertEqual(textops.strip_fillers(text), text)
+
+    def test_joiner(self):
+        self.assertEqual(textops.joiner("", "Hi"), "")
+        self.assertEqual(textops.joiner("Hello.", "Next"), " ")
+        self.assertEqual(textops.joiner("Hello", ", and more"), "")
+        self.assertEqual(textops.joiner("line\n", "Next"), "")
+        self.assertEqual(textops.joiner("(", "aside"), "")
+        self.assertEqual(textops.joiner("日本", "語"), "")
+        self.assertEqual(textops.joiner("สวัสดี", "ครับ"), " ")
+
+    def test_stock_hallucinations(self):
+        self.assertTrue(textops.is_stock_hallucination(" Thanks for watching!"))
+        self.assertTrue(textops.is_stock_hallucination("you"))
+        self.assertFalse(textops.is_stock_hallucination("Thanks for the update."))
+        self.assertFalse(textops.is_stock_hallucination(""))
+
+
+class _FakeGateway:
+    """A local stand-in for LiteLLM's /v1/chat/completions that records requests and returns a canned reply."""
+
+    def __init__(self, content: str, status: int = 200) -> None:
+        self.requests: list[dict] = []
+        gw = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                gw.requests.append({"path": self.path, "auth": self.headers.get("Authorization"), "body": body})
+                data = json.dumps({"choices": [{"message": {"role": "assistant", "content": content}}]}).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+
+        self.httpd = HTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+RAW = "Um, so we should move the meeting to Tuesday, no wait, Wednesday. Can you send the agenda?"
+
+
+class Cleanup(unittest.TestCase):
+    def test_request_turns_thinking_off_and_asks_for_json(self):
+        body = cleanup.request_body(RAW, "clean", "local-small")
+        self.assertIs(body["think"], False)
+        self.assertEqual(body["response_format"], {"type": "json_object"})
+        self.assertEqual(body["model"], "local-small")
+        self.assertIn(RAW, body["messages"][1]["content"])
+        self.assertNotIn("concise", body["messages"][0]["content"].lower())
+        self.assertIn("concise", cleanup.system_prompt("concise").lower())
+        self.assertIn("do not answer", cleanup.system_prompt("clean"))
+
+    def test_parse_reply(self):
+        self.assertEqual(cleanup.parse_reply('{"text": "Hi."}'), "Hi.")
+        self.assertEqual(cleanup.parse_reply('```json\n{"text": "A"}\n```'), "A")
+        self.assertEqual(cleanup.parse_reply('Sure! {"text": "B"} done'), "B")
+        self.assertEqual(cleanup.parse_reply('{"cleaned": "C"}'), "C")
+        self.assertIsNone(cleanup.parse_reply("no json here"))
+        self.assertIsNone(cleanup.parse_reply(""))
+
+    def test_acceptable(self):
+        self.assertTrue(cleanup.acceptable(RAW, "We should move the meeting to Wednesday. Can you send the agenda?", "clean")[0])
+        self.assertFalse(cleanup.acceptable(RAW, "", "clean")[0])
+        self.assertFalse(cleanup.acceptable(RAW, RAW + " " + RAW, "clean")[0])          # grew: it added text
+        self.assertFalse(cleanup.acceptable(RAW, "Meeting moved.", "clean")[0])          # summarised
+        self.assertTrue(cleanup.acceptable(RAW, "Move the meeting to Wednesday; send the agenda?", "concise")[0])
+        self.assertFalse(cleanup.acceptable("can you send the agenda", "Sure, here is the agenda.", "clean")[0])
+
+    def test_polish_through_the_gateway(self):
+        gw = _FakeGateway('{"text": "We should move the meeting to Wednesday. Can you send the agenda?"}')
+        try:
+            res = cleanup.polish(RAW, "clean", base_url=gw.url, api_key="sk-test", model="local-small")
+        finally:
+            gw.close()
+        self.assertTrue(res.polished, res.note)
+        self.assertEqual(res.text, "We should move the meeting to Wednesday. Can you send the agenda?")
+        self.assertEqual(gw.requests[0]["path"], "/v1/chat/completions")
+        self.assertEqual(gw.requests[0]["auth"], "Bearer sk-test")
+
+    def test_an_answer_falls_back_to_the_transcript(self):
+        gw = _FakeGateway('{"text": "Sure! Here is a detailed agenda for Wednesday: 1. Welcome 2. Updates 3. Q&A 4. Wrap-up and next steps for everyone."}')
+        try:
+            res = cleanup.polish(RAW, "clean", base_url=gw.url, api_key="k", model="m")
+        finally:
+            gw.close()
+        self.assertFalse(res.polished)
+        self.assertEqual(res.text, textops.strip_fillers(RAW))
+        self.assertTrue(res.note)
+
+    def test_gateway_down_falls_back(self):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]  # nothing listens here once the socket closes
+        res = cleanup.polish(RAW, "clean", base_url=f"http://127.0.0.1:{port}", api_key="k", model="m", timeout=5)
+        self.assertFalse(res.polished)
+        self.assertIn("not reachable", res.note)
+        self.assertTrue(res.text.startswith("So we should"), res.text)
+
+    def test_verbatim_sends_nothing(self):
+        res = cleanup.polish(RAW, "verbatim", base_url="http://127.0.0.1:9", api_key="k", model="m")
+        self.assertEqual((res.text, res.polished, res.note), (RAW, False, ""))
+
+
+class Control(unittest.TestCase):
+    def test_request_rules(self):
+        ok = {"Host": "127.0.0.1:8790"}
+        self.assertIsNone(control.check_request("GET", "/health", ok, 8790))
+        self.assertIsNone(control.check_request("POST", "/toggle", {"Host": "localhost:8790"}, 8790))
+        self.assertEqual(control.check_request("GET", "/toggle", ok, 8790)[0], 405)
+        self.assertEqual(control.check_request("POST", "/health", ok, 8790)[0], 405)
+        self.assertEqual(control.check_request("POST", "/nope", ok, 8790)[0], 404)
+        self.assertEqual(control.check_request("POST", "/toggle", {**ok, "Origin": "https://evil.example"}, 8790)[0], 403)
+        self.assertEqual(control.check_request("POST", "/toggle", {"Host": "evil.example:8790"}, 8790)[0], 403)
+        self.assertEqual(control.check_request("POST", "/toggle", {}, 8790)[0], 403)
+
+    def test_server_round_trip(self):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        acted: list[str] = []
+        server = control.ControlServer(port, lambda: {"ok": True, "state": "idle"},
+                                       lambda name: (acted.append(name), {"ok": True})[1])
+        server.start()
+        try:
+            self.assertEqual(control.call(port, "health")["state"], "idle")
+            self.assertTrue(control.call(port, "toggle")["ok"])
+            self.assertEqual(acted, ["toggle"])
+            import urllib.request
+
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/toggle", data=b"", method="POST",
+                                         headers={"Origin": "https://example.com"})
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req, timeout=3)
+            self.assertEqual(cm.exception.code, 403)
+            self.assertEqual(acted, ["toggle"])
+            if os.name == "nt":  # a second copy must not be able to bind the same port
+                with self.assertRaises(OSError):
+                    control.ControlServer(port, dict, lambda n: {})
+        finally:
+            server.stop()
+
+
+def profile(tmp: str, media_root: str = "", native: bool = True, **dictation_keys) -> dict:
+    return {
+        "name": "TEST",
+        "data_dir": Path(tmp) / ".run",
+        "ports": {"dictation": 8790, "litellm": 4000},
+        "services": {"dictation": "native" if native else "off"},
+        "media": {"root": media_root, "hf_home": str(Path(tmp) / "hf")} if media_root else {},
+        "agent_access": {"allowed_roots": [media_root] if media_root else []},
+        "dictation": dictation_keys,
+    }
+
+
+class Configuration(unittest.TestCase):
+    def test_defaults_and_overrides(self):
+        cfg = dictation.Config.from_profile({"dictation": {"mode": "live", "silence_stop_s": "2", "button": "off"}})
+        self.assertEqual((cfg.mode, cfg.silence_stop_s, cfg.button, cfg.style), ("live", 2.0, False, "clean"))
+
+    def test_invalid_values_fall_back(self):
+        cfg = dictation.Config.from_profile({"dictation": {"mode": "shout", "insert": "telepathy", "silence_stop_s": 0.1,
+                                                            "phrase_pause_s": "soon"}})
+        self.assertEqual((cfg.mode, cfg.insert), ("polish", "paste"))
+        self.assertEqual(cfg.silence_stop_s, 0.8)      # clamped
+        self.assertEqual(cfg.phrase_pause_s, 0.7)      # not a number: default
+
+    def test_defaults_file_matches_the_dataclass(self):
+        from stacklib import profile as prof
+
+        defaults = prof.load_defaults()
+        self.assertEqual(defaults["ports"]["dictation"], 8790)
+        self.assertEqual(defaults["services"]["dictation"], "off")
+        cfg = dictation.Config()
+        for key, value in defaults["dictation"].items():
+            self.assertEqual(getattr(cfg, key), value, key)
+
+    def test_env_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media = str(Path(tmp) / "media")
+            self.assertEqual(dictation.env_dir(profile(tmp, media)), Path(media) / "dictation")
+            self.assertEqual(dictation.env_dir(profile(tmp)), Path(tmp) / ".run" / "dictation")
+            self.assertEqual(dictation.env_dir(profile(tmp, media, env_dir=str(Path(tmp) / "x"))), Path(tmp) / "x")
+
+    def test_service_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            media = str(Path(tmp) / "media")
+            self.assertIsNone(dictation.service_command(profile(tmp, media, native=False), {}))
+            spec = dictation.service_command(profile(tmp, media), {"LITELLM_MASTER_KEY": "sk"})
+            self.assertEqual(spec["cmd"][1:], ["-P", "-m", "stacklib.dictation", "run"])
+            self.assertTrue(spec["cmd"][0].startswith(str(Path(media) / "dictation" / ".venv")))
+            self.assertEqual(spec["env"]["PYTHONPATH"], str(dictation.REPO / "scripts"))
+            self.assertEqual(spec["env"]["HF_HOME"], str(Path(tmp) / "hf"))
+            self.assertEqual(spec["env"]["AGENT_STACK_MACHINE"], "TEST")
+            self.assertEqual(spec["env"]["LITELLM_MASTER_KEY"], "sk")
+            self.assertFalse(dictation.installed(profile(tmp, media)))
+
+    def test_install_refuses_folders_outside_the_allowed_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = profile(tmp, str(Path(tmp) / "media"), env_dir=str(Path(tmp) / "elsewhere"))
+            with self.assertRaises(PermissionError):
+                dictation.install(p)
+
+    def test_save_setting_keeps_comments(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            machine = Path(tmp) / "TEST.yaml"
+            machine.write_text("# owner's notes\nname: TEST\nservices:\n  comfyui: native  # images\n", encoding="utf-8")
+            with mock.patch("stacklib.profile.machine_file", return_value=machine):
+                dictation.save_setting({"name": "TEST"}, "mode", "live")
+                dictation.save_setting({"name": "TEST"}, "button", False)
+            text = machine.read_text(encoding="utf-8")
+            self.assertIn("# owner's notes", text)
+            self.assertIn("comfyui: native  # images", text)
+            self.assertIn("dictation:\n  mode: live\n  button: false", text)
+
+    def test_state_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = profile(tmp)
+            self.assertEqual(dictation.read_state(p), {})
+            dictation.write_state(p, x=10, y=20)
+            dictation.write_state(p, hidden=True)
+            self.assertEqual(dictation.read_state(p), {"x": 10, "y": 20, "hidden": True})
+
+
+class Integration(unittest.TestCase):
+    def test_service_registration(self):
+        self.assertEqual(services.SERVICE_ORDER[-1], "dictation")
+        from stacklib import profile as prof
+
+        ports = prof.load_defaults()["ports"]
+        self.assertEqual(services.health_url({"ports": ports}, "dictation"), "http://127.0.0.1:8790/health")
+        self.assertIn("dictation", services.EXPECTED_IMAGES)
+
+    def test_tray_settings(self):
+        ids = {settings.setting_id(s) for s in settings.SETTINGS}
+        for key in ("services.dictation", "dictation.hotkey", "dictation.mode", "dictation.style", "dictation.model"):
+            self.assertIn(key, ids)
+        p = {"models": {}, "observability": {}, "services": {"dictation": "native"}, "ollama_env": {},
+             "dictation": {"mode": "live", "silence_stop_s": 3.0, "button": True}}
+        values = settings.current_values(p)
+        self.assertEqual((values["services.dictation"], values["dictation.mode"]), (True, "live"))
+        self.assertEqual(values["dictation.silence_stop_s"], "3.0")
+        stop = next(s for s in settings.SETTINGS if settings.setting_id(s) == "dictation.silence_stop_s")
+        self.assertEqual(settings._to_file_value(stop, "2.0"), 2.0)
+        self.assertIn("dictation", settings.EFFECT_TEXT)
+        for s in settings.SETTINGS:
+            if s.section == "dictation" and s.kind == "choice":
+                self.assertIn(str(values.get(settings.setting_id(s)) or s.choices[0]), s.choices + [""], s.key)
+
+    def test_yamledit_adds_a_section(self):
+        text = yamledit.set_key("name: X\n# end\n", "dictation", "hotkey", "alt+`")
+        self.assertIn("dictation:\n  hotkey: alt+`", text)
+        self.assertIs(settings.set_key, yamledit.set_key)
+
+    def test_models_and_gpu_paths(self):
+        self.assertEqual(models.repo_for("large-v3-turbo"), "mobiuslabsgmbh/faster-whisper-large-v3-turbo")
+        self.assertEqual(models.repo_for("small"), "Systran/faster-whisper-small")
+        self.assertEqual(models.repo_for("org/custom"), "org/custom")
+        with mock.patch.dict(os.environ, {"LOCALAPPDATA": r"C:\Users\x\AppData\Local", "PATH": ""}, clear=False):
+            dirs = [str(d) for d in gpu.candidate_dirs(Path(r"C:\venv"))]
+        self.assertIn(str(Path(r"C:\Users\x\AppData\Local") / "Programs" / "Ollama" / "lib" / "ollama" / "cuda_v12"), dirs)
+        self.assertEqual(dirs[0], str(Path(r"C:\venv") / "Lib" / "site-packages" / "nvidia" / "cublas" / "bin"))
+
+
+if __name__ == "__main__":
+    unittest.main()

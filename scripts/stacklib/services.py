@@ -1,4 +1,4 @@
-"""Start/stop/status for the native services (LiteLLM, Phoenix, orchestrator MCP, Open WebUI)."""
+"""Start/stop/status for the native services (LiteLLM, Phoenix, orchestrator MCP, Open WebUI, media, voice typing)."""
 from __future__ import annotations
 
 import os
@@ -14,7 +14,8 @@ from pathlib import Path
 from . import IS_WINDOWS, LITELLM_DIR, REPO, TRACES_DIR, env_value, info, load_dotenv, warn, which
 
 # Media services (ComfyUI, Kokoro) start before Open WebUI, which points its image and speech settings at them.
-SERVICE_ORDER = ["phoenix", "litellm", "orchestrator", "comfyui", "kokoro", "open_webui"]
+# Voice typing (dictation) comes last: it needs only the gateway, for its cleanup.
+SERVICE_ORDER = ["phoenix", "litellm", "orchestrator", "comfyui", "kokoro", "open_webui", "dictation"]
 
 # Services that are uv tools: (uv tool environment, console script). They start through the environment's own
 # Python, not the per-script launcher uv writes to ~/.local/bin. Smart App Control judges each executable by
@@ -136,6 +137,7 @@ def health_url(profile: dict, svc: str) -> str:
         "ollama": f"http://127.0.0.1:{p['ollama']}/api/version",
         "comfyui": f"http://127.0.0.1:{p['comfyui']}/system_stats",
         "kokoro": f"http://127.0.0.1:{p['kokoro']}/v1/models",
+        "dictation": f"http://127.0.0.1:{p['dictation']}/health",
     }[svc]
 
 
@@ -217,6 +219,11 @@ def commands(profile: dict) -> dict[str, dict]:
                 **media.openwebui_env(profile),
             },
         }
+    from . import dictation
+
+    spec = dictation.service_command(profile, base_env)
+    if spec:
+        out["dictation"] = spec
     return out
 
 
@@ -236,6 +243,7 @@ EXPECTED_IMAGES = {
     "open_webui": ("open-webui",),
     "comfyui": ("python",),
     "kokoro": ("python", "uv"),
+    "dictation": ("pythonw", "python"),
 }
 # Services run with a console that has no window (CREATE_NO_WINDOW), not with no console at all (DETACHED_PROCESS).
 # Every recorded pid is a launcher: a venv's Scripts\python.exe or uv.exe, each of which starts the real interpreter as
@@ -407,7 +415,8 @@ def start(profile: dict, services: list[str] | None = None) -> dict[str, str]:
                 warn(f"{svc}: could not leave the launching shell's job; it stops when that shell exits")
         except OSError as e:
             if isinstance(e, FileNotFoundError):
-                problems[svc] = f"program not found ({c['cmd'][0]}); run `uv run scripts/stack.py setup` to install the tools"
+                fix = "dictate install" if svc == "dictation" else "setup"
+                problems[svc] = f"program not found ({c['cmd'][0]}); run `uv run scripts/stack.py {fix}` to install it"
             elif getattr(e, "winerror", None) == 4551:
                 problems[svc] = f"Smart App Control (or an App Control policy) blocked {c['cmd'][0]}: {e.strerror or e}"
             else:

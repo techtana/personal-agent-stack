@@ -34,6 +34,7 @@ ollama_env:
 
 services:
   comfyui: native
+  dictation: native
 
 media:
   # Chosen by the owner 2026-11-04: media tools live on the USB SSD next to the Ollama models.
@@ -48,3 +49,7 @@ agent_access:
 notes:
   - "Docker Desktop / WSL2 are NOT installed; all services run natively so the WSL2 VM does not take RAM from MoE expert offload."
   - "DDR4-2133 is the bottleneck for CPU-side experts: expect lower tok/s than the 39-47 tok/s community numbers measured on faster RAM."
+
+dictation:
+  language: en
+  button: true

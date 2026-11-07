@@ -76,6 +76,7 @@ ports:
   open_webui: 3000
   comfyui: 8188     # image, video and music generation (media)
   kokoro: 8880      # text to speech, OpenAI-compatible /v1/audio/speech
+  dictation: 8790   # voice typing app: local control endpoint (health, toggle) for the tray
 
 services:
   # native = run as a local process via `stack.py up`; docker = infrastructure/docker-compose.yml; off = not managed
@@ -86,6 +87,7 @@ services:
   open_webui: native
   comfyui: 'off'    # native once media.root is set and `stack.py setup` installed it
   kokoro: 'off'     # native once `stack.py setup` installed Kokoro-FastAPI under media.root
+  dictation: 'off'  # voice typing (Whisper, any app); native once `stack.py dictate install` built its environment
 
 media:
   # Image, video, music and speech tools (docs/design/plans/2026-11-01-multimodal-stack.md). Set `root` per machine,
@@ -99,6 +101,31 @@ media:
   image_workflow: z_image_turbo   # config/comfyui/workflows/<name>.json
   image_size: 1024x1024
   image_steps: 8
+
+dictation:
+  # Voice typing in any app (scripts/stacklib/dictation; docs/manuals/user-guide.md "Voice typing"). A floating mic
+  # button and a hotkey record the microphone; Whisper (faster-whisper) transcribes on this machine; the cleanup uses a
+  # private gateway alias. Audio stays in memory. The button's right-click menu changes mode, style, language and insert.
+  hotkey: ctrl+alt+d         # tap: listen until you stop talking; hold: talk while held. Esc cancels. (Ctrl+Alt+Space
+                             # is the Claude desktop app's quick entry)
+  mode: polish               # polish: type when you finish, cleaned up | live: type each phrase when you pause
+  style: clean               # polish cleanup: verbatim | clean (fillers, false starts, punctuation) | concise (also shorter)
+  language: auto             # auto, or a Whisper language code: en, th, ja, ...
+  model: large-v3-turbo      # faster-whisper model on the GPU (1.6 GB, cached in HF_HOME)
+  cpu_model: small           # used when the GPU is not available (turbo needs ~10 s per 15 s of speech on a 6-core CPU)
+  device: auto               # auto (GPU when it works) | cuda | cpu
+  compute_type: auto         # int8_float16 on the GPU, int8 on the CPU
+  silence_stop_s: 3.0        # stop after this much quiet once you have spoken
+  start_timeout_s: 8.0       # stop if you say nothing at all
+  phrase_pause_s: 0.7        # a pause this long ends a phrase (live mode types it)
+  max_minutes: 10            # hard limit per recording
+  insert: paste              # paste (clipboard restored afterwards) | type (simulated keystrokes)
+  cleanup_model: local-small # gateway alias for the cleanup (private models only)
+  vocabulary: ''             # words Whisper should expect, e.g. 'Logseq, LiteLLM, Ollama, Qwen'
+  mic: ''                    # '' = the Windows default input; else part of the device name
+  unload_after_min: 30       # free Whisper's VRAM after this many idle minutes (0 = never)
+  button: true               # show the floating button (the hotkey works either way)
+  env_dir: ''                # '' = <media.root>\dictation, or .run\dictation without a media root
 
 agent_access:
   # Folders agent sessions and media tools may use (decision D-M6). Empty means "ask the owner": every media path

@@ -19,6 +19,21 @@ is a re-implementation on the CTranslate2 engine that is faster and uses less me
 Open WebUI has a local Whisper built in, so dictation needs no new service: the microphone button records in the
 browser, Open WebUI transcribes on the server, and the text lands in the input box. The model size is a setting.
 
+Dictation in every other app (Logseq, Word, a browser text field) needs a desktop program: something has to listen
+for a hotkey, record the microphone, and put the text where the caret is. The stack's voice typing app does that
+(`scripts/stacklib/dictation`, [plan](../design/plans/2026-11-07-voice-typing.md)). Three ideas make it feel quick:
+
+- **Voice activity detection (VAD).** A tiny model (Silero, 2 MB) scores every 32 ms of audio as speech or not. A
+  pause ends a phrase; a longer quiet ends the recording, so you never press stop.
+- **Phrase by phrase.** Each phrase goes to Whisper as soon as you pause, with the text so far as a prompt, so only the
+  last phrase is left to transcribe when you finish. "Live" typing is the same pipeline, typing each phrase at once.
+- **Cleanup by a language model.** Whisper writes what was said, fillers and all ("um, Tuesday, no wait, Wednesday").
+  A short request to the local chat model rewrites it into what you meant ("Wednesday"), the way phone keyboards now
+  do. The request must forbid answering: dictated text often contains questions or instructions.
+
+On an RTX 3060, faster-whisper's `large-v3-turbo` transcribes 15 s of speech in 0.6 s and holds about 1.2 GB of VRAM;
+on a 6-core CPU the same model needs about 10 s, which is why the CPU fallback uses `small`.
+
 ### Text to speech
 
 A TTS model turns text into a voice. **Kokoro** (82 million parameters, Apache-2.0 weights) gives natural voices and
@@ -61,7 +76,8 @@ long, and say so in the user guide. Photos can carry faces and location metadata
 
 ## Rules of thumb and typical numbers
 
-- Dictation: Whisper `small` on the CPU is a good default; `base` if the CPU is busy.
+- Dictation: Whisper `small` on the CPU is a good default; `base` if the CPU is busy. With a GPU, `large-v3-turbo`
+  is both more accurate and faster (0.3 s per phrase on an RTX 3060).
 - TTS: Kokoro on the CPU; no GPU needed.
 - Vision: use the chat model's own vision; resize images to about 1-2 megapixels first.
 - Turn on vision in both places (gateway and Open WebUI), or images are silently dropped or refused.
@@ -69,7 +85,8 @@ long, and say so in the user guide. Photos can carry faces and location metadata
 ## Common misconceptions and edge cases
 
 - **"Vision needs a separate model."** Not with Qwen 3.5: the chat model reads images itself.
-- **"Speech needs the GPU."** Not for dictation or a natural voice at this size.
+- **"Speech needs the GPU."** Not for dictation or a natural voice at this size. A GPU does make the large Whisper
+  models fast enough to type as you speak.
 - **"Setting an env variable changes Open WebUI."** Open WebUI keeps saved admin settings in its database, and those
   override env values. Check the effective setting in the admin panel or through its API.
 - **"Local speech is private, so nothing to think about."** Stored recordings and photos are still personal data on

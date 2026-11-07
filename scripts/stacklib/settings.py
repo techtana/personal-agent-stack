@@ -6,7 +6,6 @@ it replaces the file. Applying then rebuilds the generated configs and restarts 
 """
 from __future__ import annotations
 
-import re
 import urllib.error
 from dataclasses import dataclass, field
 
@@ -14,8 +13,11 @@ import yaml
 
 from . import agents_build, litellm_build, ollama, services, winget_build
 from . import profile as prof
+from .yamledit import dump_scalar as _dump_scalar, set_key  # noqa: F401 - set_key is imported from here by install.py
 
 CTX_CHOICES = ["8192", "16384", "32768", "65536"]
+from .dictation.hotkey import CHOICES as HOTKEY_CHOICES  # noqa: E402
+from .dictation.models import CHOICES as MODEL_CHOICES  # noqa: E402
 
 
 @dataclass
@@ -54,6 +56,29 @@ SETTINGS = [
     Setting("services", "comfyui", "ComfyUI (images)", "bool",
             "Run ComfyUI at http://127.0.0.1:8188 for the chat's image button. Needs media.root and `stack.py setup`.",
             "comfyui", on_off=("native", "off")),
+    Setting("services", "dictation", "Voice typing", "bool",
+            "A mic button and a hotkey that type what you say into any app, with Whisper on this machine. Needs "
+            "`stack.py dictate install` once.", "dictation", on_off=("native", "off")),
+    Setting("dictation", "hotkey", "Voice typing hotkey", "choice",
+            "Tap it to talk until you stop; hold it to talk while held. Esc cancels.", "dictation", HOTKEY_CHOICES),
+    Setting("dictation", "mode", "When to type", "choice",
+            "polish: when you finish, cleaned up by the local model. live: each phrase as soon as you pause.",
+            "dictation", ["polish", "live"]),
+    Setting("dictation", "style", "Cleanup", "choice",
+            "verbatim: as heard. clean: drops fillers and false starts, fixes punctuation. concise: also shortens.",
+            "dictation", ["verbatim", "clean", "concise"]),
+    Setting("dictation", "silence_stop_s", "Stop after quiet (seconds)", "choice",
+            "How long a pause ends the recording once you have spoken.", "dictation", ["1.5", "2.0", "3.0", "4.0", "6.0"]),
+    Setting("dictation", "language", "Language", "choice",
+            "auto detects it from the first phrase; a fixed language is more reliable for short phrases.", "dictation",
+            ["auto", "en", "th", "ja", "zh", "de", "fr", "es"]),
+    Setting("dictation", "model", "Whisper model", "choice",
+            "large-v3-turbo: best on the GPU (1.6 GB). small or base: lighter, for the CPU.", "dictation", MODEL_CHOICES),
+    Setting("dictation", "insert", "Insert text by", "choice",
+            "paste: fast, the clipboard is restored afterwards. type: simulated keystrokes for apps that block paste.",
+            "dictation", ["paste", "type"]),
+    Setting("dictation", "button", "Show the mic button", "bool",
+            "The floating button; the hotkey works without it.", "dictation"),
     Setting("ollama_env", "OLLAMA_KEEP_ALIVE", "Keep models loaded for", "choice",
             "How long an idle chat model stays in memory, gateway requests included; -1 holds its VRAM until Ollama stops.", "ollama", ["5m", "30m", "1h", "4h", "-1"]),
     Setting("ollama_env", "OLLAMA_KV_CACHE_TYPE", "KV cache precision", "choice",
@@ -71,6 +96,7 @@ EFFECT_TEXT = {
     "open_webui": "start or stop Open WebUI",
     "comfyui": "start or stop ComfyUI and turn Open WebUI's image button on or off",
     "ollama": "update Ollama's environment and restart Ollama (interrupts running requests)",
+    "dictation": "restart voice typing",
 }
 
 
@@ -86,6 +112,7 @@ def current_values(profile: dict) -> dict[str, object]:
         "observability": profile["observability"],
         "services": profile["services"],
         "ollama_env": profile["ollama_env"],
+        "dictation": profile.get("dictation") or {},
     }
     out: dict[str, object] = {}
     for s in SETTINGS:
@@ -115,49 +142,9 @@ def _to_file_value(s: Setting, ui_value: object) -> object:
         return s.on_off[0] if ui_value else s.on_off[1]
     if s.section == "models" and s.key.endswith("num_ctx"):
         return int(ui_value)
+    if s.section == "dictation" and s.key.endswith("_s"):
+        return float(ui_value)
     return str(ui_value)
-
-
-def _dump_scalar(v: object) -> str:
-    text = yaml.safe_dump(v, default_flow_style=True, width=10_000, allow_unicode=True).strip()
-    return text[:-4].rstrip() if text.endswith("\n...") else text
-
-
-_SECTION = re.compile(r"^(?P<name>[A-Za-z_][\w-]*):\s*(?P<rest>.*)$")
-
-
-def set_key(text: str, section: str, key: str, value: object) -> str:
-    """Set `section.key` in YAML text, keeping comments and the layout of everything else."""
-    lines = text.splitlines()
-    rendered = _dump_scalar(value)
-    start = next((i for i, ln in enumerate(lines) if (mt := _SECTION.match(ln)) and mt["name"] == section), None)
-    if start is None:
-        if lines and lines[-1].strip():
-            lines.append("")
-        lines += [f"{section}:", f"  {key}: {rendered}"]
-        return "\n".join(lines) + "\n"
-    rest = _SECTION.match(lines[start])["rest"].split(" #", 1)[0].strip()
-    if rest and rest != "{}" and not rest.startswith("#"):
-        # Flow mapping on one line (`cloud: {enabled: auto}`): rewrite that section as a block.
-        current = yaml.safe_load(rest) or {}
-        lines[start:start + 1] = [f"{section}:", *[f"  {k}: {_dump_scalar(v)}" for k, v in current.items()]]
-    elif rest == "{}":
-        lines[start] = f"{section}:"
-    end = start + 1
-    indent = "  "
-    while end < len(lines) and (not lines[end].strip() or lines[end][0] in " \t#"):
-        if lines[end].strip() and not lines[end].lstrip().startswith("#") and indent == "  ":
-            indent = lines[end][: len(lines[end]) - len(lines[end].lstrip())]
-        end += 1
-    pat = re.compile(rf"^(?P<lead>\s+{re.escape(key)}:)(?P<val>[^#]*?)(?P<comment>\s+#.*)?$")
-    for i in range(start + 1, end):
-        mt = pat.match(lines[i])
-        if mt and len(lines[i]) - len(lines[i].lstrip()) == len(indent):
-            lines[i] = f"{mt['lead']} {rendered}{mt['comment'] or ''}"
-            return "\n".join(lines) + "\n"
-    last = max([i for i in range(start, end) if lines[i].strip() and lines[i][0] != "#"] or [start])
-    lines.insert(last + 1, f"{indent}{key}: {rendered}")
-    return "\n".join(lines) + "\n"
 
 
 def changed(profile: dict, edits: dict[str, object]) -> list[Setting]:
@@ -225,6 +212,25 @@ def apply(old_profile: dict, edits: dict[str, object], log=print) -> dict:
             log("Restarting Open WebUI so the image button follows ComfyUI...")
             services.stop(profile, ["open_webui"])
             services.start(profile, ["open_webui"])
+    dictation_keys = {s.key for s in todo if s.effect == "dictation"}
+    if dictation_keys == {"button"} and profile["services"].get("dictation") == "native":
+        # Only the button's visibility changed: tell the running app instead of restarting it.
+        from .dictation import control
+
+        try:
+            control.call(int(profile["ports"]["dictation"]), "show" if profile["dictation"].get("button") else "hide")
+            log("Voice typing button " + ("shown" if profile["dictation"].get("button") else "hidden"))
+            effects.discard("dictation")
+        except OSError:
+            pass  # not running: the saved value applies when it starts
+            effects.discard("dictation")
+    if "dictation" in effects:
+        services.stop(old_profile, ["dictation"])
+        if profile["services"].get("dictation") == "native":
+            problems = services.start(profile, ["dictation"])
+            log(f"Voice typing did not start: {problems['dictation']}" if problems.get("dictation") else "Voice typing restarted")
+        else:
+            log("Voice typing stopped")
     if "open_webui" in effects:
         if profile["services"].get("open_webui") == "native":
             services.start(profile, ["open_webui"])

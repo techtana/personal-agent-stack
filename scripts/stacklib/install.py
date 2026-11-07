@@ -516,6 +516,16 @@ def step_media(plan: Plan, profile: dict, report) -> str:
     return "; ".join(notes)
 
 
+def step_dictation(plan: Plan, profile: dict, report) -> str:
+    """Voice typing's environment, only where it is turned on (services.dictation: native); it is opt-in because it
+    holds a microphone hotkey and about 1.2 GB of VRAM while loaded."""
+    if profile["services"].get("dictation") != "native":
+        raise Skip("off in the machine profile; `uv run scripts/stack.py dictate install` turns it on")
+    from . import dictation
+
+    return dictation.install(profile, report)
+
+
 def _version(text: str) -> tuple[int, int, int] | None:
     m = re.search(r"(\d+)\.(\d+)\.(\d+)", text or "")
     return tuple(int(x) for x in m.groups()) if m else None
@@ -655,6 +665,7 @@ STEPS = (
     ("pull", "Download models", step_pull),
     ("huggingface", "Set up the Hugging Face cache", step_huggingface),
     ("media", "Install ComfyUI and the image model", step_media),
+    ("dictation", "Install voice typing (Whisper)", step_dictation),
     ("openclaw", "Install OpenClaw", step_openclaw),
     ("start", "Start the stack", step_start),
 )
