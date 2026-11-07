@@ -1,0 +1,1 @@
+- [Commit, push, PR together](commit-push-pr-together.md) — asked to commit means commit + push + open PR in one turn
