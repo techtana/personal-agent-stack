@@ -223,6 +223,13 @@ once across a session restart.
    ~230-token replies, likely title/tag tasks) waited behind chat replies (NUM_PARALLEL=1), so overall was 33 tok/s.
    Traces now record `stream`, to show whether the untimed requests are the streamed ones (gateway restart needed).
    Verified: unit tests, a render of the Usage tab from the worktree with stubbed services and real traces.
+22. Recordings (2026-11-05, branch claude/whisper-local-cowork-integration-820acc): faster-whisper 1.2.1 (ctranslate2
+   4.8.5, PyAV 17.0.0, cuBLAS 12.9 / cuDNN 9.28 wheels) in `D:\media\whisper\.venv` from python.org 3.14.7;
+   large-v3-turbo in `D:\huggingface`. `stack.py whisper install` registered the `local-whisper` MCP server in
+   `%APPDATA%\Claude\claude_desktop_config.json` (backup `.bak-20261105-233938`; unity-mcp kept). Verified over stdio
+   with that exact entry: four tools, GPU transcription (12 s clip 0.7 s warm, 125 s in 3.5 s, ~1.1 GB VRAM), cache,
+   job polling, refusal outside allowed_roots; unit tests 149 passed. Not verified: Claude Desktop restarted and the
+   tools used from a Cowork task, a real phone/meeting recording (only eSpeak WAVs), m4a/mp4 input, Thai.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render
