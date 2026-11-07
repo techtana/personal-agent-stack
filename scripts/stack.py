@@ -368,6 +368,21 @@ def cmd_media(a):
         info(media.gpu_mode(p, a.mode))
 
 
+def cmd_whisper(a):
+    from stacklib import whisper
+
+    p = prof.resolve_profile()
+    if a.action == "install":
+        info(whisper.install(p, info))
+    if a.action in ("install", "register"):
+        info(whisper.register_desktop(p))
+    if a.action == "unregister":
+        info(whisper.unregister_desktop())
+    if a.action == "entry":
+        import json
+        print(json.dumps({whisper.SERVER_NAME: whisper.server_entry(p)}, indent=2))
+
+
 def cmd_retro(a):
     rest = [x for x in a.rest if x != "--"]
     raise SystemExit(subprocess.run([sys.executable, str(REPO / "scripts" / "retro.py"), *rest], cwd=REPO).returncode)
@@ -406,6 +421,8 @@ def main(argv=None):
     s = sub.add_parser("media", help="ComfyUI and media models under media.root: check, install, provision, gpu chat|media")
     s.add_argument("action", choices=["check", "install", "provision", "gpu"]); s.add_argument("mode", nargs="?", choices=["chat", "media"])
     s.set_defaults(f=cmd_media)
+    s = sub.add_parser("whisper", help="local Whisper for recordings: install, register|unregister in Claude Desktop, entry")
+    s.add_argument("action", choices=["install", "register", "unregister", "entry"]); s.set_defaults(f=cmd_whisper)
     s = sub.add_parser("retro"); s.add_argument("rest", nargs=argparse.REMAINDER); s.set_defaults(f=cmd_retro)
     s = sub.add_parser("tray", help="background tray app that runs the services and shows their status")
     s.add_argument("--foreground", action="store_true"); s.add_argument("--status", action="store_true"); s.add_argument("--stop", action="store_true")

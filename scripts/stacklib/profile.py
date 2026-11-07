@@ -194,4 +194,7 @@ def resolve_media(defaults: dict, machine: dict) -> dict:
         media.setdefault("output_dir", join("outputs"))
         media.setdefault("input_dir", join("inputs"))
         media.setdefault("uv_cache", join(".uv-cache"))
+        media.setdefault("whisper_dir", join("whisper"))
+        media.setdefault("recordings_dir", sep.join([media["input_dir"].rstrip("\\/"), "recordings"]))
+        media.setdefault("transcripts_dir", sep.join([media["output_dir"].rstrip("\\/"), "transcripts"]))
     return media
