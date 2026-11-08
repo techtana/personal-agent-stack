@@ -186,8 +186,9 @@ There are six department agents: `app-dev`, `testing`, `security`, `devops`, `co
 
 - Open this repository in Claude Code. The departments appear as subagents. Mention one by name: `@security review src/auth.py`.
 - Run one department as the main agent: `claude --agent docs`.
-- Skills: `/retro`, `/harden`, `/brainstorm`, `/why-routed`, and `/ux-rules` to review a screen, page or flow against
-  a researched catalog of UX rules (for example `/ux-rules scripts/tray.py`).
+- Skills: `/retro`, `/harden`, `/brainstorm`, `/why-routed`, `/ux-rules` to review a screen, page or flow against
+  a researched catalog of UX rules (for example `/ux-rules scripts/tray.py`), and `/claude-security-audit` (see
+  [Checking your Claude setup](#checking-your-claude-setup)).
 - The orchestrator MCP server provides `delegate(department, task, tier)`, `get_job`, `cancel_job`, `list_departments` and
   `record_lesson`. Approve the server the first time Claude Code asks.
 
@@ -242,6 +243,44 @@ The report names each skill as:
 
 Edit a skill at its source, not in `skills/`; the next sync overwrites the copy. The weekly task holds back any skill
 whose new content looks personal and names it in its report. To keep it out for good, add its name to `exclude`.
+
+## Checking your Claude setup
+
+`/claude-security-audit` checks Claude Code and Claude Desktop on this computer for privacy and safety, and removes
+your identity from what Claude writes. A weekly scheduled task runs it on Monday mornings; you can also run it any
+time by asking Claude Code for it in this repository.
+
+It looks at:
+
+- **Versions:** whether your Claude Code installs (the command line, the VS Code extension and Claude Desktop's own
+  copy) are behind, and whether a published advisory affects them.
+- **Data leaving the computer:** telemetry, error reports, `/feedback` uploads and claude.ai connectors.
+- **Retention:** how long conversation transcripts stay on this computer.
+- **Access:** whether Claude can read credential files, and allow rules that let it run anything of a kind unasked.
+- **Extensions:** MCP servers, plugins and hooks, and anything that changed since the last audit.
+- **New settings:** what Claude Code's docs and changelog have added since the last audit.
+- **Your identity:** your email, name or Windows user name in repositories, `CLAUDE.md`, Claude's memory, skills and
+  scheduled tasks, and scripts that send an email address to web APIs.
+
+What it does about them:
+
+- **Settings:** it never changes them. The report gives the exact setting and file for each fix, and you apply it.
+- **Identity:** it replaces your identity with placeholders such as `you@example.com`, `Your Name`, `%USERPROFILE%`
+  and `%USERNAME%`. A scheduled run opens a pull request for this repository and fixes Claude's own files in place.
+  Files with uncommitted changes and skills that hold personal data on purpose are left alone.
+- **Reports:** each run writes one to `%LOCALAPPDATA%\claude-security-audit\reports\`, outside every repository.
+  Nothing identifying goes into it.
+
+What it cannot do: stop Claude Code or Claude Desktop from sending your prompts, files and account details to
+Anthropic. Only managed settings, the sandbox (WSL2 on Windows) or the local-only profile B
+(`scripts/claude-local.ps1`) enforce anything.
+
+A standing rule in `~/.claude/CLAUDE.md` tells every session to keep your identity out of what it writes. Its text is
+in `.claude/skills/claude-security-audit/references/identity.md`.
+
+To set up the weekly run on another computer, create the scheduled task from
+`.claude/skills/claude-security-audit/scheduled-task.md` in the Claude desktop app (**Scheduled tasks**, weekly,
+Monday 09:30).
 
 ## Seeing what happened
 
