@@ -5,10 +5,10 @@
     -> {"text": "..."} (response_format json, the default), or the text itself (response_format text)
 
 Open WebUI 0.12 with speech-to-text engine "openai" (request format multipart) posts its recording unchanged when
-ffmpeg is not installed, as on SEKAIHOME: webm/opus from Chrome and Edge, ogg/opus from Firefox, mp4/aac from Safari,
-wav; audio files dropped into a chat as mp3, m4a, flac and the like. PyAV in the voice typing environment decodes all
-of them (checked with PyAV 17.0.0, 2026-11-07). aiohttp streams the file, so the body arrives with
-Transfer-Encoding: chunked.
+ffmpeg is not installed, as on the reference machine: webm/opus from Chrome and Edge, ogg/opus from Firefox,
+mp4/aac from Safari, wav; audio files dropped into a chat as mp3, m4a, flac and the like. PyAV in the voice typing
+environment decodes all of them (checked with PyAV 17.0.0, 2026-11-07). aiohttp streams the file, so the body
+arrives with Transfer-Encoding: chunked.
 
 The request runs on the same Engine as voice typing: one Whisper model on the GPU, one decode at a time. The engine
 records each call for the tray's Usage tab (source voice-typing), naming the caller from its User-Agent as the tray
