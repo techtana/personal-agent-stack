@@ -242,7 +242,9 @@ once across a session restart.
    pasting into a Tk test window (clipboard restored) and typing live phrases. Ctrl+Alt+Space is taken here (Claude
    desktop quick entry), hence Ctrl+Alt+D. Not verified: a live microphone and hand-pressed hotkey, the bubble's look
    (screen capture refused), pasting into Logseq/Word/Notion, languages other than English, the tray's new row and
-   settings in the live tray.
+   settings in the live tray. 2026-11-08: the language choice covers all 100 Whisper codes through a type-to-search
+   picker (button menu and tray Settings); its filtering and keyboard choice were checked in an invisible window, its
+   look and the tray button were not.
    Also verified: cancel, a second instance, hold-to-talk with injected Ctrl+Alt+D (live text typed at release). A
    code review's eight findings and its clipboard-owner risk were fixed (owner window per clipboard operation; restore
    after 1 s). At the end of the session the app was left running from the worktree (pid file in the worktree's .run).

@@ -25,12 +25,13 @@ class Setting:
     section: str          # top-level key in the machine file
     key: str
     label: str
-    kind: str             # "model" | "choice" | "bool"
+    kind: str             # "model" | "choice" | "bool" | "search" (a long list: the tray opens a search picker)
     help: str
     effect: str           # "gateway" | "phoenix" | "open_webui" | "ollama"
     choices: list[str] = field(default_factory=list)
     # bool settings store these values for on / off
     on_off: tuple = (True, False)
+    labels: dict = field(default_factory=dict)  # "search" settings: the name shown for each stored value
 
 
 SETTINGS = [
@@ -69,9 +70,10 @@ SETTINGS = [
             "dictation", ["verbatim", "clean", "concise"]),
     Setting("dictation", "silence_stop_s", "Stop after quiet (seconds)", "choice",
             "How long a pause ends the recording once you have spoken.", "dictation", ["1.5", "2.0", "3.0", "4.0", "6.0"]),
-    Setting("dictation", "language", "Language", "choice",
-            "auto detects it from the first phrase; a fixed language is more reliable for short phrases.", "dictation",
-            [code for code, _ in LANGUAGES]),
+    Setting("dictation", "language", "Language", "search",
+            "Any of Whisper's 100 languages; type to search. Detect automatically uses the first phrase; a fixed "
+            "language is more reliable for short phrases.", "dictation",
+            [code for code, _ in LANGUAGES], labels=dict(LANGUAGES)),
     Setting("dictation", "model", "Whisper model", "choice",
             "large-v3-turbo: best on the GPU (1.6 GB). small or base: lighter, for the CPU.", "dictation", MODEL_CHOICES),
     Setting("dictation", "insert", "Insert text by", "choice",
