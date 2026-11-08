@@ -419,9 +419,15 @@ def cmd_media(a):
         embed = services.openwebui_embedding_settings(p)
         if not embed and p["models"].get("embed"):
             warn("LITELLM_MASTER_KEY is empty: Open WebUI's document embeddings stay on Ollama, outside the Usage tab")
-        stt = services.openwebui_stt_settings(p)
-        if not stt and p["services"].get("dictation") == "native":
-            warn("LITELLM_MASTER_KEY is empty: Open WebUI's microphone stays on its own Whisper, outside the Usage tab")
+        stt = {}
+        if p["services"].get("dictation") == "native":
+            from stacklib import dictation
+
+            try:  # voice typing's own key for Open WebUI's requests, added to .env the first time
+                stt = services.openwebui_stt_settings(p, dictation.ensure_api_key())
+            except OSError as e:
+                warn(f"could not add {dictation.KEY_NAME} to .env ({e}); Open WebUI's microphone stays on its own "
+                     "Whisper, outside the Usage tab")
         keys = media.provision_openwebui(media.openwebui_db(p), {**embed, **stt, **media.image_settings(p)})
         # Open WebUI reads its speech-to-text rows on every request; the embedding function needs a restart.
         restart = [k for k in keys if not k.startswith("audio.stt.")]

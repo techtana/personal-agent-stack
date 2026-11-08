@@ -1,11 +1,14 @@
-"""Open WebUI's microphone on voice typing's Whisper: the OpenAI-compatible transcription endpoint on the dictation
+r"""Open WebUI's microphone on voice typing's Whisper: the OpenAI-compatible transcription endpoint on the dictation
 port (scripts/stacklib/dictation/transcriptions.py, control.py), the Open WebUI settings that point at it
 (services.openwebui_stt_settings / _env, `stack.py media provision`), and the Usage tab's note while Open WebUI still
-runs its own Whisper. Nothing here needs faster-whisper, a model or a microphone: the transcriber is a stand-in.
+runs its own Whisper. Nothing here needs a model or a microphone: the transcriber is a stand-in. The decoder tests
+need PyAV and numpy and run in the voice typing environment:
+    D:\media\dictation\.venv\Scripts\python.exe -m unittest discover -s tests -p test_transcriptions.py
 """
 from __future__ import annotations
 
 import http.client
+import importlib.util
 import io
 import json
 import os
@@ -187,6 +190,13 @@ class RequestBodies(unittest.TestCase):
             t.read_body(io.BytesIO(good), {"Transfer-Encoding": "chunked"}, limit=2000)
         self.assertEqual(cm.exception.status, 413)
 
+    def test_a_body_that_takes_too_long_is_refused(self):
+        body = form()
+        for h, wire in (({"Content-Length": str(len(body))}, body), ({"Transfer-Encoding": "chunked"}, chunked(body))):
+            with self.subTest(h), self.assertRaises(t.ApiError) as cm:
+                t.read_body(io.BytesIO(wire), h, deadline_s=-1)
+            self.assertEqual(cm.exception.status, 408)
+
 
 class Keys(unittest.TestCase):
     def test_bearer_key(self):
@@ -203,6 +213,7 @@ class Keys(unittest.TestCase):
         with self.assertRaises(t.ApiError) as cm:
             t.check_key({"Authorization": "Bearer "}, "")
         self.assertEqual(cm.exception.status, 503)
+        self.assertIn("DICTATION_BEARER", cm.exception.message)
 
 
 class Respond(unittest.TestCase):
@@ -226,14 +237,30 @@ class Respond(unittest.TestCase):
         self.assertEqual((status, content_type, out), (200, "text/plain; charset=utf-8", b"Hello from Whisper."))
         self.assertEqual(self.calls[0][1]["client"], "curl")
 
-    def test_wrong_key_is_answered_after_reading_the_body_and_runs_nothing(self):
+    def test_wrong_key_runs_nothing(self):
         body = form()
-        rfile = io.BytesIO(body)
-        status, _, out = t.respond(headers(body, Authorization="Bearer nope"), rfile, KEY, self.fake)
+        status, _, out = t.respond(headers(body, Authorization="Bearer nope"), io.BytesIO(body), KEY, self.fake)
         self.assertEqual(status, 401)
         self.assertEqual(json.loads(out)["error"]["type"], "invalid_request_error")
-        self.assertEqual(rfile.tell(), len(body))  # drained, so the client reads the 401 instead of a reset
         self.assertEqual(self.calls, [])
+
+    def test_the_key_can_be_looked_up_per_request(self):
+        keys = iter(["", KEY])  # added to .env after voice typing started
+        body = form()
+        self.assertEqual(t.respond(headers(body), io.BytesIO(body), lambda: next(keys), self.fake)[0], 503)
+        self.assertEqual(t.respond(headers(body), io.BytesIO(body), lambda: next(keys), self.fake)[0], 200)
+
+    def test_one_request_at_a_time(self):
+        body = form()
+        self.assertTrue(t._turn.acquire(timeout=1))  # another request is being transcribed
+        try:
+            with mock.patch.object(t, "QUEUE_WAIT_S", 0.05):
+                status, _, out = t.respond(headers(body), io.BytesIO(body), KEY, self.fake)
+        finally:
+            t._turn.release()
+        self.assertEqual((status, json.loads(out)["error"]["code"]), (503, "busy"))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(t.respond(headers(body), io.BytesIO(body), KEY, self.fake)[0], 200)  # the turn was released
 
     def test_refusals_from_the_transcriber_keep_their_status(self):
         def refuse(data, **kw):
@@ -260,9 +287,7 @@ class Respond(unittest.TestCase):
 
     def test_without_a_transcriber(self):
         body = form()
-        rfile = io.BytesIO(body)
-        self.assertEqual(t.respond(headers(body), rfile, KEY, None)[0], 503)
-        self.assertEqual(rfile.tell(), len(body))
+        self.assertEqual(t.respond(headers(body), io.BytesIO(body), KEY, None)[0], 503)
 
 
 class SharedEngine(unittest.TestCase):
@@ -280,7 +305,10 @@ class SharedEngine(unittest.TestCase):
         e = self.Engine()
         with mock.patch.object(t, "decode_audio", return_value=[0.0] * 16000):
             self.assertEqual(t.transcribe_with(e, b"webm", language="th", prompt="", client="Open WebUI"), "Hi.")
+            t.transcribe_with(e, b"webm", client="Open WebUI")
         self.assertEqual(e.calls[0][1], {"prompt": "", "language": "th", "client": "Open WebUI"})
+        # No language from Open WebUI: detect it, rather than voice typing's own dictation.language.
+        self.assertEqual(e.calls[1][1]["language"], "auto")
 
     def test_a_file_without_samples_runs_no_model(self):
         e = self.Engine()
@@ -294,6 +322,10 @@ class SharedEngine(unittest.TestCase):
             t.transcribe_with(e, b"webm")
         self.assertEqual(cm.exception.status, 503)
         self.assertIn("no CUDA device", cm.exception.message)
+        e.note = r"Whisper could not load: Unable to open file 'D:\huggingface\hub\models--x\model.bin'"
+        with mock.patch.object(t, "decode_audio", return_value=[0.0]), self.assertRaises(t.ApiError) as cm:
+            t.transcribe_with(e, b"webm")
+        self.assertNotIn("huggingface", cm.exception.message)
         ready = self.Engine(fail=RuntimeError("cuBLAS failed"))
         with mock.patch.object(t, "decode_audio", return_value=[0.0]), self.assertRaises(RuntimeError):
             t.transcribe_with(ready, b"webm")
@@ -338,10 +370,27 @@ class Server(unittest.TestCase):
         self.assertEqual(self.calls[0][1]["language"], "de")
 
     def test_wrong_key_with_a_large_body_still_gets_its_answer(self):
-        status, _, out = self.post(form(audio=os.urandom(3 * 1024 * 1024)), {"Authorization": "Bearer wrong"})
-        self.assertEqual(status, 401)
-        self.assertEqual(json.loads(out)["error"]["code"], "invalid_api_key")
+        for _ in range(3):  # a reset shows up in some tries only
+            status, _, out = self.post(form(audio=os.urandom(3 * 1024 * 1024)), {"Authorization": "Bearer wrong"})
+            self.assertEqual(status, 401)
+            self.assertEqual(json.loads(out)["error"]["code"], "invalid_api_key")
         self.assertEqual(self.calls, [])
+
+    def test_an_oversized_upload_gets_its_413_although_it_was_never_read(self):
+        big = form(audio=os.urandom(t.MAX_BODY_BYTES + 1024 * 1024))
+        status, _, out = self.post(big)
+        self.assertEqual((status, json.loads(out)["error"]["code"]), (413, "too_large"))
+        status, _, out = self.post(big, chunk=True)
+        self.assertEqual((status, json.loads(out)["error"]["code"]), (413, "too_large"))
+        self.assertEqual(self.calls, [])
+
+    def test_without_a_key_nobody_gets_in(self):
+        self.server.stop()
+        self.server = control.ControlServer(self.port, dict, lambda name: {}, transcribe=lambda data, **kw: "x",
+                                            api_key=lambda: "")
+        self.server.start()
+        status, _, out = self.post(form())
+        self.assertEqual((status, json.loads(out)["error"]["code"]), (503, "no_key_configured"))
 
     def test_web_pages_wrong_hosts_and_methods_are_refused(self):
         status, _, out = self.post(form(), {"Origin": "https://evil.example"})
@@ -409,7 +458,7 @@ class OpenWebUISettings(unittest.TestCase):
             machine = {"name": "TESTBOX", "services": {"open_webui": "native", "dictation": "native" if on else "off",
                                                        "comfyui": "off", "kokoro": "off"}}
             with self.subTest(dictation=on), mock.patch.object(prof, "load_machine", return_value=machine), \
-                    mock.patch.dict(os.environ, {"LITELLM_MASTER_KEY": KEY}), \
+                    mock.patch.dict(os.environ, {"LITELLM_MASTER_KEY": "sk-gateway", "DICTATION_BEARER": KEY}), \
                     mock.patch.object(services, "load_dotenv", return_value={}), \
                     mock.patch.object(services, "tool_command", side_effect=lambda svc: [f"{svc}.exe"]):
                 env = services.commands(prof.resolve_profile("TESTBOX"))["open_webui"]["env"]
@@ -417,8 +466,46 @@ class OpenWebUISettings(unittest.TestCase):
                     self.assertEqual(env["AUDIO_STT_ENGINE"], "openai")
                     self.assertTrue(env["AUDIO_STT_OPENAI_API_BASE_URL"].startswith("http://127.0.0.1:"))
                     self.assertEqual(env["AUDIO_STT_OPENAI_API_KEY"], KEY)
+                    self.assertNotIn("sk-gateway", [v for k, v in env.items() if k.startswith("AUDIO_STT_")])
                 else:
                     self.assertFalse([k for k in env if k.startswith("AUDIO_STT_")])
+
+
+class VoiceTypingKey(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.env = Path(self.tmp.name) / ".env"
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop(dictation.KEY_NAME, None)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_added_once_and_the_rest_of_env_is_left_alone(self):
+        original = "# my notes\nLITELLM_MASTER_KEY=sk-gateway\nANTHROPIC_API_KEY="  # no newline at the end
+        self.env.write_text(original, encoding="utf-8", newline="\n")
+        key = dictation.ensure_api_key(self.env)
+        text = self.env.read_text(encoding="utf-8")
+        self.assertEqual(text, original + f"\nDICTATION_BEARER={key}\n")
+        self.assertGreaterEqual(len(key), 40)
+        self.assertNotEqual(key, "sk-gateway")
+        self.assertEqual(dictation.ensure_api_key(self.env), key)  # the second call finds it
+        self.assertEqual(self.env.read_text(encoding="utf-8"), text)
+
+    def test_a_missing_env_file_is_created(self):
+        key = dictation.ensure_api_key(self.env)
+        self.assertEqual(self.env.read_text(encoding="utf-8"), f"DICTATION_BEARER={key}\n")
+
+    def test_the_installer_generates_one(self):
+        from stacklib import install
+
+        with mock.patch.object(install, "ENV_FILE", self.env), \
+                mock.patch.object(install, "load_dotenv", return_value={}):
+            env = install.ensure_env_file()
+        self.assertTrue(env["DICTATION_BEARER"])
+        self.assertNotEqual(env["DICTATION_BEARER"], env["LITELLM_MASTER_KEY"])
 
 
 def openwebui_db(tmp: str, engine: str = "", base_url: str = "https://api.openai.com/v1") -> Path:
@@ -484,6 +571,65 @@ class UsageNote(unittest.TestCase):
             self.assertNotIn("speech-to-text", self.notes(stt_profile(tmp)))
             self.assertIn(self.OWN, self.notes(stt_profile(tmp, dictation_on=False)))
             self.assertNotIn("speech-to-text", self.notes(stt_profile(tmp, open_webui_on=False)))
+
+
+@unittest.skipUnless(importlib.util.find_spec("av") and importlib.util.find_spec("numpy"),
+                     "decoding needs PyAV and numpy (the voice typing environment)")
+class Decoding(unittest.TestCase):
+    def tone(self, seconds: float, fmt: str = "webm", codec: str = "libopus", rate: int = 48000) -> bytes:
+        import av
+        import numpy as np
+
+        buf = io.BytesIO()
+        with av.open(buf, mode="w", format=fmt) as out:
+            stream = out.add_stream(codec, rate=rate, layout="mono")
+            samples = (0.3 * np.sin(2 * np.pi * 440 * np.arange(int(rate * seconds)) / rate)).astype(np.float32)
+            frame = av.AudioFrame.from_ndarray(samples[None, :], format="fltp", layout="mono")
+            frame.sample_rate = rate
+            for packet in stream.encode(frame):
+                out.mux(packet)
+            for packet in stream.encode(None):
+                out.mux(packet)
+        return buf.getvalue()
+
+    def test_formats_decode_to_16khz_mono(self):
+        for fmt, codec, rate in (("webm", "libopus", 48000), ("ogg", "libopus", 48000), ("wav", "pcm_s16le", 44100),
+                                 ("ipod", "aac", 44100), ("mp3", "libmp3lame", 44100), ("flac", "flac", 44100)):
+            with self.subTest(fmt):
+                audio = t.decode_audio(self.tone(2.0, fmt, codec, rate))
+                self.assertEqual(str(audio.dtype), "float32")
+                self.assertAlmostEqual(len(audio) / 16000, 2.0, delta=0.1)
+
+    def test_a_cut_off_recording_gives_what_is_there(self):
+        data = self.tone(2.0)
+        self.assertGreater(len(t.decode_audio(data[: int(len(data) * 0.6)])), 8000)
+
+    def test_long_audio_is_refused_before_it_fills_the_memory(self):
+        data = self.tone(3.0, "flac", "flac", 44100)
+        for limit in (1.0, 2.5):  # the container's duration, then the running count (inside the 1 s tolerance)
+            with self.subTest(limit=limit), self.assertRaises(t.ApiError) as cm:
+                t.decode_audio(data, max_seconds=limit)
+            self.assertEqual((cm.exception.status, cm.exception.code), (413, "audio_too_long"))
+        self.assertAlmostEqual(len(t.decode_audio(data, max_seconds=3.5)) / 16000, 3.0, delta=0.1)
+
+    def test_files_that_are_not_audio(self):
+        import av
+        import numpy as np
+
+        buf = io.BytesIO()
+        with av.open(buf, mode="w", format="mp4") as out:
+            s = out.add_stream("mpeg4", rate=10)
+            s.width, s.height, s.pix_fmt = 64, 64, "yuv420p"
+            for _ in range(3):
+                for packet in s.encode(av.VideoFrame.from_ndarray(np.zeros((64, 64, 3), np.uint8), format="rgb24")):
+                    out.mux(packet)
+            for packet in s.encode(None):
+                out.mux(packet)
+        for label, data in (("video only", buf.getvalue()), ("text", b"not audio\n" * 100),
+                            ("header only", self.tone(2.0)[:200])):
+            with self.subTest(label), self.assertRaises(t.ApiError) as cm:
+                t.decode_audio(data)
+            self.assertEqual(cm.exception.status, 400)
 
 
 if __name__ == "__main__":

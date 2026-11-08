@@ -174,6 +174,37 @@ def transcription_url(profile: dict) -> str:
     return f"http://127.0.0.1:{port}/v1"
 
 
+KEY_NAME = "DICTATION_BEARER"
+
+
+def api_key() -> str:
+    """The key callers of the transcription endpoint send (Open WebUI): DICTATION_BEARER from the environment or .env.
+    Its own key, not the gateway's: while voice typing is off, any local program could listen on its port and would
+    learn only this one."""
+    from .. import env_value
+
+    return env_value(KEY_NAME)
+
+
+def ensure_api_key(path: Path | None = None) -> str:
+    """DICTATION_BEARER, appended to .env as a new random key when it is not set yet; the rest of .env is left as it
+    is (comments included). The running voice typing app reads it on its next request."""
+    import secrets
+
+    from .. import ENV_FILE, load_dotenv
+
+    path = path or ENV_FILE
+    key = os.environ.get(KEY_NAME) or load_dotenv(path).get(KEY_NAME, "")
+    if key:
+        return key
+    key = secrets.token_urlsafe(32)
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(("" if not text or text.endswith("\n") else "\n") + f"{KEY_NAME}={key}\n")
+    info(f"{path.name}: added {KEY_NAME}, the key Open WebUI's microphone uses with voice typing")
+    return key
+
+
 def hotkey_label(profile: dict) -> str:
     """'Ctrl+Alt+Space' for menus and help text."""
     return "+".join(part.strip().capitalize() for part in Config.from_profile(profile).hotkey.split("+"))

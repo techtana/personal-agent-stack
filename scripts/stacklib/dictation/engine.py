@@ -185,7 +185,11 @@ class Engine:
             self.log(f"[dictation] usage record failed: {_short(e)}")
 
     def _decode(self, audio: np.ndarray, prompt: str, fast: bool, language: str, stats: dict) -> tuple[str, str]:
-        lang = language or (None if self.cfg.language in ("", "auto") else self.cfg.language)
+        # "auto" detects even when dictation.language names one (Open WebUI's recordings); "" follows the setting.
+        if language == "auto":
+            lang = None
+        else:
+            lang = language or (None if self.cfg.language in ("", "auto") else self.cfg.language)
         with self.lock:
             if self.model is None:
                 raise RuntimeError("Whisper was unloaded")

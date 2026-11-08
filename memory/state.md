@@ -322,11 +322,20 @@ once across a session restart.
    - run `stack.py whisper install` and restart Claude Desktop (recordings);
    - run `stack.py media provision` and restart Open WebUI (embeddings);
    - restart the orchestrator (its name in the traces).
-26. Open WebUI's microphone on voice typing's Whisper (2026-11-07, branch claude/competent-mccarthy-a81053).
+26. Open WebUI's microphone on voice typing's Whisper (2026-11-07, branch claude/competent-mccarthy-a81053, PR #41).
    - Endpoint: voice typing's control port (8790) also serves an OpenAI-compatible `POST /v1/audio/transcriptions`
      (stacklib/dictation/transcriptions.py). It takes multipart `file`, `model` (ignored), `language`, `prompt` and
-     `response_format` json|text. The key is the bearer LITELLM_MASTER_KEY; the Origin and Host refusals stay; the cap
-     is 25 MB. Bodies may be chunked, because Open WebUI's aiohttp streams the file.
+     `response_format` json|text. The Origin and Host refusals stay. Bodies may be chunked, because Open WebUI's
+     aiohttp streams the file.
+   - The key is voice typing's own bearer, DICTATION_BEARER in .env, not the gateway's master key. While voice typing
+     is off, any local program could listen on 8790 and would learn only this key. The installer generates it;
+     `media provision` appends it to an existing .env and leaves the rest of the file as it is. The app reads it on
+     each request, so a key added later works without a restart.
+   - Limits: 25 MB per upload, 30 minutes of decoded audio, one request at a time (the next waits up to 2 minutes,
+     then gets 503 busy), and 2 minutes to send the body. A refusal is answered first; the server then reads what the
+     caller still sends, so the caller sees the answer instead of a reset.
+   - No language field means detect it, as OpenAI's API does, even when dictation.language names one. Open WebUI sends
+     its user's Speech-to-Text Language when one is set.
    - It runs on voice typing's own Engine (one model, one decode at a time). Each call is recorded under source
      voice-typing with the client named from its User-Agent (Open WebUI).
    - Open WebUI points at it only while `services.dictation` is native. A fresh install gets the environment
@@ -341,20 +350,37 @@ once across a session restart.
    - No ffmpeg on PATH, so Open WebUI skips its pydub conversion and forwards the browser's recording unchanged. PyAV
      17.0.0 in the dictation venv decodes webm/opus, ogg/opus, ogg/vorbis, wav, m4a/aac, mp4/aac, mp3 and flac. Broken
      files get a 400; a truncated webm decodes as far as it goes.
+   A security review (subagent, read-only) found no critical or high issues. It found three medium ones, all fixed:
+   - uncapped decoding: a 494 KB FLAC of digital silence declares 45 minutes, and 25 MB of it would decode to about
+     9 GB of samples;
+   - a long job holding voice typing's model;
+   - the master key reused as the endpoint's key.
+   It also found three low ones and one info. Fixed: resets on refused uploads, folder paths in the 503 message, a
+   body that trickles in, and dictation's language forced onto Open WebUI recordings. Not done:
+   - SO_EXCLUSIVEADDRUSE on the port, because on Windows it can refuse a re-bind while the port's connections are in
+     TIME_WAIT, and the tray's health check leaves those every 10 s;
+   - a limit on concurrent connections. Local programs could already hold threads before this change.
    Verified:
-   - unit tests (300 passed), and the engine tests in the dictation venv;
+   - unit tests (309 passed), and the decoder and engine tests in the dictation venv;
    - a throwaway server on port 8797 with the real Engine (large-v3-turbo on cuda, loaded in 5.5 s). Requests were
      sent the way Open WebUI 0.12.3's `_transcribe_openai` sends them, from its own Python 3.11 with aiohttp 3.14.3
      (chunked). webm, ogg, mp4, m4a, mp3 and wav each returned the spoken sentence. Each took 0.3 s warm for 4.8 s of
      eSpeak speech, and the first took 1.1 s;
    - "English" as a language got a 400, and Open WebUI's retry without a language worked;
    - a wrong key got a 401 in OpenAI's error shape;
-   - the server wrote six records with client Open WebUI and device cuda, to a temp folder.
+   - the server wrote six records with client Open WebUI and device cuda, to a temp folder;
+   - after the review fixes, the same check with the decoder written here passed again. A German eSpeak recording sent
+     without a language came back as German with dictation.language "en". `bomb.flac` (45 minutes of silence) got a
+     413 in 12 ms from its header. A 90 s webm muxed live, with no duration in its header (as MediaRecorder writes it),
+     got a 413 after 0.4 s with the cap lowered to 60 s;
+   - `stack.py media provision` with the real machine profile against a synthetic Open WebUI database in a temp folder:
+     16 rows written after one backup, and the note gone.
    Not verified: Open WebUI itself calling it, a real browser recording, and the mic in the browser. The services were
    down, and Open WebUI's live database was not changed: `media provision` needs the owner's OK.
    After merging:
-   - restart voice typing (Stop and Start its tray row) so it serves the endpoint;
-   - run `uv run scripts/stack.py media provision` from the main checkout (it backs up webui.db first).
+   - run `uv run scripts/stack.py media provision` from the main checkout. It adds DICTATION_BEARER to .env, backs up
+     webui.db, and writes the rows;
+   - restart voice typing (Stop and Start its tray row) so it serves the endpoint.
    If voice typing is later turned off, Open WebUI's mic shows a connection error until its engine is set back to
    Whisper (Local) in Admin Settings > Audio. Neither the tray's Voice typing switch nor provisioning undoes the rows.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models

@@ -521,6 +521,19 @@ class VoiceTypingEngine(unittest.TestCase):
         shared, own = (c.args[0] for c in write.call_args_list)
         self.assertEqual((shared["source"], shared["client"], own["client"]), ("voice-typing", "Open WebUI", "Voice typing"))
 
+    def test_auto_detects_even_when_dictation_names_a_language(self):
+        import numpy as np
+
+        e = self.engine([])
+        e.cfg.language = "en"
+        seen: list = []
+        e.model.transcribe = lambda audio, **kw: (seen.append(kw["language"]), (iter([]), SimpleNamespace(language="th")))[1]
+        with mock.patch.object(usage_log, "write"):
+            e.transcribe(np.zeros(1600, dtype=np.float32), language="auto")  # Open WebUI sent no language
+            e.transcribe(np.zeros(1600, dtype=np.float32))  # dictation follows its setting
+            e.transcribe(np.zeros(1600, dtype=np.float32), language="th")
+        self.assertEqual(seen, [None, "en", "th"])
+
     def test_a_failed_call_is_recorded_and_still_raises(self):
         import numpy as np
 

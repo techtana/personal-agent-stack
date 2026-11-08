@@ -241,12 +241,17 @@ Good to know:
 - **Open WebUI's microphone.** While voice typing runs, the mic in Open WebUI's chat box uses the same Whisper
   (`dictation.model` on the GPU) instead of Open WebUI's own small Whisper `base`. Audio files dropped into a chat use
   it too.
-  - Open WebUI sends each recording to `http://127.0.0.1:8790/v1/audio/transcriptions` with the gateway key
-    (`LITELLM_MASTER_KEY`). It arrives as webm, ogg or mp4 from the browser, or as the file's own format. Each one is
-    counted in the tray's Usage tab under client **Open WebUI**.
-  - A fresh install is set up for it. On an existing one, run `uv run scripts/stack.py media provision` once.
+  - Open WebUI sends each recording to `http://127.0.0.1:8790/v1/audio/transcriptions` with voice typing's own key,
+    `DICTATION_BEARER` in `.env` (not the gateway's key, so a program that takes the port while voice typing is off
+    learns nothing that opens the gateway). It arrives as webm, ogg or mp4 from the browser, or as the file's own
+    format. Each one is counted in the tray's Usage tab under client **Open WebUI**.
+  - A fresh install is set up for it. On an existing one, run `uv run scripts/stack.py media provision` once: it adds
+    the key to `.env` (the rest of the file stays as it is) and points Open WebUI at voice typing.
+  - The language is detected for each recording unless Open WebUI's own **Speech-to-Text Language** setting names one.
+    Voice typing's **Language** setting is for dictation only.
   - Open WebUI gets Whisper's words as heard; the chat-model cleanup is only for text typed into apps.
-  - Whisper runs one recording at a time, so a long audio file in Open WebUI holds a dictation until it is done.
+  - Limits: 25 MB and 30 minutes of audio per file (longer recordings belong to the recordings server), and one file
+    at a time. Whisper is shared with dictation, so a long file holds a dictation until it is done.
   - If voice typing is stopped, Open WebUI's mic shows a connection error. Start voice typing again, or set
     **Speech-to-Text Engine** back to **Whisper (Local)** in Open WebUI's **Admin Settings > Audio**.
 
