@@ -4,7 +4,7 @@
 
 The owner wants the stack to make pictures, videos and music, not only text. These jobs use a different kind of
 model from the chat model. They are called **diffusion models**. They run in a different program (ComfyUI, not
-Ollama). They also want almost all of the graphics card while they work. On SEKAIHOME, an RTX 3060 with 12 GB, that
+Ollama). They also want almost all of the graphics card while they work. On the reference machine, an RTX 3060 with 12 GB, that
 means the chat model and a media model cannot both stay loaded. This page explains how these models use memory, which
 ones fit which hardware, what their licences allow, and how the stack shares one GPU between chat and media. The plan
 that builds on it is [../design/plans/2026-11-01-multimodal-stack.md](../design/plans/2026-11-01-multimodal-stack.md).
@@ -77,7 +77,7 @@ Media weights come in several precisions, like chat models:
 - **GGUF**: the same file format as the chat models, used by community ComfyUI loaders to run media models at about
   3-5 bits. Lower bits fit smaller cards but show more visible quality loss.
 
-On SEKAIHOME, prefer int8 and GGUF builds. An fp8 file still loads on a 3060, but it is converted on the fly and
+On the reference machine, prefer int8 and GGUF builds. An fp8 file still loads on a 3060, but it is converted on the fly and
 gains nothing in speed.
 
 ### Offloading: running a model bigger than the card
@@ -85,7 +85,7 @@ gains nothing in speed.
 When the weights do not fit, the program keeps part of them in system RAM and moves blocks to the GPU when needed
 ("block swap", "weight streaming", ComfyUI `--lowvram`). It works, but every step now waits for data to cross the PCIe
 bus, so a job can take several times longer. Offloading also needs a lot of free system RAM: guides ask for at least
-24 GB and recommend 32 GB for video. On SEKAIHOME the usual desktop leaves about 11-12 GB free, so video jobs need the
+24 GB and recommend 32 GB for video. On the reference machine the usual desktop leaves about 11-12 GB free, so video jobs need the
 desktop apps closed.
 
 ### ComfyUI: one program for every media model
@@ -129,7 +129,7 @@ How much media work a machine can do depends mostly on VRAM, then on system RAM,
 
 | Tier | Example | What fits well |
 |---|---|---|
-| 12 GB | RTX 3060 (SEKAIHOME), RTX 5070 | Images at 1024 px; short 720p clips with Wan 2.2 5B and offload; music; video sound as separate steps |
+| 12 GB | RTX 3060 (the reference machine), RTX 5070 | Images at 1024 px; short 720p clips with Wan 2.2 5B and offload; music; video sound as separate steps |
 | 16 GB | RTX 5070 Ti, 5080 | Same, faster; still too small for the LTX-2.5 int8 denoiser (about 21.5 GB) |
 | 24 GB | RTX 3090, 4090 | LTX-2.5 int8 fully loaded for about 5 s clips (22.7 GiB measured by a community recipe); a 3090 takes about 2.5 min per distilled 5 s clip |
 | 32 GB | RTX 5090 | LTX-2.5 at about 25 s for a 4 s 720p clip (NVIDIA guide); 8 s clips stream weights and take about 3 min |
@@ -141,7 +141,7 @@ about 672 GB/s on an RTX 5070) and less GPU compute, so a desktop card with less
 
 ### Sharing one GPU between chat and media
 
-On SEKAIHOME the 9B chat model holds 6.2 GB of weights (8.0 GB on the card in total at 16k) and stays loaded on
+On the reference machine the 9B chat model holds 6.2 GB of weights (8.0 GB on the card in total at 16k) and stays loaded on
 purpose (`keep_alive: -1`), and the autocomplete model holds another 1.3 GB. A media model wants the rest and more.
 There are three ways to share:
 
@@ -196,7 +196,7 @@ The plan uses 1 as a tray switch ("GPU mode") with 2 as a safety net. A 32 GB ca
 
 ## What we found
 
-Nothing is measured on SEKAIHOME yet. Every timing above is from web reports read on 2026-11-01. Spike M-S0 in the plan
+Nothing is measured on the reference machine yet. Every timing above is from web reports read on 2026-11-01. Spike M-S0 in the plan
 replaces them with local numbers, which will be added here.
 
 ## Open questions

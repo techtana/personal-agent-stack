@@ -11,7 +11,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import IS_WINDOWS, LITELLM_DIR, REPO, TRACES_DIR, env_value, info, load_dotenv, warn, which
+from . import IS_WINDOWS, LITELLM_DIR, REPO, TRACES_DIR, env_value, info, load_dotenv, procname, warn, which
 
 # Media services (ComfyUI, Kokoro) start before Open WebUI, which points its image and speech settings at them.
 # Voice typing (dictation) comes last: it needs only the gateway, for its cleanup.
@@ -180,8 +180,11 @@ def commands(profile: dict) -> dict[str, dict]:
         "cwd": str(LITELLM_DIR),
         "env": litellm_env,
     }
+    # The project environment's own Python when it exists (`uv run` would add a uv.exe parent process and sync).
+    project_python = REPO / ".venv" / ("Scripts/python.exe" if IS_WINDOWS else "bin/python")
     out["orchestrator"] = {
-        "cmd": [which("uv") or "uv", "run", "--quiet", "python", "-m", "orchestrator.server"],
+        "cmd": [str(project_python), "-m", "orchestrator.server"] if project_python.exists()
+        else [which("uv") or "uv", "run", "--quiet", "python", "-m", "orchestrator.server"],
         "cwd": str(REPO),
         "env": {
             **base_env,
@@ -212,9 +215,8 @@ def commands(profile: dict) -> dict[str, dict]:
                 "OPENAI_API_BASE_URL": f"http://127.0.0.1:{p['litellm']}/v1",
                 "OPENAI_API_KEY": master,
                 "ENABLE_OLLAMA_API": "false",
-                "RAG_EMBEDDING_ENGINE": "ollama",
-                "RAG_EMBEDDING_MODEL": profile["models"].get("embed") or "nomic-embed-text",
-                "RAG_OLLAMA_BASE_URL": f"http://127.0.0.1:{p['ollama']}",
+                **openwebui_embedding_env(profile, master),
+                **openwebui_stt_env(profile, env_value("DICTATION_BEARER", dotenv)),
                 "ENABLE_EVALUATION_ARENA_MODELS": "false",
                 **media.openwebui_env(profile),
             },
@@ -224,7 +226,71 @@ def commands(profile: dict) -> dict[str, dict]:
     spec = dictation.service_command(profile, base_env)
     if spec:
         out["dictation"] = spec
+    for svc, spec in out.items():
+        # Each service runs as PAS-<Name>.exe (procname); plain_cmd is the original, for a copy Windows refuses.
+        named = procname.named_cmd(spec["cmd"], svc)
+        if named != spec["cmd"]:
+            spec["plain_cmd"], spec["cmd"] = spec["cmd"], named
     return out
+
+
+def openwebui_embedding_settings(profile: dict, master: str | None = None) -> dict[str, object]:
+    """Open WebUI config rows that send its document embeddings through the gateway's local-embed alias, so they are
+    traced and counted in the tray's Usage tab like every other model call; {} without an embedding model. All four
+    rows go together: engine "openai" with Open WebUI's default base URL would send documents to api.openai.com.
+    {} as well without LITELLM_MASTER_KEY: every embedding would get 401 from the gateway."""
+    if not profile["models"].get("embed"):
+        return {}
+    key = env_value("LITELLM_MASTER_KEY") if master is None else master
+    if not key:
+        return {}
+    return {"rag.embedding_engine": "openai", "rag.embedding_model": "local-embed",
+            "rag.openai.api_base_url": f"http://127.0.0.1:{profile['ports']['litellm']}/v1", "rag.openai.api_key": key}
+
+
+def openwebui_embedding_env(profile: dict, master: str) -> dict[str, str]:
+    """The same as environment variables, which Open WebUI reads only on a fresh install (`stack.py media provision`
+    writes the rows into an existing one). Without an embedding model or a gateway key it keeps asking Ollama
+    directly."""
+    s = openwebui_embedding_settings(profile, master)
+    if not s:
+        return {"RAG_EMBEDDING_ENGINE": "ollama", "RAG_EMBEDDING_MODEL": "nomic-embed-text",
+                "RAG_OLLAMA_BASE_URL": f"http://127.0.0.1:{profile['ports']['ollama']}"}
+    return {"RAG_EMBEDDING_ENGINE": str(s["rag.embedding_engine"]), "RAG_EMBEDDING_MODEL": str(s["rag.embedding_model"]),
+            "RAG_OPENAI_API_BASE_URL": str(s["rag.openai.api_base_url"]), "RAG_OPENAI_API_KEY": str(s["rag.openai.api_key"])}
+
+
+def openwebui_stt_settings(profile: dict, key: str | None = None) -> dict[str, object]:
+    """Open WebUI config rows that send the microphone in its chat box to voice typing's Whisper (large-v3-turbo on
+    the GPU, through the transcription endpoint on the dictation port), so each recording is counted in the tray's
+    Usage tab; {} unless voice typing runs here (services.dictation: native), which leaves Open WebUI's own engine
+    alone. The rows go together: engine "openai" with Open WebUI's default base URL would send recordings to
+    api.openai.com. The key is voice typing's own DICTATION_BEARER (dictation.api_key), never the gateway's master
+    key; {} without one. The model row only labels Open WebUI's admin page; voice typing transcribes with
+    dictation.model whatever it says."""
+    if (profile.get("services") or {}).get("dictation") != "native":
+        return {}
+    from . import dictation
+
+    key = dictation.api_key() if key is None else key
+    if not key:
+        return {}
+    return {"audio.stt.engine": "openai", "audio.stt.openai.api_base_url": dictation.transcription_url(profile),
+            "audio.stt.openai.api_key": key, "audio.stt.openai.api_request_format": "multipart",
+            "audio.stt.model": dictation.Config.from_profile(profile).model}
+
+
+def openwebui_stt_env(profile: dict, key: str) -> dict[str, str]:
+    """The same as environment variables, which Open WebUI reads only on a fresh install (`stack.py media provision`
+    writes the rows into an existing one). {} keeps Open WebUI's own Whisper."""
+    s = openwebui_stt_settings(profile, key)
+    if not s:
+        return {}
+    return {"AUDIO_STT_ENGINE": str(s["audio.stt.engine"]),
+            "AUDIO_STT_OPENAI_API_BASE_URL": str(s["audio.stt.openai.api_base_url"]),
+            "AUDIO_STT_OPENAI_API_KEY": str(s["audio.stt.openai.api_key"]),
+            "AUDIO_STT_OPENAI_API_REQUEST_FORMAT": str(s["audio.stt.openai.api_request_format"]),
+            "AUDIO_STT_MODEL": str(s["audio.stt.model"])}
 
 
 def _pid_file(profile: dict, svc: str) -> Path:
@@ -235,7 +301,8 @@ def _pid_file(profile: dict, svc: str) -> Path:
 # was started: pid files record the process start time (Windows creation FILETIME, Linux /proc starttime ticks, ps
 # lstart elsewhere), and a pid counts as the service only while a process with that pid AND that start time exists.
 # Paths alone are not enough: every `uv run` shares one uv.exe path, and on Linux a venv's python resolves to a shared
-# base interpreter. Pid files from before start times were recorded fall back to these launcher names.
+# base interpreter. Pid files from before start times were recorded fall back to these launcher names (and the
+# service's PAS-<Name>.exe, see procname).
 EXPECTED_IMAGES = {
     "phoenix": ("phoenix",),
     "litellm": ("litellm",),
@@ -245,6 +312,7 @@ EXPECTED_IMAGES = {
     "kokoro": ("python", "uv"),
     "dictation": ("pythonw", "python"),
 }
+EXPECTED_IMAGES = {svc: (*names, procname.NAMES[svc].lower()) for svc, names in EXPECTED_IMAGES.items()}
 # Services run with a console that has no window (CREATE_NO_WINDOW), not with no console at all (DETACHED_PROCESS).
 # Every recorded pid is a launcher: a venv's Scripts\python.exe or uv.exe, each of which starts the real interpreter as
 # a console child. A child of a DETACHED_PROCESS parent gets a brand-new visible console window, and closing that
@@ -371,6 +439,19 @@ def last_log_line(profile: dict, svc: str, since: int = 0) -> str:
     return lines[-1][:300] if lines else ""
 
 
+def spawn(c: dict, **kwargs) -> subprocess.Popen:
+    """Popen of a commands() entry. When Windows refuses its PAS-<Name>.exe (Smart App Control or an App Control
+    policy, WinError 4551), the copy is marked to be rebuilt signed and the original command runs instead."""
+    try:
+        return subprocess.Popen(c["cmd"], **kwargs)
+    except OSError as e:
+        if getattr(e, "winerror", None) != 4551 or not c.get("plain_cmd"):
+            raise
+        procname.mark_blocked(c["cmd"][0])
+        warn(f"Windows refused {Path(c['cmd'][0]).name}; starting {Path(c['plain_cmd'][0]).name} instead")
+        return subprocess.Popen(c["plain_cmd"], **kwargs)
+
+
 def start(profile: dict, services: list[str] | None = None) -> dict[str, str]:
     """Start the services that are not running. Returns, for each service it did not start, the reason in a sentence
     the tray window can show; the command line gets the same text."""
@@ -405,13 +486,13 @@ def start(profile: dict, services: list[str] | None = None) -> dict[str, str]:
             kwargs["start_new_session"] = True
         try:
             try:
-                proc = subprocess.Popen(c["cmd"], **kwargs)
+                proc = spawn(c, **kwargs)
             except PermissionError:
                 if not IS_WINDOWS:
                     raise
                 # The launching shell's job forbids breakaway; the service will stop when that shell's job closes.
                 kwargs["creationflags"] &= ~CREATE_BREAKAWAY_FROM_JOB
-                proc = subprocess.Popen(c["cmd"], **kwargs)
+                proc = spawn(c, **kwargs)
                 warn(f"{svc}: could not leave the launching shell's job; it stops when that shell exits")
         except OSError as e:
             if isinstance(e, FileNotFoundError):

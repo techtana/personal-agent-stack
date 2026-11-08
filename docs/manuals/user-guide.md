@@ -48,19 +48,61 @@ primary model and its context size, and `cloud tiers on` or `local only`. The pi
 
 *Usage*
 
-Counts every request that went through the gateway, read from `traces/litellm/<date>.jsonl`.
+Counts every model the stack ran, local or outside API:
+
+- Gateway requests (chat, titles, document embeddings, Claude Code profile B, OpenClaw, the orchestrator, voice
+  typing's clean-up), read from `traces/litellm/<date>.jsonl`.
+- Models that run outside the gateway, each written to `traces/usage/<source>/<date>.jsonl`:
+  - Whisper in voice typing (the live previews shown while you speak re-read the phrase so far, so they are listed
+    under the table and kept out of the totals), including the microphone in Open WebUI's chat box once it uses voice
+    typing's Whisper (client **Open WebUI**);
+  - Whisper in the recordings server that Claude Desktop uses;
+  - images made by ComfyUI (the tray reads ComfyUI's job history every few seconds while ComfyUI runs);
+  - `stack.py bench` and the start-up warm-up.
+
+What is in the tab:
 
 - **Period**: **Today**, **7 days** (default) or **30 days**.
-- **Group by**: **Gateway alias** (the name the client asked for, such as `local-primary` or `docs`) or
-  **Served model** (the model that answered, such as `qwen3.5:9b`).
-- Tiles: **Requests**, **Input tokens**, **Output tokens**, **Errors** (red when above 0) and **API cost**. Local
-  models cost $0; cost is cloud API spend.
-- The table has **Model**, **Requests**, **Errors**, **Input tok**, **Output tok**, **Avg latency**, **Output tok/s**,
-  **Cost** and **Last used**. Click a heading to sort. A red row means every request in it failed.
-- The chart shows tokens per day. Select a table row to show only that model.
+- **Group by**: **Model** (the model that did the work, such as `qwen3.5:9b`, `large-v3-turbo` or
+  `Z-Image-Turbo int8`; the default), **Alias or service** (the gateway name the client asked for, such as
+  `local-primary`, or the service that ran the model, such as **Voice typing** or **ComfyUI**) or **Client** (who
+  asked, such as **Open WebUI**, **Claude Code**, **Voice typing** or **Claude Desktop**). Each row opens into its
+  clients (into its aliases and services when grouped by client).
+- Tiles: **Requests**, **Tokens in / out**, **Speech audio**, **Images**, **Errors** (red when above 0) and **API
+  cost**. Local models cost $0; cost is what outside APIs charge.
+- The table has **Requests**, **Errors**, **Input**, **Output**, **Avg time**, **Speed**, **Overall**, **Cost** and
+  **Last used**. Input, output and speed are in the units of the row:
+  - chat and embeddings: tokens, and tokens per second while generating;
+  - speech: seconds or minutes of audio, and how many times faster than real time (for example `28x`);
+  - images: images made, and seconds per image.
 
-If the table says "No gateway requests in this period", either nothing used the gateway in that period or
-**Write usage traces** is off in Settings.
+  **Overall** adds the time spent loading the model and waiting in the queue. An outside API's row ends in `· API`.
+  Click a heading to sort. A red row means every request in it failed.
+- The line under the table says what the selected row's requests were and where their time went.
+- **Not counted** names model use the tab cannot see yet, while it can happen. On an existing install that is the
+  microphone in Open WebUI's chat box, which runs Open WebUI's own Whisper, and Open WebUI's document embeddings, both
+  until the provisioning step below. It also names a speech-to-text engine outside the stack, if one is chosen in
+  Open WebUI's **Admin Settings > Audio**.
+- The chart shows requests per day for all models together. Select a row to see that row in its own unit: tokens,
+  minutes of audio, or images per day.
+
+`uv run scripts/stack.py usage --days 7` prints the same table in a terminal (`--by alias|client`; `--clients` for
+the sub-rows).
+
+If the table says "No model was used in this period", either nothing ran a model in that period or **Write usage
+traces** is off in Settings. That switch also stops the usage records, including those of programs that were already
+running (they find a `RECORDING_OFF` file in `traces/usage`). Records hold the model, times, sizes and counts, and
+the type of an error, never a prompt, transcript, image or file path.
+
+Two steps apply this to an existing install:
+
+- On a fresh install, Open WebUI's document embeddings go through the gateway, and its chat-box microphone goes to
+  voice typing's Whisper while voice typing is on (see [Voice typing](#voice-typing)); both are counted. On an
+  existing install, run `uv run scripts/stack.py media provision`: it backs up Open WebUI's database, then writes both
+  settings. Restart Open WebUI for the embeddings; the microphone switches with the next recording.
+- Recordings are counted once `uv run scripts/stack.py whisper install` has been run again from the main checkout
+  (a worktree would point the records at its own folder): it copies the new server and adds its usage folder to
+  Claude Desktop's config. Restart Claude Desktop afterwards.
 
 *Settings*
 
@@ -71,8 +113,8 @@ Changes the most common values in your machine profile, `machines/<HOST>.yaml`, 
 | Models | **Primary model**, **Primary context (tokens)** | The model behind `local-primary` and every `<department>-local`, and its context size. |
 | Models | **Memory-map primary weights** | Needed for the 35B MoE model; leave off for dense models. |
 | Models | **Small model**, **Small context (tokens)** | The model behind `local-small`. Keep the context equal to the primary's when both use the same model. |
-| Tracing and services | **Write usage traces** | Writes `traces/litellm/`. The Usage tab and `retro` need it. |
-| Tracing and services | **Phoenix tracing** | Runs Phoenix. Leave off on SEKAIHOME: Smart App Control blocks it. |
+| Tracing and services | **Write usage traces** | Writes `traces/litellm/` and `traces/usage/`. The Usage tab and `retro` need it. |
+| Tracing and services | **Phoenix tracing** | Runs Phoenix. Leave off on the reference machine: Smart App Control blocks it. |
 | Tracing and services | **Open WebUI (chat)** | Runs the chat at http://127.0.0.1:3000. |
 | Voice typing | **Voice typing hotkey**, **When to type**, **Cleanup**, **Stop after quiet**, **Language**, **Whisper model**, **Insert text by**, **Show the mic button** | See [Voice typing](#voice-typing). |
 | Voice typing, under **Show advanced** | **Cleanup prompt** | The instructions the local model follows when it cleans up a dictation. See [Your own cleanup instructions](#your-own-cleanup-instructions). |
@@ -90,7 +132,7 @@ Cloud tiers are shown but cannot be changed here. Turning them on is a deliberat
 - `uv run scripts/stack.py status` lists each service as `UP`.
 - `uv run scripts/stack.py smoke` prints `smoke: 8/8 passed`.
 - A reply from the 9B model starts within a few seconds once the model is loaded. The first request after a long idle
-  period reloads the model, which takes about 2 minutes from the USB drive on SEKAIHOME.
+  period reloads the model, which takes about 2 minutes from the USB drive on the reference machine.
 
 | Service | Address | What it is for |
 |---|---|---|
@@ -108,7 +150,7 @@ image button works:
 
 1. In a chat, click **Image** under the message box (or ask the model to draw something; Open WebUI turns the
    request into an image prompt), then send your description.
-2. The image appears in the chat. The first one after a start or a GPU switch takes about 30 s on SEKAIHOME while
+2. The image appears in the chat. The first one after a start or a GPU switch takes about 30 s on the reference machine while
    the model loads from D:; later ones take about 11 s at 1024 x 1024.
 
 The model is Z-Image-Turbo (Apache-2.0) with 8 steps. Images are saved in `<media.root>\outputs\open-webui`.
@@ -154,10 +196,10 @@ How the text is made: two models, both on this PC.
    each phrase when you pause, verbatim, fillers included. It gets the text so far as a prompt (for continuity) and
    `dictation.vocabulary` as hints. Whisper does not clean or shorten anything.
 2. **The chat model cleans it up (polish mode, Clean or Concise only).** When you stop, the joined transcript goes
-   to the gateway alias `dictation.cleanup_model` (`local-small`, the 9B in Ollama on SEKAIHOME), with instructions
-   to remove fillers and false starts, keep only self-corrections, fix punctuation, keep your words and meaning, and
-   never answer what you said. Concise also asks it to shorten. The request uses JSON output and turns the model's
-   thinking off (with thinking on, the 9B returned nothing after 49 s).
+   to the gateway alias `dictation.cleanup_model` (`local-small`, the 9B in Ollama on the reference machine), with
+   instructions to remove fillers and false starts, keep only self-corrections, fix punctuation, keep your words and
+   meaning, and never answer what you said. Concise also asks it to shorten. The request uses JSON output and turns
+   the model's thinking off (with thinking on, the 9B returned nothing after 49 s).
 
 The reply is checked before it is typed. If it grew, shrank too much or reads like an answer, or the gateway does not
 answer, the raw transcript is typed instead, with only um/uh/er removed by a simple text rule (no model).
@@ -168,9 +210,9 @@ answer, the raw transcript is typed instead, with only um/uh/er removed by a sim
 | Polish, Verbatim | yes | no |
 | Live | yes | no (only the um/uh rule) |
 
-On SEKAIHOME (RTX 3060 with the 9B chat model loaded) Whisper takes 0.3 to 0.5 s per phrase and the cleanup about
-1 s. Whisper holds about 1.2 GB of VRAM and frees it after 30 idle minutes; the next dictation loads it again (5 s,
-while you are already talking).
+On the reference machine (RTX 3060 with the 9B chat model loaded) Whisper takes 0.3 to 0.5 s per phrase and the
+cleanup about 1 s. Whisper holds about 1.2 GB of VRAM and frees it after 30 idle minutes; the next dictation loads it
+again (5 s, while you are already talking).
 
 Good to know:
 
@@ -198,6 +240,22 @@ Good to know:
   the choice (`dictation.button`).
 - **Try it on a recording.** `uv run scripts/stack.py dictate transcribe note.wav --style concise` prints each phrase,
   the transcript and the cleaned text. `stack.py dictate check` lists the microphones and shows whether the GPU is used.
+- **Open WebUI's microphone.** While voice typing runs, the mic in Open WebUI's chat box uses the same Whisper
+  (`dictation.model` on the GPU) instead of Open WebUI's own small Whisper `base`. Audio files dropped into a chat use
+  it too.
+  - Open WebUI sends each recording to `http://127.0.0.1:8790/v1/audio/transcriptions` with voice typing's own key,
+    `DICTATION_BEARER` in `.env` (not the gateway's key, so a program that takes the port while voice typing is off
+    learns nothing that opens the gateway). It arrives as webm, ogg or mp4 from the browser, or as the file's own
+    format. Each one is counted in the tray's Usage tab under client **Open WebUI**.
+  - A fresh install is set up for it. On an existing one, run `uv run scripts/stack.py media provision` once: it adds
+    the key to `.env` (the rest of the file stays as it is) and points Open WebUI at voice typing.
+  - The language is detected for each recording unless Open WebUI's own **Speech-to-Text Language** setting names one.
+    Voice typing's **Language** setting is for dictation only.
+  - Open WebUI gets Whisper's words as heard; the chat-model cleanup is only for text typed into apps.
+  - Limits: 25 MB and 30 minutes of audio per file (longer recordings belong to the recordings server), and one file
+    at a time. Whisper is shared with dictation, so a long file holds a dictation until it is done.
+  - If voice typing is stopped, Open WebUI's mic shows a connection error. Start voice typing again, or set
+    **Speech-to-Text Engine** back to **Whisper (Local)** in Open WebUI's **Admin Settings > Audio**.
 
 Every setting is under `dictation:` in `machines/_defaults.yaml`; copy a line into `machines/<HOST>.yaml` to change it.
 
@@ -234,8 +292,9 @@ There are six department agents: `app-dev`, `testing`, `security`, `devops`, `co
 
 - Open this repository in Claude Code. The departments appear as subagents. Mention one by name: `@security review src/auth.py`.
 - Run one department as the main agent: `claude --agent docs`.
-- Skills: `/retro`, `/harden`, `/brainstorm`, `/why-routed`, and `/ux-rules` to review a screen, page or flow against
-  a researched catalog of UX rules (for example `/ux-rules scripts/tray.py`).
+- Skills: `/retro`, `/harden`, `/brainstorm`, `/why-routed`, `/ux-rules` to review a screen, page or flow against
+  a researched catalog of UX rules (for example `/ux-rules scripts/tray.py`), and `/claude-security-audit` (see
+  [Checking your Claude setup](#checking-your-claude-setup)).
 - The orchestrator MCP server provides `delegate(department, task, tier)`, `get_job`, `cancel_job`, `list_departments` and
   `record_lesson`. Approve the server the first time Claude Code asks.
 
@@ -291,6 +350,44 @@ The report names each skill as:
 Edit a skill at its source, not in `skills/`; the next sync overwrites the copy. The weekly task holds back any skill
 whose new content looks personal and names it in its report. To keep it out for good, add its name to `exclude`.
 
+## Checking your Claude setup
+
+`/claude-security-audit` checks Claude Code and Claude Desktop on this computer for privacy and safety, and removes
+your identity from what Claude writes. A weekly scheduled task runs it on Monday mornings; you can also run it any
+time by asking Claude Code for it in this repository.
+
+It looks at:
+
+- **Versions:** whether your Claude Code installs (the command line, the VS Code extension and Claude Desktop's own
+  copy) are behind, and whether a published advisory affects them.
+- **Data leaving the computer:** telemetry, error reports, `/feedback` uploads and claude.ai connectors.
+- **Retention:** how long conversation transcripts stay on this computer.
+- **Access:** whether Claude can read credential files, and allow rules that let it run anything of a kind unasked.
+- **Extensions:** MCP servers, plugins and hooks, and anything that changed since the last audit.
+- **New settings:** what Claude Code's docs and changelog have added since the last audit.
+- **Your identity:** your email, name or Windows user name in repositories, `CLAUDE.md`, Claude's memory, skills and
+  scheduled tasks, and scripts that send an email address to web APIs.
+
+What it does about them:
+
+- **Settings:** it never changes them. The report gives the exact setting and file for each fix, and you apply it.
+- **Identity:** it replaces your identity with placeholders such as `you@example.com`, `Your Name`, `%USERPROFILE%`
+  and `%USERNAME%`. A scheduled run opens a pull request for this repository and fixes Claude's own files in place.
+  Files with uncommitted changes and skills that hold personal data on purpose are left alone.
+- **Reports:** each run writes one to `%LOCALAPPDATA%\claude-security-audit\reports\`, outside every repository.
+  Nothing identifying goes into it.
+
+What it cannot do: stop Claude Code or Claude Desktop from sending your prompts, files and account details to
+Anthropic. Only managed settings, the sandbox (WSL2 on Windows) or the local-only profile B
+(`scripts/claude-local.ps1`) enforce anything.
+
+A standing rule in `~/.claude/CLAUDE.md` tells every session to keep your identity out of what it writes. Its text is
+in `.claude/skills/claude-security-audit/references/identity.md`.
+
+To set up the weekly run on another computer, create the scheduled task from
+`.claude/skills/claude-security-audit/scheduled-task.md` in the Claude desktop app (**Scheduled tasks**, weekly,
+Monday 09:30).
+
 ## Seeing what happened
 
 ```powershell
@@ -313,5 +410,6 @@ uv run scripts/stack.py bench
 This measures the primary model's speed in tokens per second. Compare the result with the benchmark table in
 `memory/state.md`.
 
-Traces are written to `traces/litellm/` (gateway) and `traces/claude/` (Claude Code hooks). The tray's **Usage** tab
-summarises the gateway traces. They also appear in Phoenix when Phoenix runs.
+Traces are written to `traces/litellm/` (gateway), `traces/usage/` (models run outside the gateway: Whisper,
+ComfyUI, direct Ollama calls) and `traces/claude/` (Claude Code hooks). The tray's **Usage** tab and `stack.py usage`
+summarise the first two. Gateway traces also appear in Phoenix when Phoenix runs.

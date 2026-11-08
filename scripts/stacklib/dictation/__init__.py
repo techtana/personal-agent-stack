@@ -24,7 +24,7 @@ STYLES = ("verbatim", "clean", "concise")
 INSERTS = ("paste", "type")
 DEVICES = ("auto", "cuda", "cpu")
 
-# Versions that loaded under Smart App Control on SEKAIHOME (2026-11-07; Python 3.14 from python.org). Smart App
+# Versions that loaded under Smart App Control on the reference machine (2026-11-07; Python 3.14 from python.org). Smart App
 # Control judges compiled modules file by file, so a new version is a new judgement: test it in a throwaway venv first.
 PACKAGES = (
     "faster-whisper==1.2.1",
@@ -138,9 +138,12 @@ def hf_home(profile: dict) -> str:
 
 def app_env(profile: dict, base_env: dict) -> dict:
     """Environment of the app process: scripts/ on the path for `-m stacklib.dictation`, the machine's name so it reads
-    the same profile, and the Hugging Face cache the owner chose."""
+    the same profile, where its Whisper calls are recorded for the Usage tab, and the Hugging Face cache the owner
+    chose."""
+    from .. import usage_log
+
     env = {**base_env, "PYTHONPATH": str(REPO / "scripts"), "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
-           "AGENT_STACK_MACHINE": profile.get("name") or ""}
+           "AGENT_STACK_MACHINE": profile.get("name") or "", **usage_log.env_for(profile)}
     if hf_home(profile):
         env["HF_HOME"] = hf_home(profile)
     env.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
@@ -161,6 +164,46 @@ def service_command(profile: dict, base_env: dict) -> dict | None:
 
 def control_url(profile: dict) -> str:
     return f"http://127.0.0.1:{profile['ports']['dictation']}"
+
+
+def transcription_url(profile: dict) -> str:
+    """Base URL of voice typing's OpenAI-compatible speech to text (POST <url>/audio/transcriptions), for Open WebUI's
+    microphone. Built from the port alone, so it can only point at this machine."""
+    port = int(profile["ports"]["dictation"])
+    if not 0 < port < 65536:
+        raise ValueError(f"ports.dictation {port} is not a TCP port")
+    return f"http://127.0.0.1:{port}/v1"
+
+
+KEY_NAME = "DICTATION_BEARER"
+
+
+def api_key() -> str:
+    """The key callers of the transcription endpoint send (Open WebUI): DICTATION_BEARER from the environment or .env.
+    Its own key, not the gateway's: while voice typing is off, any local program could listen on its port and would
+    learn only this one."""
+    from .. import env_value
+
+    return env_value(KEY_NAME)
+
+
+def ensure_api_key(path: Path | None = None) -> str:
+    """DICTATION_BEARER, appended to .env as a new random key when it is not set yet; the rest of .env is left as it
+    is (comments included). The running voice typing app reads it on its next request."""
+    import secrets
+
+    from .. import ENV_FILE, load_dotenv
+
+    path = path or ENV_FILE
+    key = os.environ.get(KEY_NAME) or load_dotenv(path).get(KEY_NAME, "")
+    if key:
+        return key
+    key = secrets.token_urlsafe(32)
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(("" if not text or text.endswith("\n") else "\n") + f"{KEY_NAME}={key}\n")
+    info(f"{path.name}: added {KEY_NAME}, the key Open WebUI's microphone uses with voice typing")
+    return key
 
 
 def hotkey_label(profile: dict) -> str:

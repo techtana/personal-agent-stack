@@ -652,5 +652,17 @@ class Languages(unittest.TestCase):
         self.assertEqual(settings._to_file_value(s, "pt"), "pt")
 
 
+class MenuHover(unittest.TestCase):
+    def test_pointer_inside_menu_button_or_gap(self):
+        from stacklib.dictation.overlay import pointer_inside
+
+        menu, sub = (100, 100, 300, 400), (302, 200, 500, 300)
+        self.assertTrue(pointer_inside((150, 150), [menu]))
+        self.assertTrue(pointer_inside((301, 250), [menu, sub]))   # the gap between a menu and its submenu
+        self.assertTrue(pointer_inside((98, 98), [menu]))          # a few pixels of slack at the edge
+        self.assertFalse(pointer_inside((600, 150), [menu, sub]))
+        self.assertFalse(pointer_inside((150, 150), []))
+
+
 if __name__ == "__main__":
     unittest.main()

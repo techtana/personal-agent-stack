@@ -6,7 +6,8 @@ window with three tabs:
   Overview  each service's health with start/stop and links into the UIs, the models loaded in Ollama, and the
             Hugging Face cache and OpenClaw (where the cache is; whether OpenClaw uses only the gateway, with a
             Use gateway button that makes it so)
-  Usage     requests, tokens, speed and cost per model from the gateway traces, with a tokens-per-day chart
+  Usage     every model the stack ran (gateway, Whisper, ComfyUI, direct Ollama calls): requests, tokens, audio,
+            images, speed and cost per model, service or client, with a per-day chart
   Settings  models, context sizes, tracing and Ollama runtime options; Apply writes machines/<HOST>.yaml,
             rebuilds the generated configs and restarts what the change affects
 The icon colour summarises health: green all up, amber some down, red gateway down.
@@ -83,11 +84,12 @@ if __name__ == "__main__" and (sys.stdout is None or not sys.stdout.isatty()):
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import psutil  # noqa: E402
 import pystray  # noqa: E402
-from PIL import Image, ImageDraw  # noqa: E402
+from PIL import ImageTk  # noqa: E402
 
-from stacklib import IS_WINDOWS, clients, media, ollama, process_metrics, profile as prof, services  # noqa: E402
+from stacklib import IS_WINDOWS, clients, media, ollama, process_metrics, procname, profile as prof, services  # noqa: E402
+from stacklib.icon import COLORS, make_icon  # noqa: E402
 from stacklib import settings as cfg  # noqa: E402
-from stacklib import startup, usage  # noqa: E402
+from stacklib import comfy_usage, startup, usage, usage_log  # noqa: E402
 
 POLL_SECONDS = 10
 CLIENT_SECONDS = 60  # between Hugging Face / OpenClaw checks: measuring the cache walks every file in it
@@ -116,7 +118,6 @@ ROLES = {
 }
 CLIENTS = (("huggingface", "Hugging Face cache", "model weights for Python tools"),
            ("openclaw", "OpenClaw", "agent client; private only through the gateway"))
-COLORS = {"ok": "#2e9d57", "warn": "#d99a1e", "bad": "#c94a3d", "idle": "#8a8f98"}  # tray icon fills
 FONT = "Segoe UI" if IS_WINDOWS else "TkDefaultFont"
 
 # Window palette (light / dark): neutral surfaces, one blue accent for data, status colours only for state.
@@ -146,14 +147,6 @@ def ui_links(p: dict) -> dict[str, str]:
         "litellm": f"http://127.0.0.1:{ports['litellm']}/ui",
         "comfyui": f"http://127.0.0.1:{ports['comfyui']}",
     }
-
-
-def make_icon(color: str) -> Image.Image:
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.ellipse((4, 4, 60, 60), fill=color)
-    d.polygon([(32, 14), (48, 50), (40, 50), (32, 30), (24, 50), (16, 50)], fill="white")  # stylised "A"
-    return img
 
 
 def system_theme() -> str:
@@ -216,6 +209,8 @@ class TextVar:
 class TrayApp:
     def __init__(self, autostart: bool = True) -> None:
         self.profile = prof.resolve_profile()
+        usage_log.configure(self.profile)  # the warm-up and the ComfyUI collector record into traces/usage
+        usage_log.sync_switch(self.profile)  # and services started earlier follow "Write usage traces"
         self.managed = [s for s in services.SERVICE_ORDER if s in services.commands(self.profile)]
         self.rows: dict[str, dict] = {}  # service -> newest status row
         self.row_checked: dict[str, float] = {}  # service -> when the check behind its row began (monotonic)
@@ -227,8 +222,10 @@ class TrayApp:
         self.openclaw_result = ""  # why the last Use gateway click failed, shown until the next click
         self.dictation_button: bool | None = None  # floating mic button visible? None while voice typing is down
         self.usage_data: dict | None = None
+        self.usage_notes: list[str] = []  # model use the Usage tab cannot count, while it can happen
+        self.usage_notes_at = -1e9  # monotonic time of the last check
         self.usage_days = 7
-        self.usage_group = "alias"
+        self.usage_group = "served"
         self.process_sampler = process_metrics.ProcessSampler()
         self.process_rows: list[dict] = []
         self.sampling = False
@@ -245,8 +242,12 @@ class TrayApp:
         self.checked_at = ""
         self.ui_queue: queue.Queue = queue.Queue()
         self.stop_event = threading.Event()
+        procname.set_app_id("tray")  # the taskbar shows the window icon below, not Python's
         self.root = tk.Tk()
         self.root.withdraw()
+        # The tray's icon on every window (title bar, taskbar, Alt+Tab), kept referenced for Tk.
+        self.window_icons = [ImageTk.PhotoImage(make_icon(COLORS["ok"], n)) for n in (16, 32, 64)]
+        self.root.iconphoto(True, *self.window_icons)
         self.window: tk.Toplevel | None = None
         self.refresh_lock = threading.Lock()
         self.icon_color = COLORS["idle"]
@@ -264,6 +265,7 @@ class TrayApp:
         self.loaded = ollama.ps(f"http://127.0.0.1:{self.profile['ports']['ollama']}")
         self._store_rows(rows, checked)
         self._check_dictation()
+        self._collect_usage()
         if checked - self.clients_checked >= CLIENT_SECONDS or not self.clients_checked:
             self.clients_checked = checked
             self.client_status = self._check_clients()
@@ -301,6 +303,18 @@ class TrayApp:
         except (OSError, ValueError):
             self.dictation_button = None
 
+    def _collect_usage(self) -> None:
+        """ComfyUI's finished jobs into usage records: Open WebUI asks ComfyUI for images directly, past the gateway."""
+        if not self.rows.get("comfyui", {}).get("healthy"):
+            return
+        try:
+            n = comfy_usage.collect(f"http://127.0.0.1:{self.profile['ports']['comfyui']}")
+        except Exception as e:  # noqa: BLE001 - the status poll must go on whatever ComfyUI's history holds
+            print(f"[tray] ComfyUI usage collection failed: {e}")
+            return
+        if n:
+            print(f"[tray] recorded {n} ComfyUI job(s) for the Usage tab")
+
     def _check_clients(self) -> dict[str, clients.ClientStatus]:
         out = {}
         for key, fn in (("huggingface", clients.huggingface),
@@ -334,6 +348,8 @@ class TrayApp:
     def refresh_usage(self) -> None:
         try:
             self.usage_data = usage.summarize(self.usage_days, self.usage_group)
+            if time.monotonic() - self.usage_notes_at > 60:  # reads Open WebUI's settings: once a minute is plenty
+                self.usage_notes, self.usage_notes_at = usage.uncounted(self.profile), time.monotonic()
         except Exception as e:  # noqa: BLE001 - a malformed trace file must not break the window
             print(f"[tray] usage summary failed: {e}")
             return
@@ -1070,7 +1086,7 @@ class TrayApp:
             ttk.Radiobutton(tools, text=label, value=days, variable=self.range_var, style="Seg.TRadiobutton",
                             command=self._usage_changed).pack(side="left")
         ttk.Label(tools, text="Group by", style="Card.Muted.TLabel").pack(side="left", padx=(24, 6))
-        for label, val in (("Gateway alias", "alias"), ("Served model", "served"), ("Client", "client")):
+        for label, val in (("Model", "served"), ("Alias or service", "alias"), ("Client", "client")):
             ttk.Radiobutton(tools, text=label, value=val, variable=self.group_var, style="Seg.TRadiobutton",
                             command=self._usage_changed).pack(side="left")
         self.cost_note = ttk.Label(tools, text="", style="Card.Muted.TLabel")
@@ -1079,8 +1095,9 @@ class TrayApp:
         tiles = ttk.Frame(tab)
         tiles.grid(row=1, column=0, sticky="we", pady=(12, 0))
         self.tile_values: dict[str, ttk.Label] = {}
-        for i, (key, label) in enumerate((("requests", "Requests"), ("prompt_tokens", "Input tokens"),
-                                          ("completion_tokens", "Output tokens"), ("errors", "Errors"), ("cost", "API cost"))):
+        for i, (key, label) in enumerate((("requests", "Requests"), ("tokens", "Tokens in / out"),
+                                          ("audio", "Speech audio"), ("images", "Images"), ("errors", "Errors"),
+                                          ("cost", "API cost"))):
             tiles.columnconfigure(i, weight=1, uniform="tile")
             card = self._card(tiles, row=0, column=i, padx=(0 if i == 0 else 6, 0))
             ttk.Label(card, text=label, style="Card.Muted.TLabel").pack(anchor="w")
@@ -1095,16 +1112,16 @@ class TrayApp:
         table = self._card(body, row=0, column=0)
         table.columnconfigure(0, weight=1)
         table.rowconfigure(0, weight=1)
-        # Each model row expands into one row per client (per alias when grouped by client).
-        # Decode = Ollama's generation time only; Overall = wall clock of every request (load, prompt, queue too).
-        cols = [("requests", "Requests", 75, "e"), ("errors", "Errors", 50, "e"),
-                ("prompt_tokens", "Input tok", 70, "e"), ("completion_tokens", "Output tok", 80, "e"),
-                ("avg_latency_ms", "Avg latency", 80, "e"), ("decode_tok_s", "Decode tok/s", 90, "e"),
-                ("e2e_tok_s", "Overall tok/s", 90, "e"), ("cost", "Cost", 45, "e"), ("last", "Last used", 80, "e")]
-        self.usage_sort = ("total", True)
+        # Each row expands into one row per client (per alias or service when grouped by client). Input, output and
+        # the speeds are in the units of the row's kind (usage.cells): tokens, seconds of audio, or images.
+        cols = [("requests", "Requests", 70, "e"), ("errors", "Errors", 50, "e"),
+                ("input", "Input", 80, "e"), ("output", "Output", 80, "e"),
+                ("avg_latency_ms", "Avg time", 70, "e"), ("speed", "Speed", 80, "e"),
+                ("overall", "Overall", 80, "e"), ("cost", "Cost", 60, "e"), ("last", "Last used", 80, "e")]
+        self.usage_sort = ("requests", True)
         self.tree = ttk.Treeview(table, columns=[c[0] for c in cols], show="tree headings", selectmode="browse", height=6)
         self.tree.heading("#0", text="Model", anchor="w", command=lambda: self._sort_usage("model"))
-        self.tree.column("#0", width=140, minwidth=120, anchor="w", stretch=True)
+        self.tree.column("#0", width=170, minwidth=130, anchor="w", stretch=True)
         for key, label, width, anchor in cols:
             self.tree.heading(key, text=label, anchor=anchor, command=lambda k=key: self._sort_usage(k))
             self.tree.column(key, width=width, anchor=anchor, stretch=False)
@@ -1116,9 +1133,15 @@ class TrayApp:
         self.tree.tag_configure("err", foreground=self.t["bad"])
         self.tree.tag_configure("sub", foreground=self.t["muted"])
         self.usage_empty = ttk.Label(table, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
-        # Where the time went for the selected row (or all requests): Ollama's own timings versus the rest.
+        # Where the time went for the selected row (or all requests): the model's own timings versus the rest.
         self.breakdown = ttk.Label(table, text="", style="Card.Muted.TLabel", wraplength=820, justify="left")
         self.breakdown.grid(row=2, column=0, columnspan=2, sticky="we", pady=(8, 0))
+        ttk.Label(table, text="Speed is the model's own pace: tokens per second while generating, seconds of audio per "
+                              "second for speech, seconds per image. Overall adds loading and waiting in the queue.",
+                  style="Card.Muted.TLabel", wraplength=820, justify="left").grid(row=3, column=0, columnspan=2,
+                                                                                  sticky="we", pady=(4, 0))
+        # Model use the tab cannot count (Open WebUI's own speech-to-text, ...), while it can happen.
+        self.usage_gaps = ttk.Label(table, text="", style="Card.Muted.TLabel", wraplength=820, justify="left")
 
         chart = self._card(body, row=1, column=0, pady=(12, 0))
         chart.columnconfigure(0, weight=1)
@@ -1147,13 +1170,18 @@ class TrayApp:
             return
         data = self.usage_data
         tot = data["totals"]
+        tiles = {"requests": f"{tot['requests']:,}",
+                 "tokens": f"{compact(tot['prompt_tokens'])} / {compact(tot['completion_tokens'])}",
+                 "audio": usage.duration(tot["audio_s"]) if tot["audio_s"] else "-",
+                 "images": f"{tot['images']:,}" if tot["images"] else "-",
+                 "errors": f"{tot['errors']:,}", "cost": f"${tot['cost']:.2f}"}
         for key, label in self.tile_values.items():
-            label.configure(text=f"${tot[key]:.2f}" if key == "cost" else compact(tot[key]) if key.endswith("tokens") else f"{tot[key]:,}")
+            label.configure(text=tiles[key])
         self.tile_values["errors"].configure(foreground=self.t["bad"] if tot["errors"] else self.t["ink"])
-        self.cost_note.configure(text="Local models cost $0; cost is cloud API spend.")
+        self.cost_note.configure(text="Local models cost $0; cost is outside-API spend.")
         selected = self.tree.selection()
         keep = selected[0] if selected else None
-        self.tree.heading("#0", text={"client": "Client", "served": "Served model"}.get(self.usage_group, "Model"))
+        self.tree.heading("#0", text={"client": "Client", "alias": "Alias or service"}.get(self.usage_group, "Model"))
         open_rows = {i for i in self.tree.get_children() if self.tree.item(i, "open")}
         self.tree.delete(*self.tree.get_children())
         key, rev = self.usage_sort
@@ -1162,18 +1190,21 @@ class TrayApp:
         def order(items: list[dict]) -> list[dict]:
             if key == "model":
                 return sorted(items, key=lambda m: m["model"].lower(), reverse=rev)
-            return sorted(items, key=lambda m: (m["prompt_tokens"] + m["completion_tokens"]) if key == "total"
-                          else (m[key] if m[key] is not None else -1), reverse=rev)
+            return sorted(items, key=lambda m: usage.sort_value(m, key), reverse=rev)
 
         def values(m: dict) -> tuple:
-            return (f"{m['requests']:,}", m["errors"] or "", compact(m["prompt_tokens"]), compact(m["completion_tokens"]),
-                    f"{m['avg_latency_ms'] / 1000:.1f} s", f"{m['decode_tok_s']:.0f}" if m["decode_tok_s"] else "-",
-                    f"{m['e2e_tok_s']:.0f}" if m["e2e_tok_s"] else "-",
+            c = usage.cells(m)
+            return (f"{m['requests']:,}", m["errors"] or "", c["input"], c["output"],
+                    f"{m['avg_latency_ms'] / 1000:.1f} s", c["speed"], c["overall"],
                     f"${m['cost']:.4f}" if m["cost"] else "-", usage.ago(m["last"]))
+
+        def name(m: dict) -> str:  # outside APIs and confidential VMs say so; local is the default
+            where = usage.LOCATION_NAMES.get(m["location"]) if m["location"] != "local" else ""
+            return f"{m['model']}  ·  {where}" if where else m["model"]
 
         for m in order(rows):
             err = ("err",) if m["errors"] and m["errors"] == m["requests"] else ()
-            self.tree.insert("", "end", iid=m["model"], text=m["model"], tags=err, values=values(m),
+            self.tree.insert("", "end", iid=m["model"], text=name(m), tags=err, values=values(m),
                              open=m["model"] in open_rows)
             for c in order(m["clients"]):
                 self.tree.insert(m["model"], "end", iid=f"{m['model']}{SEP}{c['model']}", text=c["model"],
@@ -1186,9 +1217,14 @@ class TrayApp:
             self.usage_empty.grid_forget()
         else:
             on = self.profile["observability"].get("jsonl_traces", True)
-            self.usage_empty.configure(text="No gateway requests in this period." + (
+            self.usage_empty.configure(text="No model was used in this period." + (
                 "" if on else " Usage traces are off: turn on 'Write usage traces' in Settings."))
             self.usage_empty.grid(row=1, column=0, sticky="w", pady=(8, 0))
+        if self.usage_notes:
+            self.usage_gaps.configure(text="Not counted: " + "; ".join(self.usage_notes) + ".")
+            self.usage_gaps.grid(row=4, column=0, columnspan=2, sticky="we", pady=(4, 0))
+        else:
+            self.usage_gaps.grid_forget()
         self._draw_chart()
 
     def _selected_usage_row(self) -> dict | None:
@@ -1207,7 +1243,7 @@ class TrayApp:
             return
         m = self._selected_usage_row()
         sel = self.tree.selection()
-        title = sel[0].replace(SEP, "  ·  ") if m and sel else "All requests"
+        title = sel[0].replace(SEP, "  ·  ") if m and sel else "All models"
         self.breakdown.configure(text=usage.breakdown_text(m or self.usage_data["totals"], title))
 
     def _draw_chart(self) -> None:
@@ -1217,13 +1253,17 @@ class TrayApp:
         c.delete("all")
         sel = self.tree.selection()
         days = self.usage_data["days"]
+        # A row is charted in its own unit (tokens, audio minutes, images); all models together in requests.
         if sel:
             model = self._selected_usage_row()
-            values = model["daily"] if model else [0] * len(days)
-            self.chart_title.configure(text=f"Tokens per day  ·  {sel[0].replace(SEP, '  ·  ')}")
+            kind = usage.measure(model) if model else "tokens"
+            title, self.chart_unit, field = usage.MEASURES[kind]
+            values = model[field] if model else [0] * len(days)
+            self.chart_title.configure(text=f"{title}  ·  {sel[0].replace(SEP, '  ·  ')}")
         else:
-            values = self.usage_data["totals"]["daily"]
-            self.chart_title.configure(text="Tokens per day  ·  all models (select a row to filter)")
+            title, self.chart_unit, field = usage.MEASURES["requests"]
+            values = self.usage_data["totals"][field]
+            self.chart_title.configure(text=f"{title}  ·  all models (select a row for its tokens, audio or images)")
         w, h = max(c.winfo_width(), 200), max(c.winfo_height(), 100)
         left, right, top, bottom = 48, 8, 8, 22
         top_val = max(values) if any(values) else 1
@@ -1231,7 +1271,8 @@ class TrayApp:
         for frac in (0, 0.5, 1):  # recessive hairline grid with compact labels
             y = top + plot_h * (1 - frac)
             c.create_line(left, y, w - right, y, fill=t["grid"] if frac else t["border"])
-            c.create_text(left - 8, y, text=compact(top_val * frac), anchor="e", fill=t["muted"], font=(FONT, 8))
+            label = f"{top_val * frac:.1f}" if top_val < 10 and top_val * frac != int(top_val * frac) else compact(top_val * frac)
+            c.create_text(left - 8, y, text=label, anchor="e", fill=t["muted"], font=(FONT, 8))
         n = len(values)
         slot = plot_w / n
         bar_w = max(2.0, min(48.0, slot - 2))  # 2px surface gap between bars
@@ -1269,8 +1310,9 @@ class TrayApp:
         x0, x1, d, v = bar
         c.create_rectangle(x0, 8, x1, c.winfo_height() - 22, fill=t["hover"], width=0, tags="tip")
         c.tag_lower("tip")
-        text = f"{datetime.fromisoformat(d).strftime('%a %b %d')}: {v:,} tokens"
-        tx = min(max(e.x + 12, 4), c.winfo_width() - 170)
+        amount = f"{v:,.1f}" if isinstance(v, float) and v != int(v) else f"{int(v):,}"
+        text = f"{datetime.fromisoformat(d).strftime('%a %b %d')}: {amount} {getattr(self, 'chart_unit', 'tokens')}"
+        tx = min(max(e.x + 12, 4), c.winfo_width() - 230)
         item = c.create_text(tx + 8, 16, text=text, anchor="nw", fill=t["ink"], font=(FONT, 9), tags="tip")
         bx0, by0, bx1, by1 = c.bbox(item)
         bg = c.create_rectangle(bx0 - 8, by0 - 5, bx1 + 8, by1 + 5, fill=t["card"], outline=t["border"], tags="tip")
@@ -1456,6 +1498,7 @@ class TrayApp:
 
     def _load_settings(self) -> None:
         self.profile = prof.resolve_profile(self.profile["name"])
+        usage_log.configure(self.profile)
         values = cfg.current_values(self.profile)
         models = cfg.installed_models(self.profile)
         for box in self.model_boxes:
@@ -1518,6 +1561,8 @@ class TrayApp:
             try:
                 new = cfg.apply(self.profile, edits, log=log)
                 self.profile = new
+                usage_log.configure(new)  # "Write usage traces" also switches the usage records
+                usage_log.sync_switch(new)
                 self.managed = [s for s in services.SERVICE_ORDER if s in services.commands(new)]
                 log("Done.")
             except Exception as e:  # noqa: BLE001 - report every failure in the window

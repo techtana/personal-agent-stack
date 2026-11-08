@@ -1,6 +1,6 @@
 """Whisper through faster-whisper: load on the GPU when it works, else a smaller model on the CPU; free VRAM when idle.
 
-Measured on SEKAIHOME (RTX 3060 12 GB, qwen3.5:9b resident, 2026-11-07): large-v3-turbo int8_float16 loads in 5-8 s
+Measured on the reference machine (RTX 3060 12 GB, qwen3.5:9b resident, 2026-11-07): large-v3-turbo int8_float16 loads in 5-8 s
 from the USB SSD and transcribes 3.5 s of speech in 0.3 s and 15 s in 0.6 s. On the Ryzen 5 5500 the same model with
 int8 needed 9.7 s for the 15 s clip, too slow to wait for, so the CPU fallback uses `cpu_model` (default small).
 """
@@ -13,6 +13,7 @@ import time
 
 import numpy as np
 
+from .. import usage_log
 from . import Config, gpu
 from .textops import is_stock_hallucination, tidy
 
@@ -23,9 +24,10 @@ def _short(e: BaseException) -> str:
 
 
 class Engine:
-    def __init__(self, cfg: Config, log=print) -> None:
+    def __init__(self, cfg: Config, log=print, client: str = "Voice typing") -> None:
         self.cfg = cfg
         self.log = log
+        self.client = client                # who the tray's Usage tab says asked for each transcription
         self.lock = threading.RLock()       # one decode at a time; also guards load/unload
         self.model = None
         self.state = "unloaded"             # unloaded | loading | ready | failed
@@ -133,37 +135,78 @@ class Engine:
 
     # ---------------------------------------------------------------- transcription
 
-    def transcribe(self, audio: np.ndarray, *, prompt: str = "", fast: bool = False, language: str = "") -> tuple[str, str]:
-        """(text, language) for float32 mono 16 kHz audio. `fast` (beam 1) is for previews while you speak."""
-        if not self.wait_ready():
-            raise RuntimeError(self.note or "Whisper is not loaded")
+    def transcribe(self, audio: np.ndarray, *, prompt: str = "", fast: bool = False, language: str = "",
+                   client: str = "") -> tuple[str, str]:
+        """(text, language) for float32 mono 16 kHz audio. `fast` (beam 1) is for previews while you speak.
+        Every call is recorded for the tray's Usage tab: audio length, model and load time, tokens; never the text.
+        `client` names who asked when it is not this engine's own client (Open WebUI through the transcription
+        endpoint, which shares the loaded model with voice typing)."""
+        t0 = time.monotonic()
+        stats = {"run_s": 0.0, "tokens": 0, "language": ""}
+        ready = self.state == "ready"
+        load_s = 0.0
+        failed = ""
         try:
-            return self._decode(audio, prompt, fast, language)
-        except RuntimeError as e:
-            if self.device != "cuda" or self.cfg.device == "cuda":
-                raise
-            # Out of GPU memory (ComfyUI or a bigger chat model took the card) or a driver hiccup: go to the CPU.
-            self.log(f"[dictation] GPU decode failed ({_short(e)}); reloading on the CPU")
-            self.unload()
-            self.force_cpu = True
             if not self.wait_ready():
-                raise
-            return self._decode(audio, prompt, fast, language)
+                raise RuntimeError(self.note or "Whisper is not loaded")
+            load_s = 0.0 if ready else time.monotonic() - t0
+            try:
+                return self._decode(audio, prompt, fast, language, stats)
+            except RuntimeError as e:
+                if self.device != "cuda" or self.cfg.device == "cuda":
+                    raise
+                # Out of GPU memory (ComfyUI or a bigger chat model took the card) or a driver hiccup: go to the CPU.
+                self.log(f"[dictation] GPU decode failed ({_short(e)}); reloading on the CPU")
+                self.unload()
+                self.force_cpu = True
+                t1 = time.monotonic()
+                if not self.wait_ready():
+                    raise
+                load_s += time.monotonic() - t1
+                return self._decode(audio, prompt, fast, language, stats)
+        except Exception as e:
+            failed = type(e).__name__  # not the message, which can name files and folders
+            raise
+        finally:
+            self._record(audio, t0, load_s, stats, fast, failed, client or self.client)
 
-    def _decode(self, audio: np.ndarray, prompt: str, fast: bool, language: str) -> tuple[str, str]:
-        lang = language or (None if self.cfg.language in ("", "auto") else self.cfg.language)
+    def _record(self, audio: np.ndarray, t0: float, load_s: float, stats: dict, fast: bool, failed: str,
+                client: str) -> None:
+        try:
+            usage_log.record(
+                "voice-typing", self.model_name or self.cfg.model, "transcription",
+                client=client, status="failure" if failed else "success", error=failed,
+                latency_ms=(time.monotonic() - t0) * 1000, load_ms=load_s * 1000 if load_s else None,
+                run_ms=stats["run_s"] * 1000, output_tokens=stats["tokens"], audio_s=len(audio) / 16000,
+                # A preview re-reads the phrase so far while you speak; the tab keeps previews out of its totals.
+                detail={k: v for k, v in (("device", self.device), ("language", stats["language"]),
+                                          ("preview", fast)) if v})
+        except Exception as e:  # noqa: BLE001 - a usage record must never break dictation
+            self.log(f"[dictation] usage record failed: {_short(e)}")
+
+    def _decode(self, audio: np.ndarray, prompt: str, fast: bool, language: str, stats: dict) -> tuple[str, str]:
+        # "auto" detects even when dictation.language names one (Open WebUI's recordings); "" follows the setting.
+        if language == "auto":
+            lang = None
+        else:
+            lang = language or (None if self.cfg.language in ("", "auto") else self.cfg.language)
         with self.lock:
             if self.model is None:
                 raise RuntimeError("Whisper was unloaded")
-            self.last_used = time.monotonic()
+            t0 = time.monotonic()
+            self.last_used = t0
             segments, info = self.model.transcribe(
                 audio, language=lang, beam_size=1 if fast else 5, vad_filter=True,
                 vad_parameters={"min_silence_duration_ms": 500, "speech_pad_ms": 200},
                 condition_on_previous_text=False, without_timestamps=True,
                 initial_prompt=prompt or None, hotwords=self.cfg.vocabulary or None)
-            texts = [s.text for s in segments if not (s.no_speech_prob > 0.6 and s.avg_logprob < -1.0)]
+            segments = list(segments)  # the model decodes while the generator runs
             self.last_used = time.monotonic()
+            stats["run_s"] += self.last_used - t0
+        stats["tokens"] += sum(len(getattr(s, "tokens", None) or ()) for s in segments)
+        stats["language"] = getattr(info, "language", "") or ""
+        texts = [s.text for s in segments if not (s.no_speech_prob > 0.6 and s.avg_logprob < -1.0)]
         text = tidy(" ".join(t.strip() for t in texts))
         if is_stock_hallucination(text):
             text = ""
-        return text, getattr(info, "language", "") or ""
+        return text, stats["language"]

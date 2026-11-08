@@ -7,7 +7,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import env_value, info, load_dotenv
+from . import env_value, info, load_dotenv, usage_log
 
 TOOL = {
     "type": "function",
@@ -25,8 +25,12 @@ ANTHROPIC_TOOL = {
 Q = "What is the weather in Paris? Use the tool."
 
 
+# The Usage tab names these requests "Stack scripts" (stacklib/usage.py COMPONENTS), in the gateway and in ComfyUI.
+UA = usage_log.user_agent("smoke")
+
+
 def _post(url: str, payload: dict, headers: dict, timeout: int = 600) -> tuple[int, dict]:
-    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json", **headers}, method="POST")
+    req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json", "User-Agent": UA, **headers}, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, json.loads(r.read().decode("utf-8"))
@@ -40,7 +44,7 @@ def _post(url: str, payload: dict, headers: dict, timeout: int = 600) -> tuple[i
 
 
 def _get(url: str, headers: dict, timeout: int = 30) -> tuple[int, dict]:
-    req = urllib.request.Request(url, headers=headers)
+    req = urllib.request.Request(url, headers={"User-Agent": UA, **headers})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, json.loads(r.read().decode("utf-8"))
@@ -147,7 +151,7 @@ def run_media(profile: dict) -> list[dict]:
             for nid in entry["node_ids"]:
                 wf[nid]["inputs"][entry["key"]] = values[entry["type"]]
     t0 = time.time()
-    code, j = _post(f"{base}/prompt", {"prompt": wf}, {})
+    code, j = _post(f"{base}/prompt", {"prompt": wf, "client_id": UA}, {"Comfy-Usage-Source": UA})
     pid = j.get("prompt_id") if code == 200 else None
     if not pid:
         rec("comfyui image", False, f"queue failed: {json.dumps(j)[:200]}")

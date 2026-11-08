@@ -13,7 +13,7 @@ every routing stage).
 
 ## 1. Goal
 
-The owner wants one private stack that does all of this on SEKAIHOME:
+The owner wants one private stack that does all of this on the reference machine:
 
 - writing, coding, software architecture, science and art critique;
 - image recognition, so the model can read a photo, a diagram or a painting;
@@ -44,7 +44,7 @@ Every feature runs on the owner's own hardware. That is the private-first rule (
 | C2 | A cold load of the 9B from the USB SSD took 130-161 s (`memory/state.md`). | Many separate "expert" LLMs would mean minutes of waiting at each switch. The experts are prompts on one shared model (section 8). |
 | C3 | Smart App Control blocks unsigned compiled modules file by file. It broke Phoenix (`memory/lessons.md`, 2026-10-26). | Each new PyTorch service (ComfyUI, Kokoro, custom nodes) must pass a spike before anything depends on it. |
 | C4 | 32 GB DDR4. The usual desktop load leaves about 11-12 GB free. Wan 2.2 with offload wants 24-32 GB of system RAM. | Video runs with desktop apps closed, or not at all. Keep the 9B as primary; the 35B MoE leaves no RAM for media. |
-| C5 | C: has about 36 GB free. The media models in section 5 add roughly 40-60 GB. **The owner selects which drives and folders agent sessions may work on; everything else is off-limits.** | Each session asks for the selection first. Model, cache and output paths are set explicitly inside it (`machines/<HOST>.yaml`). Anything outside it, the owner adds to the selection or copies himself. The stack's own tools enforce the list (task T08). |
+| C5 | C: has about 36 GB free. The media models in section 5 add roughly 40-60 GB. **The owner selects which drives and folders agent sessions may work on; everything else is off-limits.** | Each session asks for the selection first. Model, cache and output paths are set explicitly inside it (`machines/<HOST>.yaml`). Anything outside it, the owner adds to the selection or copies it themselves. The stack's own tools enforce the list (task T08). |
 | C6 | Native services only, no Docker or WSL2 (ADR 2026-10-24). | Each service runs as a uv environment or a vendor installer, managed by `stack.py` and the tray. |
 | C7 | Licences must be checked before a model is named (lesson 2026-10-26). **Open licences only (D-M3):** Apache-2.0, MIT and similar, plus SDXL's CreativeML OpenRAIL++-M. Non-commercial and custom-licence weights are out. | Section 5 lists each licence. MMAudio, HunyuanVideo-Foley, LTX-2.x and FLUX.2 klein 9B are not used. |
 | C8 | Ollama's image generation runs on macOS and Linux with CUDA only. | Images come from ComfyUI on this Windows machine. |
@@ -52,7 +52,7 @@ Every feature runs on the owner's own hardware. That is the private-first rule (
 
 ### Trade-off analysis
 
-The research of 2026-11-01 comes down to five trade-offs. Each row names the choice this plan makes on SEKAIHOME and
+The research of 2026-11-01 comes down to five trade-offs. Each row names the choice this plan makes on the reference machine and
 what would change it.
 
 | Trade-off | Option A | Option B | Choice here | What would change it |
@@ -93,7 +93,7 @@ Tray "GPU mode": Chat (Ollama owns the GPU)  <->  Media (Ollama unloaded, ComfyU
 ## 5. Components and model choices
 
 All facts below are from web sources read on 2026-11-01. They are medium confidence until the spike (section 10)
-measures them on SEKAIHOME.
+measures them on the reference machine.
 
 | Capability | Component | Model and licence | GPU memory | Notes |
 |---|---|---|---|---|
@@ -157,7 +157,7 @@ The right route depends on VRAM more than on anything else
 
 | VRAM | Route | Why |
 |---|---|---|
-| under 24 GB (SEKAIHOME) | chain | LTX-2.5 does not fit; offloaded runs are "a demo, not a workflow" |
+| under 24 GB (the reference machine) | chain | LTX-2.5 does not fit; offloaded runs are "a demo, not a workflow" |
 | 24 GB | joint for clips of about 5 s with speech or tight sync; chain otherwise | LTX-2.5 int8 needs 22.7 GiB for 5 s; 10 s clips can stall at the decode |
 | 32 GB or more | joint by default, plus ACE-Step music mixed in with ffmpeg (the hybrid) | about 25 s for a 4 s 720p clip on an RTX 5090 |
 | 128 GB unified memory | chain, and expect slow video | bandwidth-limited: a Wan 2.2 5B clip took about 14 min on a DGX Spark |
@@ -174,7 +174,7 @@ the `media.video_route: chain | joint | auto` setting (task T54) is deferred unt
 
 ### Acceptance (Route A)
 
-- One prompt produces a 5 s 720p MP4 with an audible, synchronised Foley track, in under 20 minutes on SEKAIHOME
+- One prompt produces a 5 s 720p MP4 with an audible, synchronised Foley track, in under 20 minutes on the reference machine
   (target; record the real time).
 - With narration and music turned on, speech stays intelligible over the music, and the file measures -16 LUFS +/-
   1 LU (`ffmpeg -af loudnorm=print_format=json`).
@@ -285,7 +285,7 @@ three days, L more.
 
 | # | Package | Size | Depends on | Acceptance |
 |---|---|---|---|---|
-| M-S0 | Spike on SEKAIHOME, owner present (changes the machine) | M | owner gives the media paths (D-M6) | Results table in `memory/state.md` for S0a-S0e below |
+| M-S0 | Spike on the reference machine, owner present (changes the machine) | M | owner gives the media paths (D-M6) | Results table in `memory/state.md` for S0a-S0e below |
 | M1 | Vision flag, `capabilities`/`surfaces` keys, four new departments with evals | S | S0a | `smoke` sends a small PNG to `art-critic` and gets a description naming its colour; build and tests pass |
 | M2 | Speech: Whisper settings, `kokoro` service, tray entry | S | S0d | `smoke --media` speaks a sentence with Kokoro, transcribes it with Whisper and gets the words back |
 | M3 | "Auto" pipe function and provisioning | M | M1 | 20 labelled sample prompts route correctly at least 18 times; status event shown; no prompt text in logs |
@@ -311,7 +311,7 @@ three days, L more.
 |---|---|
 | `machines/<HOST>.yaml` (`agent_access`) | `allowed_roots`: the drives and folders the owner selected; empty means "ask"; checked by `stacklib/paths.py` (T08) |
 | `machines/_defaults.yaml` | ports `comfyui: 8188`, `kokoro: 8880`; `services.comfyui` and `services.kokoro` (`native` or `off`, default `off`); a `media:` section (install dir, models dir, ComfyUI flags); `vision` in `model_catalog` |
-| `machines/SEKAIHOME.yaml` | the owner fills in `media:` paths himself (C5) |
+| `machines/<HOST>.yaml` | the owner fills in `media:` paths themselves (C5) |
 | `scripts/stacklib/services.py` | `SERVICE_ORDER`, `commands()`, `health_url()` (ComfyUI `/system_stats`; Kokoro health route to confirm), `EXPECTED_IMAGES`; Open WebUI env for audio and image generation |
 | `scripts/stacklib/litellm_build.py` | `supports_vision` from the catalog; optional audio deployments (D-M4) |
 | `scripts/stacklib/agents_build.py` | `capabilities` and `surfaces` keys |
@@ -352,12 +352,12 @@ Settled with the owner on 2026-11-01 (Session 1).
 | Custom nodes run arbitrary code | Install only the nodes the saved workflows need; pin their commits in the workflow README |
 | Licence drift between versions | Record the licence and the version per model in `config/comfyui/MODELS.md` |
 | No open-licence Foley model is good enough (D-M3) | S0e reports it; the owner decides again (an exception, or videos with narration and music only until one appears) |
-| Plan facts are from web pages, not measured here | Spike M-S0 replaces every timing in this plan with a SEKAIHOME measurement |
+| Plan facts are from web pages, not measured here | Spike M-S0 replaces every timing in this plan with a measurement on the reference machine |
 | Generated media leaves the private boundary through sharing | Outputs stay in the ComfyUI and Open WebUI data folders; nothing uploads automatically |
 
 ## 14. Task breakdown
 
-Every task is small enough for one sitting and ends at a check. "Where" says whether the task needs SEKAIHOME (its
+Every task is small enough for one sitting and ends at a check. "Where" says whether the task needs the reference machine (its
 GPU or installed services) and whether the owner must be present. Tasks marked **any** can run in a cloud session or
 on another machine, so they can start while the spike waits.
 
@@ -376,7 +376,7 @@ flowchart LR
   M6 --> M7
 ```
 
-### M-S0: spike (SEKAIHOME, owner present) and path guard
+### M-S0: spike (the reference machine, owner present) and path guard
 
 | ID | Task | Size | Depends | Done when |
 |---|---|---|---|---|
@@ -395,19 +395,19 @@ flowchart LR
 |---|---|---|---|---|---|
 | T10 | `vision` in `model_catalog`; `litellm_build.py` sets `supports_vision` from it; unit test | any | S | T01 | generated config shows `supports_vision: true` for the 9B deployments; test passes |
 | T11 | `capabilities` and `surfaces` keys in `agents_build.py`; unit tests. `surfaces` must also filter the model list in `opencode.json` (`update_opencode_json` lists every agent) and decide whether the orchestrator's `load_departments()` (`orchestrator/jobs.py`, reads every YAML) offers the new departments to `delegate` | any | S | - | Open WebUI JSON carries `vision`; departments without `claude` in `surfaces` produce no `.claude/agents` file and no `opencode.json` entry; the orchestrator behaviour is tested |
-| T12 | `writer`, `scientist`, `architect`, `art-critic` YAMLs with prompts and at least three evals each; `capabilities: {vision: true}` for the last three | any (write), SEKAIHOME (evals need the gateway) | M | T11 | `stack.py build` passes; promptfoo evals pass on the local tier |
-| T13 | `smoke`: send a small PNG to `art-critic` | SEKAIHOME | S | T10, T12 | smoke passes; the answer names the image's colour |
+| T12 | `writer`, `scientist`, `architect`, `art-critic` YAMLs with prompts and at least three evals each; `capabilities: {vision: true}` for the last three | any (write), the reference machine (evals need the gateway) | M | T11 | `stack.py build` passes; promptfoo evals pass on the local tier |
+| T13 | `smoke`: send a small PNG to `art-critic` | The reference machine | S | T10, T12 | smoke passes; the answer names the image's colour |
 | T14 | AGENTS.md department list, README, user guide | any | S | T12 | docs list ten departments |
 
 ### M2: speech
 
 | ID | Task | Where | Size | Depends | Done when |
 |---|---|---|---|---|---|
-| T20 | Whisper settings in the Open WebUI env (`AUDIO_STT_ENGINE`, `WHISPER_MODEL`, `WHISPER_COMPUTE_TYPE`; confirm the engine value and CPU device in the installed STT code); smoke reads back the effective setting, since saved settings override the env | any (code), SEKAIHOME (check) | S | - | the effective STT engine and model match the profile |
-| T21 | `kokoro` service: port, `services.py` command, health and image names, off by default; unit tests | any | S | T04 | tests pass; `stack.py up kokoro` starts it on SEKAIHOME |
+| T20 | Whisper settings in the Open WebUI env (`AUDIO_STT_ENGINE`, `WHISPER_MODEL`, `WHISPER_COMPUTE_TYPE`; confirm the engine value and CPU device in the installed STT code); smoke reads back the effective setting, since saved settings override the env | any (code), the reference machine (check) | S | - | the effective STT engine and model match the profile |
+| T21 | `kokoro` service: port, `services.py` command, health and image names, off by default; unit tests | any | S | T04 | tests pass; `stack.py up kokoro` starts it on the reference machine |
 | T22 | Tray Settings entry to turn Kokoro on or off | any | S | T21 | Apply starts and stops it |
 | T23 | Open WebUI TTS settings pointing at Kokoro (`AUDIO_TTS_ENGINE=openai`, `AUDIO_TTS_OPENAI_API_BASE_URL`, `AUDIO_TTS_MODEL=kokoro`, `AUDIO_TTS_VOICE` set to a Kokoro voice, not the default `alloy`) | any | S | T21 | read-aloud plays a Kokoro voice |
-| T24 | `smoke --media`: Kokoro speaks a sentence, Whisper transcribes it | SEKAIHOME | S | T20, T23 | the words come back |
+| T24 | `smoke --media`: Kokoro speaks a sentence, Whisper transcribes it | The reference machine | S | T20, T23 | the words come back |
 | T25 | Optional, not part of M2 (D-M4 chose direct): audio deployments in the gateway with `data_class: private` | any | S | owner asks | Usage tab counts speech requests |
 
 ### M3: the "Auto" router
@@ -415,7 +415,7 @@ flowchart LR
 | ID | Task | Where | Size | Depends | Done when |
 |---|---|---|---|---|---|
 | T30 | `routing_rules.py`: a pure function from message, attachments and pin to department and reason (or "ask the classifier, with these allowed ids"); unit tests | any | S | - (ids fixed by D-M8) | tests cover every rule in the stage-2 tree, including an image routed among the vision departments only |
-| T31 | Pipe function `auto_router.py`: rules, classifier call on a `keep_alive: -1` alias with a JSON schema, pinning, `@department`, `generate_chat_completion` to the department's workspace model so its system prompt applies, status event | any (code), SEKAIHOME (check) | M | T30 | a chat shows "Routed to: X" and keeps it until `@` switches; the answer follows the department's system prompt; `ollama ps` still shows the 9B with no expiry after a routed chat |
+| T31 | Pipe function `auto_router.py`: rules, classifier call on a `keep_alive: -1` alias with a JSON schema, pinning, `@department`, `generate_chat_completion` to the department's workspace model so its system prompt applies, status event | any (code), the reference machine (check) | M | T30 | a chat shows "Routed to: X" and keeps it until `@` switches; the answer follows the department's system prompt; `ollama ps` still shows the 9B with no expiry after a routed chat |
 | T32 | Install the function through Open WebUI's API (`stack.py webui-provision`), or document the import; the "Auto" model has the `vision` capability | any | S | T31 | a fresh Open WebUI gets "Auto" without manual steps; an attached image reaches the pipe |
 | T33 | Labelled set of at least 20 prompts and a scorer, with image prompts for each vision department | any | S | T30 | at least 18 of 20 routed right |
 | T34 | Log department and rule (never text); `why-routed` reads it | any | S | T31 | `why-routed` lists recent pipe decisions |
@@ -424,12 +424,12 @@ flowchart LR
 
 | ID | Task | Where | Size | Depends | Done when |
 |---|---|---|---|---|---|
-| T40 | `comfyui` service: `media:` section, port 8188, command with `--lowvram --reserve-vram 1.0`, health `/system_stats`; unit tests | any (code), SEKAIHOME (check) | M | T02 | `stack.py up comfyui` healthy on SEKAIHOME |
-| T41 | GPU mode: unload Ollama models, `POST /free`, stop ComfyUI; tray switch with status; tests with stubbed HTTP | any (code), SEKAIHOME (check) | M | T40, T03 | two switches in a row leave one model loaded; chat works after media |
-| T42 | Image workflow JSON and node map; Open WebUI image settings (`ENABLE_IMAGE_GENERATION`, `IMAGE_GENERATION_ENGINE`, `COMFYUI_BASE_URL`, `COMFYUI_WORKFLOW`, `COMFYUI_WORKFLOW_NODES`, `IMAGE_SIZE`, `IMAGE_STEPS`) | SEKAIHOME | S | T40 | the image button returns a 1024 px image |
-| T43 | Style-transfer workflow (SDXL + IP-Adapter, or an edit model from S0b) wired as Open WebUI's native image edit (`ENABLE_IMAGE_EDIT`, `IMAGES_EDIT_COMFYUI_WORKFLOW`, `IMAGES_EDIT_COMFYUI_WORKFLOW_NODES`) | SEKAIHOME | S | T42 | a photo comes back in the reference picture's style |
+| T40 | `comfyui` service: `media:` section, port 8188, command with `--lowvram --reserve-vram 1.0`, health `/system_stats`; unit tests | any (code), the reference machine (check) | M | T02 | `stack.py up comfyui` healthy on the reference machine |
+| T41 | GPU mode: unload Ollama models, `POST /free`, stop ComfyUI; tray switch with status; tests with stubbed HTTP | any (code), the reference machine (check) | M | T40, T03 | two switches in a row leave one model loaded; chat works after media |
+| T42 | Image workflow JSON and node map; Open WebUI image settings (`ENABLE_IMAGE_GENERATION`, `IMAGE_GENERATION_ENGINE`, `COMFYUI_BASE_URL`, `COMFYUI_WORKFLOW`, `COMFYUI_WORKFLOW_NODES`, `IMAGE_SIZE`, `IMAGE_STEPS`) | The reference machine | S | T40 | the image button returns a 1024 px image |
+| T43 | Style-transfer workflow (SDXL + IP-Adapter, or an edit model from S0b) wired as Open WebUI's native image edit (`ENABLE_IMAGE_EDIT`, `IMAGES_EDIT_COMFYUI_WORKFLOW`, `IMAGES_EDIT_COMFYUI_WORKFLOW_NODES`) | The reference machine | S | T42 | a photo comes back in the reference picture's style |
 | T44 | `config/comfyui/MODELS.md`: model, version, licence, size, source; pinned custom-node commits; a check that every listed licence is open (D-M3) | any | S | - (structure), T02 (rows) | every model in a saved workflow is listed with an allowed licence |
-| T45 | `smoke --media`: one 512 px, 4-step image | SEKAIHOME | S | T42 | passes |
+| T45 | `smoke --media`: one 512 px, 4-step image | The reference machine | S | T42 | passes |
 | T46 | winget entry for ComfyUI, if T02 picked the desktop installer and winget has it | any | S | T02 | generated winget file lists it |
 
 ### M5a: video with audio and music
@@ -438,25 +438,25 @@ flowchart LR
 |---|---|---|---|---|---|
 | T50 | `media_mux.py`: ffmpeg filter graph with `loudnorm`, `sidechaincompress`, `amix` and mux; unit tests on the graph; integration test with synthetic tones when ffmpeg exists | any | M | - | tests pass; the mixed test file measures -16 LUFS +/- 1 LU |
 | T51 | `stack.py media mux` command with a loudness report | any | S | T50 | command documented and tested |
-| T52 | Route A workflow `video_with_audio.json` | SEKAIHOME | M | T05, T40 | one prompt gives frames, Foley, optional voice and music |
-| T53 | Music workflow (ACE-Step 1.5) | SEKAIHOME | S | T05, T40 | a 30 s track from a prompt |
+| T52 | Route A workflow `video_with_audio.json` | The reference machine | M | T05, T40 | one prompt gives frames, Foley, optional voice and music |
+| T53 | Music workflow (ACE-Step 1.5) | The reference machine | S | T05, T40 | a 30 s track from a prompt |
 | T54 | Deferred 2026-11-01 (D-M1, D-M3): `media.video_route` waits for an open-licence joint model | - | - | - | - |
 | T55 | Removed 2026-11-01: the LTX-2.5 joint workflow has a custom licence (D-M3) | - | - | - | - |
-| T56 | Acceptance run on SEKAIHOME (section 6) | SEKAIHOME, owner | S | T51, T52 | time and loudness recorded in `memory/state.md` |
+| T56 | Acceptance run on the reference machine (section 6) | The reference machine, owner | S | T51, T52 | time and loudness recorded in `memory/state.md` |
 
 ### M5b, M6, M7
 
 | ID | Task | Where | Size | Depends | Done when |
 |---|---|---|---|---|---|
-| T60 | `make_video` Open WebUI tool: post to `/prompt`, poll `/history`, progress events, return a link | any (code), SEKAIHOME (check) | M | T52 | a chat request queues a clip and returns its link |
+| T60 | `make_video` Open WebUI tool: post to `/prompt`, poll `/history`, progress events, return a link | any (code), the reference machine (check) | M | T52 | a chat request queues a clip and returns its link |
 | T61 | Output folder, retention and size cap for generated media | any | S | T60 | old outputs are removed by the rule the owner sets |
 | T70 | Done 2026-11-01: D-M5 is DuckDuckGo, per-chat toggle | owner | - | - | decision recorded |
-| T71 | `ENABLE_WEB_SEARCH`, `WEB_SEARCH_ENGINE` (confirm `duckduckgo` or `ddgs` in the 0.12.3 retrieval router) and `DDGS_BACKEND` in the Open WebUI env; department models keep `web_search: false` as the default; the `DECISIONS.md` exception entry exists | any (code), SEKAIHOME (check) | S | - | search runs only in a chat where the toggle is on |
+| T71 | `ENABLE_WEB_SEARCH`, `WEB_SEARCH_ENGINE` (confirm `duckduckgo` or `ddgs` in the 0.12.3 retrieval router) and `DDGS_BACKEND` in the Open WebUI env; department models keep `web_search: false` as the default; the `DECISIONS.md` exception entry exists | any (code), the reference machine (check) | S | - | search runs only in a chat where the toggle is on |
 | T80 | User guide: one section per feature | any | S | each package | a newcomer can use each feature from the guide |
 | T81 | Troubleshooting rows: Smart App Control blocks, out of memory at decode, workflow rejected, slow reload | any | S | each package | rows added |
 | T82 | Close the plan: Outcome note here, design index status, `memory/state.md` | any | S | all | plan marked done |
 
-Tasks that can start now, without SEKAIHOME: T08, T11, T12 (prompts and evals written; run on SEKAIHOME), T30, T44
+Tasks that can start now, without the reference machine: T08, T11, T12 (prompts and evals written; run on the reference machine), T30, T44
 (structure), T50, T51, T71 (code).
 
 ## 15. Sources (read 2026-11-01)
@@ -513,6 +513,6 @@ Corrected in this plan:
 - `surfaces` must also cover `opencode.json` and the orchestrator's department list (T11).
 - Open WebUI 0.12.3 setting names filled in (sections 5 and 9, T20, T23, T42, T71); its native image edit is the
   style-transfer path (T43).
-- T12's evals need the gateway, so they run on SEKAIHOME.
+- T12's evals need the gateway, so they run on the reference machine.
 - T08 must not fail the build on the existing `model_store`, which predates the guard.
 - Stage 6 of the routing chapter claimed that a reply asks to shorten past 90% of the context; nothing does that.

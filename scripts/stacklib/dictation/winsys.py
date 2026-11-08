@@ -288,6 +288,43 @@ def make_overlay(hwnd: int) -> None:
     user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED)
 
 
+_WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+_sig(user32.EnumThreadWindows, (wintypes.DWORD, _WNDENUMPROC, wintypes.LPARAM), wintypes.BOOL)
+_sig(user32.GetClassNameW, (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int), ctypes.c_int)
+_sig(user32.IsWindowVisible, (wintypes.HWND,), wintypes.BOOL)
+_sig(user32.GetWindowRect, (wintypes.HWND, ctypes.POINTER(wintypes.RECT)), wintypes.BOOL)
+_sig(user32.GetCursorPos, (ctypes.POINTER(wintypes.POINT),), wintypes.BOOL)
+_sig(user32.EndMenu, (), wintypes.BOOL)
+
+
+def cursor_pos() -> tuple[int, int]:
+    pt = wintypes.POINT()
+    user32.GetCursorPos(ctypes.byref(pt))
+    return pt.x, pt.y
+
+
+def popup_menu_rects() -> list[tuple[int, int, int, int]]:
+    """Screen rectangles (left, top, right, bottom) of the popup menus (class #32768) open on this thread: a menu
+    from tk_popup and any submenu it opened."""
+    rects: list[tuple[int, int, int, int]] = []
+    name = ctypes.create_unicode_buffer(16)
+
+    def visit(hwnd, _lparam):
+        if user32.IsWindowVisible(hwnd) and user32.GetClassNameW(hwnd, name, 16) and name.value == "#32768":
+            r = wintypes.RECT()
+            if user32.GetWindowRect(hwnd, ctypes.byref(r)):
+                rects.append((r.left, r.top, r.right, r.bottom))
+        return True
+
+    user32.EnumThreadWindows(kernel32.GetCurrentThreadId(), _WNDENUMPROC(visit), 0)
+    return rects
+
+
+def end_menu() -> None:
+    """Close the menu this thread is tracking (tk_popup's native loop returns, as if Esc was pressed)."""
+    user32.EndMenu()
+
+
 def round_corners(hwnd: int) -> None:
     """Windows 11 draws rounded, anti-aliased corners and a shadow (DWMWA_WINDOW_CORNER_PREFERENCE = round)."""
     try:

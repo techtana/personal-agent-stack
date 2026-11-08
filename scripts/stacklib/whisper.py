@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from . import IS_WINDOWS, REPO, info, which
-from . import paths
+from . import paths, procname, usage_log
 from .media import _run, _uv_env, media, system_python
 
 SERVER_SRC = REPO / "scripts" / "whisper_mcp.py"
@@ -44,6 +44,9 @@ def server_env(profile: dict) -> dict[str, str]:
         "WHISPER_COMPUTE": m.get("whisper_compute") or "int8_float16",
         "WHISPER_CPU_MODEL": m.get("whisper_cpu_model") or "small",
         "HF_HUB_DISABLE_TELEMETRY": "1",
+        # One usage record per transcription into this checkout's traces/usage, for the tray's Usage tab.
+        **usage_log.env_for(profile),
+        "AGENT_STACK_CLIENT": "Claude Desktop",
     }
     if m.get("hf_home"):
         env["HF_HOME"] = m["hf_home"]
@@ -52,7 +55,8 @@ def server_env(profile: dict) -> dict[str, str]:
 
 def server_entry(profile: dict) -> dict:
     """The mcpServers entry, in Claude Desktop's format (Claude Code's .mcp.json takes the same stdio shape)."""
-    return {"command": str(whisper_python(profile)), "args": ["-I", str(whisper_dir(profile) / "whisper_mcp.py")],
+    # Claude Desktop starts it as PAS-Recordings.exe (procname) when the copy can be made.
+    return {"command": str(procname.named(whisper_python(profile), "recordings")), "args": ["-I", str(whisper_dir(profile) / "whisper_mcp.py")],
             "env": server_env(profile)}
 
 

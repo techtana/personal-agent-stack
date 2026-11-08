@@ -1,10 +1,10 @@
 # Plan: hard block on AI agents reading personal files (2026-10-29, draft)
 
-Goal: no AI agent on SEKAIHOME (Claude Code, Claude Desktop and Cowork, Gemini CLI and the Gemini app, GitHub Copilot
+Goal: no AI agent on the reference machine (Claude Code, Claude Desktop and Cowork, Gemini CLI and the Gemini app, GitHub Copilot
 in the CLI, VS Code and Windows, browser agents, Windows agent workspaces, and this stack's own agents) can read or
 change the owner's personal files, even if the agent is prompt-injected, misconfigured or ignores its own settings.
 
-Status: research and plan only. Nothing here has been run. Checks marked **V-F** must run on SEKAIHOME first.
+Status: research and plan only. Nothing here has been run. Checks marked **V-F** must run on the reference machine first.
 
 ## 1. What "hard" means here
 
@@ -27,7 +27,7 @@ let into the owner's data. App sandboxes stay on as extra layers, never as the b
 ## 2. Design
 
 ```
-owner account "Sekai" (admin)          agent account "ai-agent" (standard user, member of group AI-Agents)
+owner account "%USERNAME%" (admin)          agent account "ai-agent" (standard user, member of group AI-Agents)
   personal files: Deny AI-Agents  <-X-   Claude Code, Gemini CLI, Copilot CLI, OpenCode, Codex
   browser profile with sign-ins   <-X-   Claude Desktop/Cowork, Gemini app, Copilot app (own sign-in session)
   personal cloud connectors       <-X-   own claude.ai / Google / Microsoft sign-ins without personal connectors
@@ -36,12 +36,12 @@ owner account "Sekai" (admin)          agent account "ai-agent" (standard user, 
 
 ### L1. Inventory personal roots (V-F1)
 List every place personal data lives, on every drive:
-- `C:\Users\Sekai\` (Documents, Desktop, Pictures, Downloads, Videos, Music, AppData with browser profiles and app
+- `%USERPROFILE%\` (Documents, Desktop, Pictures, Downloads, Videos, Music, AppData with browser profiles and app
   tokens), any OneDrive / Google Drive / Dropbox sync folders, the Logseq graph, Notion's local cache.
 - `D:\` (USB SSD). **Check its file system** (`Get-Volume`): NTFS can carry ACLs; exFAT/FAT32 cannot, and then every
   user, the agent included, can read everything on it. If it is not NTFS: keep only `D:\ollama` there, or reformat to NTFS.
 - Default NTFS ACLs on a non-system drive root give Authenticated Users rights to create folders and read; personal
-  folders on `D:` need explicit ACLs. Under `C:\Users\Sekai` Windows already allows only Sekai, SYSTEM and
+  folders on `D:` need explicit ACLs. Under `%USERPROFILE%` Windows already allows only %USERNAME%, SYSTEM and
   Administrators (confirm with `icacls`).
 
 ### L2. Account split (the hard block)
@@ -93,11 +93,11 @@ List every place personal data lives, on every drive:
 - **D: is exFAT** ("No permissions are set. All users have full control."). Any account, `ai-agent` included, can
   read everything on it: `shows`, `songs`, `mem`, loose photos at the root, `keycloak`, `ollama`. Before L2 means
   anything, move personal data off D: or reformat it to NTFS (copy out first), keeping `D:\ollama` there.
-- `C:\Users\Sekai`: SYSTEM, Administrators and Sekai have full control; one AppContainer capability SID has traverse
+- `%USERPROFILE%`: SYSTEM, Administrators and %USERNAME% have full control; one AppContainer capability SID has traverse
   only. Another standard user cannot read it, as expected.
-- Accounts: only `Sekai` is enabled, and it is an administrator (built-in Administrator is disabled). No agent
+- Accounts: only `%USERNAME%` is enabled, and it is an administrator (built-in Administrator is disabled). No agent
   account exists yet. Every agent today runs with admin-capable rights (D1).
-- Documents, Desktop and Pictures are redirected to `C:\Users\Sekai\OneDrive\...`: inside the profile, so covered
+- Documents, Desktop and Pictures are redirected to `%USERPROFILE%\OneDrive\...`: inside the profile, so covered
   locally, but also reachable through the Microsoft account (Copilot, OneDrive connectors; L4).
 - Other personal roots in the profile: `logseq`, `JoplinBackup`, `StudioProjects`, `ansel`, `Downloads`, `Music`,
   `Videos`. Not checked yet: the ACL on `C:\Code` and other folders outside the profile.
