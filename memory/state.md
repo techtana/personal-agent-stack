@@ -688,6 +688,23 @@ once across a session restart.
      only `unregister`. This PC still has it (Linked, 2.4 GB in C:\media\whisper): Remove it from the tray after
      merging, with Claude Desktop closed. Open question for the owner: the Claude Code tooling around the repository
      (profile B, .claude/agents, the security audit skill) is not part of the installed app and was left as it is.
+   - Read aloud in more languages, the same day, at the owner's request ("installation options for best models for
+     key languages that kokoro does not cover"). A research subagent compared open text-to-speech models per
+     language (licences of weights and training data checked at the source); the owner then chose: offer Piper voices
+     fine-tuned from the research-only "lessac" base, marked as such; no GPU-only models for now; keep Windows' voices.
+     Built: `voice_packs` in config/installer.yaml (rhasspy/piper-voices pinned at e7229f7), a Piper engine in
+     dictation/tts.py on the existing onnxruntime and espeak-ng (no piper-tts, which is GPL-3.0, and no new package),
+     `read_aloud.packs` / `packs_dir`, More voices in the installer, Download / Remove rows under Read aloud on the
+     Features card (setup worker steps voice_packs / remove_voices), Storage rows, the Settings voice picker, and
+     auto-language picking them (Vietnamese detection added). Measured here with the real voices in read aloud's
+     environment (downloaded to a scratch folder with the owner's OK, deleted afterwards): load about 3 s; Dmitri and
+     VAIS-1000 made 3.3-3.7 s of speech in 0.14-0.15 s, Thorsten (high) 3.8 s in 0.87 s; Whisper (small, CPU) heard
+     the German sentence word for word, the Russian and Vietnamese ones with one word off each.
+     Not done: Mandarin (Kokoro v1.1-zh with misaki[zh]), Japanese (Kokoro's own voices; misaki[ja] needs mojimoji,
+     which has no Python 3.14 wheel), Thai (a Kokoro-based Thai model through FastThaiG2P) and Arabic (Nabra-82M with
+     camel-tools): each needs its own text front-end; Cantonese and Korean have only GPU-sized open models (the owner
+     said not now); Indonesian has no clean voice. Not verified: the installer's More voices and the tray's Download
+     clicked by hand, and a reading in the live app.
    - After merging: rerun install.cmd from the main checkout (it updates the app), then restart the tray.
    - Installer window in the tray's look (same day, branch claude/installer-ui-ux-improvements-5bb01f, on top of this
      work): the palette, system light/dark theme and ttk styles moved from tray.py to stacklib/theme.py, which both

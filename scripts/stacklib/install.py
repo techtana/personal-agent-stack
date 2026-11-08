@@ -65,6 +65,8 @@ class Plan:
     pull_models: list[str] = field(default_factory=list)     # more Ollama models to download (the tray's Download)
     only: list[str] | None = None   # the STEPS ids to run after the removals; None runs them all, [] none
     targets: list[str] = field(default_factory=list)   # the features this run is for, so the tray can mark their rows
+    voice_packs: list[str] = field(default_factory=list)     # read aloud voices to download (voice_packs keys)
+    remove_voices: list[str] = field(default_factory=list)   # read aloud voices to delete
 
 
 @dataclass
@@ -410,7 +412,7 @@ def option_edits(profile: dict, chosen, options: dict[tuple[str, str], str]) -> 
 
 
 def save_features(profile: dict, chosen, media_root: str = "", status: dict | None = None,
-                  options: dict[tuple[str, str], str] | None = None, remove=()) -> Path | None:
+                  options: dict[tuple[str, str], str] | None = None, remove=(), packs=None) -> Path | None:
     """Write what the installer's features page chose into machines/<HOST>.yaml, keeping comments: the switches in
     FEATURE_SWITCHES, the options chosen next to the features (option_edits), and the media folder when a chosen
     feature installs there. Only values that change are written.
@@ -438,6 +440,10 @@ def save_features(profile: dict, chosen, media_root: str = "", status: dict | No
     if media_root and needs_media(chosen) and (profile.get("media") or {}).get("root") != media_root:
         text, roots = _with_media_root(text, profile, media_root)
         want.update({("media", "root"): media_root, ("agent_access", "allowed_roots"): roots})
+    have_packs = list((profile.get("read_aloud") or {}).get("packs") or [])
+    if packs is not None and "read_aloud" in chosen and sorted(packs) != sorted(have_packs):
+        text = set_key(text, "read_aloud", "packs", list(packs))   # the read aloud step downloads them
+        want[("read_aloud", "packs")] = list(packs)
     for (section, key), value in option_edits(profile, chosen, options or {}).items():
         text = set_key(text, section, key, value)
         want[(section, key)] = value
@@ -832,6 +838,32 @@ def step_openclaw(plan: Plan, profile: dict, report) -> str:
             "model provider, so chats stay on this machine")
 
 
+def _set_packs(profile: dict, packs: list[str]) -> None:
+    """Write read_aloud.packs (the Piper voices to keep) into machines/<HOST>.yaml."""
+    from .yamledit import set_key
+
+    path = prof.machine_file(profile["name"])
+    text = set_key(path.read_text(encoding="utf-8"), "read_aloud", "packs", list(packs))
+    _write_checked(path, text, {("read_aloud", "packs"): list(packs)}, "the read aloud voices")
+
+
+def step_voice_packs(plan: Plan, profile: dict, report) -> str:
+    """Read aloud voices chosen one by one (the tray's Download): kept in read_aloud.packs, then downloaded."""
+    from . import dictation
+
+    have = list((profile.get("read_aloud") or {}).get("packs") or [])
+    want = have + [k for k in plan.voice_packs if k not in have]
+    if want != have:
+        _set_packs(profile, want)
+    return dictation.download_packs(profile, plan.voice_packs, report)
+
+
+def step_remove_voices(plan: Plan, profile: dict, report) -> str:
+    from . import uninstall
+
+    return "; ".join(uninstall.remove_voice_pack(profile, key, report) for key in plan.remove_voices)
+
+
 def step_pull_more(plan: Plan, profile: dict, report) -> str:
     """Models chosen one by one (the tray's Download), on top of the ones the profile names."""
     from . import uninstall
@@ -883,6 +915,11 @@ def plan_steps(plan: Plan) -> list[tuple]:
                     step_remove_models))
     only = None if plan.only is None else set(plan.only)
     out += [s for s in STEPS if only is None or s[0] in only]
+    if plan.remove_voices:
+        out.insert(len([s for s in out if s[0].startswith("remove")]),
+                   ("remove_voices", "Delete read aloud voices", step_remove_voices))
+    if plan.voice_packs:
+        out.append(("voice_packs", "Download read aloud voices", step_voice_packs))
     if plan.pull_models:
         out.append(("pull_more", "Download " + ", ".join(plan.pull_models), step_pull_more))
     return out
@@ -1129,6 +1166,12 @@ def start_removal(profile: dict, fids=(), models=()) -> int:
     """The tray's Remove buttons: remove features and delete Ollama models in the setup worker. Returns its pid."""
     targets = sorted(fids) + (["models"] if models else [])
     return spawn_worker(tray_plan(profile, remove=list(fids), remove_models=list(models), targets=targets))
+
+
+def start_voice_packs(profile: dict, download=(), remove=()) -> int:
+    """The tray's Download and Remove for read aloud voices, in the setup worker. Returns its pid."""
+    return spawn_worker(tray_plan(profile, voice_packs=list(download), remove_voices=list(remove),
+                                  targets=["read_aloud"]))
 
 
 def start_download(profile: dict, models) -> int:

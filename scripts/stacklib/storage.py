@@ -158,6 +158,19 @@ def _hf_models(profile: dict, out: list[Entry], status: dict) -> None:
         _add(out, "Data", what, home / sub, "can be deleted; downloads fill it again", "off")
 
 
+def _voices(profile: dict, out: list[Entry]) -> None:
+    """Read aloud's Piper voices for more languages, one folder each."""
+    from . import dictation
+    from .dictation.speak import PIPER_VOICES, language_label
+
+    folder = dictation.packs_dir(profile)
+    for key in dictation.installed_packs(profile):
+        meta = PIPER_VOICES[key]
+        who = " and ".join(str(x[0]) for x in (meta.get("speakers") or {}).values())
+        _add(out, "Models", f"{who} ({language_label(str(meta.get('language') or ''))})", folder / key,
+             "read aloud voice (Piper)")
+
+
 def _programs(profile: dict, out: list[Entry]) -> None:
     from . import dictation, services, whisper
 
@@ -211,6 +224,7 @@ def scan(profile: dict, status: dict | None = None) -> Scan:
     s = Scan()
     for part, fn in (("Ollama's models", _ollama_models), ("the image models", _image_models),
                      ("the Hugging Face cache", lambda p, out: _hf_models(p, out, status)),
+                     ("read aloud's voices", _voices),
                      ("the programs", _programs), ("the data folders", _data)):
         try:
             fn(profile, s.entries)

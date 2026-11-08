@@ -9,6 +9,19 @@ entry stays and gets a "Done <date>" note.
 
 ## 2026-11-08
 
+- **Pending: read aloud in more languages with Piper voices, marked.** Asked by the owner: installation options for
+  the best models for key languages Kokoro does not cover. Research (licences of weights and training data, checked
+  at the source) found no clean CPU model for Cantonese, Korean or Indonesian, Kokoro-based options for Mandarin,
+  Japanese, Thai and Arabic that each need their own text front-end, and Piper voices for German, Russian,
+  Vietnamese and more Italian, Spanish, Portuguese and French voices, nearly all fine-tuned from a base trained on
+  research-only data. The owner chose to offer those Piper voices with that note, to leave GPU-only models (CosyVoice3,
+  VoxCPM2, about 5 GB) for later, and to keep Windows' voices as the fallback.
+  - Run on the onnxruntime and espeak-ng read aloud already has (piper-phonemize's id scheme written out), not
+    piper-tts (GPL-3.0 since 1.3) or sherpa-onnx (2.0 dropped espeak-ng): no new package under Smart App Control.
+  - Left out although Piper: Arabic (ar_JO-kareem) and Indonesian (id_ID-news_tts), whose own recordings carry no
+    clear licence, and voices trained on non-commercial data.
+  - Next, each as its own change: Mandarin through Kokoro v1.1-zh and misaki[zh]; Thai, Arabic, Japanese after their
+    front-ends are tested here.
 - **Pending: the stack keeps no ties to closed-source apps; recordings for Claude Desktop are retired.** Asked by the
   owner on seeing the tray: "this app should not have any dependency with non-open source software like claude".
   - The recordings feature (a Whisper MCP server registered in Claude Desktop's config, 2026-11-05) served only

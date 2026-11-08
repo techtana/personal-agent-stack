@@ -262,6 +262,9 @@ class TrayApp:
         self.ollama_tree: dict = {"pid": None, "runners": []}   # Ollama's server and one runner per loaded model
         self.unloading: set[str] = set()           # models an Unload click is taking out of Ollama
         self.model_rows: list = []                 # Local models: every catalog model and any other Ollama has
+        self.installed_packs: list[str] = []       # read aloud's Piper voices downloaded to this PC
+        self.pack_widgets: list = []
+        self.pack_shown: tuple = ()
         self.setup_state: dict = {}                # the setup worker's state (stacklib/install.py read_state)
         self.setup_seen: str | None = None         # the last finished run the tray handled (None until the first read)
         self.setup_watch = False                   # show the setup line: a run was seen while it worked
@@ -482,6 +485,9 @@ class TrayApp:
             self.feature_status = features.statuses(self.profile, openclaw=self.client_status.get("openclaw"))
             self.feature_est = features.estimates(self.profile, self.hardware, self.loaded)
             self.model_rows = uninstall.model_rows(self.profile)
+            from stacklib import dictation
+
+            self.installed_packs = dictation.installed_packs(self.profile)
         except Exception as e:  # noqa: BLE001 - the poller must go on; the card keeps its last reading
             print(f"[tray] feature check failed: {e}")
 
@@ -1392,7 +1398,8 @@ class TrayApp:
         if st.get("status") != "running" or fid not in (st.get("targets") or []):
             return ""
         sid = str((self._setup_step() or {}).get("id") or "")
-        return "Removing" if sid.startswith("remove") else "Downloading" if sid == "pull_more" else "Installing"
+        return ("Removing" if sid.startswith("remove") else "Downloading" if sid in ("pull_more", "voice_packs")
+                else "Installing")
 
     @staticmethod
     def _feature_buttons(fid: str, s) -> tuple[bool, str]:
@@ -1463,6 +1470,7 @@ class TrayApp:
             else:
                 w["main"].grid_remove()
         self._render_models()
+        self._render_packs()
         self._render_setup()
         missing = [features.BY_ID[fid].short for fid in features.not_installed(status)]
         if not status:
@@ -1474,6 +1482,76 @@ class TrayApp:
                     "options, and shows what each feature costs on this PC." if missing else
                     "Every feature is installed. Remove takes one off again; Settings turns one off without removing it.")
         self.features_note.configure(text=f"{self.installer_note}  {note}" if self.installer_note else note)
+
+    def _render_packs(self) -> None:
+        """The rows under Read aloud: Piper voices for more languages (config/installer.yaml voice_packs), each with
+        Download or Remove; shown while read aloud is installed, since they run in its environment."""
+        from stacklib.dictation import speak
+
+        w = self.feature_widgets.get("read_aloud")
+        if w is None:
+            return
+        s = self.feature_status.get("read_aloud")
+        show = bool(s and s.installed and not s.unknown)
+        installed = set(self.installed_packs)
+        shape = (show, tuple(sorted(installed)))
+        card = self.features_card
+        if shape != self.pack_shown:
+            for widget in self.pack_widgets:
+                widget.destroy()
+            self.pack_widgets, self.pack_buttons = [], {}
+            for i, (key, meta) in enumerate(speak.PIPER_VOICES.items() if show else ()):
+                r = w["base"] + 2 + i
+                top = GAP_S if i == 0 else GAP_XS
+                names = ttk.Frame(card, style="Card.TFrame")
+                names.grid(row=r, column=1, sticky="nw", padx=(GAP_L, 0), pady=(top, 0))
+                who = " and ".join(str(x[0]) for x in (meta.get("speakers") or {}).values())
+                ttk.Label(names, text=f"{speak.language_label(str(meta.get('language') or ''))}: {who}",
+                          style="Card.TLabel").pack(anchor="w")
+                mark = "fine-tuned from a research-only base voice" if meta.get("lessac_base") else ""
+                line = "  ·  ".join(x for x in ("Piper voice", f"own data {meta.get('data_licence')}", mark) if x)
+                ttk.Label(names, text=line, style="Card.Muted.TLabel").pack(anchor="w")
+                done = key in installed
+                size = ttk.Label(card, text=f"{meta.get('size_mb')} MB" + ("" if done else " download"),
+                                 style="Card.Sub.TLabel")
+                size.grid(row=r, column=2, sticky="nw", padx=GAP_M, pady=(top, 0))
+                btn = ttk.Button(card, text="Remove" if done else "Download", width=BTN_B,
+                                 command=lambda k=key, d=done: self.pack_action(k, d))
+                btn.grid(row=r, column=4, sticky="ne", pady=(top, 0))
+                self.pack_widgets += [names, size, btn]
+                self.pack_buttons[key] = btn
+            self.pack_shown = shape
+        blocked = self._setup_running() or bool(self.busy) or bool(self.feature_starting)
+        for btn in getattr(self, "pack_buttons", {}).values():
+            btn.configure(state="disabled" if blocked else "normal")
+
+    def pack_action(self, key: str, installed: bool) -> None:
+        """Download or Remove on a read aloud voice row; removing asks first."""
+        from stacklib import dictation
+        from stacklib.dictation import speak
+
+        if self._setup_running() or self.feature_starting:
+            return
+        meta = speak.PIPER_VOICES[key]
+        who = " and ".join(str(x[0]) for x in (meta.get("speakers") or {}).values())
+        lang = speak.language_label(str(meta.get("language") or ""))
+        if installed:
+            self._confirm(f"Delete the voice {who}?",
+                          f"This deletes the {lang} voice {who} ({meta.get('size_mb')} MB) from "
+                          f"{uninstall.short_path(dictation.packs_dir(self.profile))}. Read aloud then uses another "
+                          "voice for that language, or a Windows voice. You can download it again from this list.",
+                          "Delete voice", lambda: self._start_setup(
+                              "read_aloud", "Removing", lambda: install.start_voice_packs(self.profile, remove=[key])),
+                          cancel="Keep it")
+            return
+        folder = dictation.packs_dir(self.profile)
+        free = storage.free_bytes(storage.drive_of(folder))
+        if free is not None and free / 1e6 < float(meta.get("size_mb") or 0) + 100:
+            self._notice(f"Not enough space for {who}",
+                         f"The voice needs about {meta.get('size_mb')} MB, and {storage.drive_of(folder)} has "
+                         f"{storage.size_text(free)} free.")
+            return
+        self._start_setup("read_aloud", "Downloading", lambda: install.start_voice_packs(self.profile, download=[key]))
 
     def _render_models(self) -> None:
         """The rows under Local models: every model in the catalog and any other Ollama has, with Download or Remove.
@@ -2418,6 +2496,7 @@ class TrayApp:
     def _load_settings(self) -> None:
         self.profile = prof.resolve_profile(self.profile["name"])
         usage_log.configure(self.profile)
+        cfg.refresh_voice_choices(self.profile)   # read aloud voices downloaded since the tray started
         values = cfg.current_values(self.profile)
         models = cfg.installed_models(self.profile)
         for box in self.model_boxes:

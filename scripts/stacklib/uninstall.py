@@ -41,6 +41,7 @@ SWITCH_SETTING = {"chat": "services.open_webui", "tracing": "observability.phoen
 TOOL_ENV = {"chat": "open-webui", "tracing": "arize-phoenix"}   # uv tool environments (config/installer.yaml)
 # Folder kinds that make a feature read as installed: deleted after everything else.
 PROGRAM_KINDS = ("comfyui", "venv", "whisper")
+FILE_KINDS = ("hf", "file", "pack")   # downloaded models and voices: deleted first
 STOP_WAIT_S = 15   # how long remove() waits for a stopped program to let go of its files
 
 
@@ -192,6 +193,48 @@ def _kokoro_item(profile: dict) -> Item | None:
     return Item("Kokoro voices and weights", str(d), _gb(d), "hf") if d.exists() else None
 
 
+def _pack_items(profile: dict) -> list[Item]:
+    """The read aloud voices (Piper) downloaded to this PC, one folder each."""
+    from . import dictation
+    from .dictation.speak import PIPER_VOICES, language_label
+
+    folder = dictation.packs_dir(profile)
+    items = []
+    for key in dictation.installed_packs(profile):
+        meta = PIPER_VOICES[key]
+        names = " and ".join(str(who[0]) for who in (meta.get("speakers") or {}).values())
+        items.append(Item(f"Read aloud voice {names} ({language_label(str(meta.get('language') or ''))})",
+                          str(folder / key), _gb(folder / key), "pack",
+                          media=bool((profile.get("media") or {}).get("root"))))
+    return items
+
+
+def _forget_packs(profile: dict) -> None:
+    """read_aloud.packs emptied: a removed read aloud must not download its voices again when it comes back."""
+    from . import install
+
+    if (profile.get("read_aloud") or {}).get("packs"):
+        install._set_packs(profile, [])
+
+
+def remove_voice_pack(profile: dict, key: str, report=lambda *a: None) -> str:
+    """Delete one read aloud voice's folder and take it out of read_aloud.packs."""
+    from . import dictation
+    from . import install
+
+    item = next((i for i in _pack_items(profile) if Path(i.path).name == key), None)
+    have = list((profile.get("read_aloud") or {}).get("packs") or [])
+    if key in have:
+        install._set_packs(profile, [k for k in have if k != key])
+    if item is None:
+        return f"{key} was not downloaded"
+    freed = _delete_item(item, profile, report)
+    folder = dictation.packs_dir(profile)
+    if folder.exists() and not any(folder.iterdir()):
+        folder.rmdir()
+    return f"deleted {key} ({features_gb(freed / 1e9)})"
+
+
 def _tool_dir() -> Path | None:
     from . import services
 
@@ -289,6 +332,7 @@ def plan(profile: dict, fid: str, status: dict | None = None) -> Removal:
             kokoro = _kokoro_item(profile)
             if kokoro:
                 r.deletes.append(kokoro)
+            r.deletes += _pack_items(profile)
         r.deletes.append(Item("The voice typing app's Python environment", str(venv), _gb(venv), "venv",
                               media=bool(m.get("root")) and _within(venv, Path(m["root"]))))
         r.notes.append("Open WebUI's microphone goes back to its own Whisper.")
@@ -297,6 +341,7 @@ def plan(profile: dict, fid: str, status: dict | None = None) -> Removal:
         kokoro = _kokoro_item(profile)
         if kokoro:
             r.deletes.append(kokoro)
+        r.deletes += _pack_items(profile)
         r.deletes.append(Item("espeak-ng, comtypes and the GPU libraries in voice typing's environment", kind="packages"))
         r.notes.append("Voice typing restarts (a few seconds).")
         r.keeps.append("Voice typing, and Windows' own voices.")
@@ -344,7 +389,7 @@ def _preflight(profile: dict, r: Removal) -> str:
     """Every check remove() needs before it changes anything; "" when all pass, else why not, in a sentence."""
     m = profile.get("media") or {}
     for item in r.deletes:
-        if item.kind in ("comfyui", "venv", "whisper", "hf", "file") and item.path and Path(item.path).exists():
+        if item.kind in (*PROGRAM_KINDS, *FILE_KINDS) and item.path and Path(item.path).exists():
             try:
                 _check(item, profile)
             except PermissionError as e:
@@ -412,6 +457,15 @@ def _check(item: Item, profile: dict) -> None:
             raise PermissionError(f"{p} is neither inside agent_access.allowed_roots nor in this app's data folder")
     elif item.kind == "file" and not p.is_file():
         raise PermissionError(f"{p} is not a file")
+    elif item.kind == "pack":
+        from . import dictation
+        from .dictation.speak import PIPER_VOICES
+
+        if p.parent.resolve() != dictation.packs_dir(profile).resolve() or p.name not in PIPER_VOICES \
+                or not (p / f"{p.name}.onnx").is_file():
+            raise PermissionError(f"{p} is not a read aloud voice folder")
+        if not item.media and not _within(p, _data_dir(profile)):
+            raise PermissionError(f"{p} is neither inside agent_access.allowed_roots nor in this app's data folder")
 
 
 def _on_rm_error(func, path, *_):
@@ -550,7 +604,7 @@ def remove(profile: dict, fid: str, report=lambda *a: None) -> str:
         settings.save(profile, {SWITCH_SETTING["read_aloud"]: False})
         profile = prof.resolve_profile(profile["name"])
     profile = _switch_off(profile, fid, report)
-    files = [i for i in r.deletes if i.kind in ("hf", "file") and i.path]
+    files = [i for i in r.deletes if i.kind in FILE_KINDS and i.path]
     programs = [i for i in r.deletes if i.kind in PROGRAM_KINDS and i.path]
     if fid in TOOL_ENV:
         from . import services
@@ -589,10 +643,12 @@ def remove(profile: dict, fid: str, report=lambda *a: None) -> str:
         env_dir = dictation.env_dir(profile)
         if programs and env_dir.name == "dictation" and env_dir.exists() and not any(env_dir.iterdir()):
             env_dir.rmdir()   # the empty folder the installer made for it
+        _forget_packs(profile)
         notes.append("removed voice typing" + (" and read aloud" if r.also else ""))
     elif fid == "read_aloud":
-        for item in files:   # Kokoro first, then the packages that make it read as installed
+        for item in files:   # Kokoro and the more voices first, then the packages that make it read as installed
             freed += _delete_item(item, profile, report)
+        _forget_packs(profile)
         freed += _remove_read_aloud_packages(profile, report)
         notes.append("removed read aloud")
     elif fid == "recordings":

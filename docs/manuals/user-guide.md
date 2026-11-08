@@ -477,12 +477,25 @@ Voices:
   Kokoro loads when the pointer rests on the speaker button or while the selection is copied, so the first sentence
   rarely waits for it, and it is freed after 30 idle minutes (`read_aloud.unload_after_min`). **Kokoro weights** under
   Show advanced picks fp32 (326 MB), int8 (92 MB and 0.3 GB of RAM, as fast on the CPU, slower on the GPU) or off.
+- **More voices** (Piper, optional downloads, since 2026-11-08) for languages Kokoro does not speak and more voices for
+  some it does: German (Thorsten, 114 MB), Russian (Dmitri, 63 MB), Vietnamese (VAIS-1000, 63 MB), Italian (Paola),
+  Spanish from Argentina (Daniela), Portuguese from Portugal (Tugão) and French (Jessica and Pierre). Tick them under
+  **Read aloud > More voices** in the installer, or use **Download** under Read aloud on the tray's Features card
+  (**Remove** deletes one again). They go to `<media folder>\voices` (or `.run\voices`), each in its own folder, and
+  run on the CPU in read aloud's own environment: nothing else is installed. On the reference machine a medium voice
+  made a 3.3 s sentence in 0.14 s, the high-quality German one 3.8 s in 0.9 s, after about 3 s to load. Each was
+  fine-tuned from a Piper voice whose training data is licensed for research only; their own recordings are open
+  (CC0, CC BY or CC BY-SA), and the tray and the installer say so on each row. Not offered: Arabic and Indonesian
+  Piper voices (their recordings carry no clear licence) and every Piper voice trained on non-commercial data
+  (Japanese, Chinese, Korean, Thai, Hindi). Versions and files are pinned in `config/installer.yaml` (`voice_packs`).
 - **Windows voices** (David, Zira and Mark on an English Windows; any voice added in Windows Settings > Time & language
-  > Speech) start at once and sound flatter. They cover the languages Kokoro does not.
+  > Speech) start at once and sound flatter. They cover the languages neither Kokoro nor the more voices do (Windows
+  is closed source, but these come with it; the stack installs nothing for them).
 
 Choosing a voice in the button's menu (a search list) plays a short sample in it and saves the choice
 (`read_aloud.voice`). With **Other languages get their own voice** on, text that is clearly in another language is
-read by a voice for that language: Kokoro's when it has one, else an installed Windows voice; the bubble says which.
+read by a voice for that language: Kokoro's when it has one, else a downloaded Piper voice, else an installed Windows
+voice; the bubble says which.
 Thai, Russian, Japanese and other scripts are recognised by their letters; Latin-script languages by common words, so
 a short phrase keeps your chosen voice. Pick per-language voices in the machine file:
 
