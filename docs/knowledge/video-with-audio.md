@@ -142,7 +142,7 @@ because the rules are easier to test in code.
 
 ## How the project uses it
 
-- Default on SEKAIHOME: the chain, in one ComfyUI workflow (`config/comfyui/workflows/video_with_audio.json`), plus
+- Default on the reference machine: the chain, in one ComfyUI workflow (`config/comfyui/workflows/video_with_audio.json`), plus
   `uv run scripts/stack.py media mux` for the mix (plan package M5a).
 - The owner allows open licences only (decision D-M3, 2026-11-01). That rules out both V2A candidates named above
   (HunyuanVideo-Foley, MMAudio) and LTX-2.x. Spike S0e looks for an open-licence V2A model and reads its licence first.
@@ -157,7 +157,7 @@ Not measured here yet. All numbers are web reports read on 2026-11-01.
 ## Open questions
 
 - Is there an open-licence V2A model (code and weights) that sounds right on Wan 2.2 clips (D-M2, D-M3)?
-- How long does the full chain take on SEKAIHOME, end to end?
+- How long does the full chain take on the reference machine, end to end?
 
 ## Sources and further reading
 

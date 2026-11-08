@@ -4,7 +4,7 @@
 
 The owner wants to dictate instead of type, hear answers read aloud, and show the model a photo, a diagram or a
 painting. These are three separate jobs: **speech to text** (STT), **text to speech** (TTS) and **vision** (reading
-images). None of them needs the big GPU on SEKAIHOME: speech runs well on the CPU, and the chat model already accepts
+images). None of them needs the big GPU on the reference machine: speech runs well on the CPU, and the chat model already accepts
 images. This page explains how each works, what it costs, and the privacy points. Plan packages M1 (vision) and M2
 (speech) build on it.
 
@@ -126,7 +126,7 @@ Not measured here yet. Smart App Control may block Kokoro's compiled modules; sp
 
 ## Open questions
 
-- Does `ollama show qwen3.5:9b` list `vision` for the tag pulled on SEKAIHOME?
+- Does `ollama show qwen3.5:9b` list `vision` for the tag pulled on the reference machine?
 - Which `AUDIO_STT_ENGINE` value list and which device does the 0.12.3 STT code use? (Not in `config.py`; the old
   `routers/audio.py` moved.)
 - Where does Open WebUI store recorded audio, and can retention be limited?

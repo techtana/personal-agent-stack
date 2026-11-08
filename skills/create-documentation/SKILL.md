@@ -41,13 +41,13 @@ Sources, in order:
 
 Write three kinds of file:
 
-- **`docs/design/plans/<YYYY-MM-DD>-<slug>.md`**, one per plan: the goal, the approach, the phases, and a **Status** line at the top (proposed / approved / in progress / done / dropped, with the date and the PR that delivered it). Keep the plan's substance; trim session chatter, tool notes and absolute paths to the user's machine. Plans are history: don't rewrite an old plan to match today's code — add a dated "Outcome" note at the end instead.
-- **`docs/design/DECISIONS.md`**, a running log, newest first: date, decision, why, rejected alternatives, and a link to the plan, PR or doc it came from. Never delete an entry; mark a reversed one "Superseded by <date>". Include decisions already recorded in other docs as one line with a link.
+- **`docs/design/plans/<YYYY-MM-DD>-<slug>.md`**, one per plan: the goal, the approach, the phases, and a **Status** line at the top (proposed / approved / in progress / done / dropped, with the date and the PR that delivered it, as plain `PR #N`). Keep the plan's substance; trim session chatter, tool notes and absolute paths to the user's machine. Plans are history: don't rewrite an old plan to match today's code — add a dated "Outcome" note at the end instead.
+- **`docs/design/DECISIONS.md`**, a running log, newest first: date, decision, why, rejected alternatives, and where it came from: a link to the plan or doc, or the PR as plain `PR #N`. Never delete an entry; mark a reversed one "Superseded by <date>". Include decisions already recorded in other docs as one line with a link.
 - **`docs/design/README.md`**, an index of the plans with their status.
 
 The README's design-decisions section (step 3) summarises `DECISIONS.md` and links it instead of repeating it.
 
-No secrets, personal data or e-mail addresses in these files. Write "the owner" rather than the person's name unless the project already names them.
+No secrets, personal data or e-mail addresses in these files. Write "the owner" rather than the person's name unless the project already names them. Cite the project's own PRs and issues as plain text (`PR #13`, `issue #4`), never as GitHub URLs: a URL names the account that owns the repository.
 
 ## 1c. Gather research and domain knowledge
 
@@ -114,7 +114,7 @@ For the product owner and developer. Sections, in this order, skipping any that 
 6. **Repository layout**: a table, one line per folder.
 7. **Assumptions and where it applies**.
 8. **Limitations and where it doesn't apply**.
-9. **Known issues**: link the tracker; list the important open ones.
+9. **Known issues**: name the tracker in words ("this repository's GitHub issues"), not by URL; list the important open ones.
 10. **Path forward**: a running list of planned work, newest decisions kept.
 11. **Design decisions**: the most important ones, one line each — the decision, the date, and why — then a link to `docs/design/DECISIONS.md` for the full log. Never delete an entry; mark a reversed one as superseded.
 12. **Background knowledge**: one sentence on what a newcomer needs to understand about the domain, and a link to `docs/knowledge/README.md`.
@@ -145,7 +145,7 @@ Write for someone who has never seen the project and isn't a developer. Name but
 
 - Every command, path, file name, setting and screen name you wrote exists. Check with `ls`/`grep`, not memory.
 - Every link resolves to a file in the repo.
-- No secrets, tokens, passwords or personal data copied into docs. Placeholders only (`<project-id>`, `<token>`).
+- No secrets, tokens, passwords or personal data copied into docs, and no GitHub URLs to the project's own PRs or issues. Placeholders only (`<project-id>`, `<token>`).
 - Every plan from step 1b has a file in `docs/design/plans/` and a row in the index, and every decision has a line in `DECISIONS.md`.
 - Every research topic from step 1c has a file in `docs/knowledge/` and a line in its README. Each file passes the depth test, each number has a source or says "source not recorded", and no source text is pasted.
 - README and manuals don't contradict each other or the component READMEs. Where they overlap, the manual links to the component README instead of copying it.

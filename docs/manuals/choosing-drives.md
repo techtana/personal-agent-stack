@@ -30,7 +30,7 @@ Why:
   is unplugged, nothing would start. A missing models drive only makes model loads fail; on 2026-11-01 it broke
   every model download until the drive was plugged back in.
 - **Small files.** A repository, a Python environment or `node_modules` is thousands of small files. The internal
-  NVMe drive answers each read in about 0.02 ms; the USB SSD on SEKAIHOME took about 0.2 ms.
+  NVMe drive answers each read in about 0.02 ms; the USB SSD on the reference machine took about 0.2 ms.
 - **Large files read once.** Ollama reads a model from disk only when it loads it, then runs it from the GPU's
   memory. Hugging Face weights work the same way. A drive at 200 MB/s or more adds only seconds to each cold load.
 - **Credentials.** The Hugging Face token and OpenClaw's keys stay on the internal drive, not on one that can be
@@ -149,7 +149,7 @@ About 40 MB/s for both reading and writing, with random reads no faster than seq
 connected at USB 2.0 speed. The drive itself is usually fine. Try these in order, running the check again after each:
 
 1. **Turn the USB-C plug over.** A USB-C plug has its fast-data contacts on both sides, and each orientation uses a
-   different set. On SEKAIHOME on 2026-11-01, turning the plug over took drive D: from 41 MB/s to 376 MB/s. If that
+   different set. On the reference machine on 2026-11-01, turning the plug over took drive D: from 41 MB/s to 376 MB/s. If that
    fixes it, a contact is worn or dirty: mark which way round the plug works, or replace the cable.
 2. **Use a USB 3 port on the back of the PC.** These are usually blue or teal, or marked `SS`, `5Gbps` or `10Gbps`.
    Avoid front-panel ports and hubs.
@@ -159,7 +159,7 @@ connected at USB 2.0 speed. The drive itself is usually fine. Try these in order
 About 375 MB/s is what a 5 Gbps USB port gives. A USB 3.2 Gen 2 SSD such as the Crucial X8 can reach about
 1,000 MB/s on a 10 Gbps port.
 
-## Measured on SEKAIHOME (2026-11-01)
+## Measured on the reference machine (2026-11-01)
 
 | Drive | Connection | Read | Write | How measured |
 |---|---|---|---|---|
@@ -198,8 +198,8 @@ reformatting erases the drive.
 
 ## OpenClaw
 
-The installer's option **Install OpenClaw with npm and point it at this stack's gateway** (on by default when OpenClaw
-is not installed) runs the step **Install OpenClaw**:
+The installer's feature **OpenClaw** (ticked by default when OpenClaw is not installed) runs the step **Install
+OpenClaw**:
 
 1. Checks the Node.js version. OpenClaw 2026.10.9 needs Node.js 24.22.1 or later in the 24 line, or 26.12.1 or later.
 2. If Node.js is older, runs `winget install --id OpenJS.NodeJS.LTS`, which upgrades it to the current LTS (26.13.0 on
@@ -219,13 +219,14 @@ is not installed) runs the step **Install OpenClaw**:
    - Writes the gateway key (`LITELLM_MASTER_KEY` from `.env`) to `~/.openclaw/.env`, which OpenClaw reads.
      `openclaw.json` refers to the key by name only.
 
-If OpenClaw is already installed, the installer offers only step 4, and only when OpenClaw sends prompts somewhere
-other than the gateway.
+If OpenClaw is already installed, the installer runs only step 4, and only when OpenClaw sends prompts somewhere other
+than the gateway: its row then reads `Bypasses the gateway` (or `Not set up`), ticked; untick it to leave OpenClaw as
+it is.
 
 Afterwards, open OpenClaw with `openclaw dashboard` (in the browser) or `openclaw chat` (in the terminal). Inside a chat,
 `/model` switches between departments.
 
-**Checking it later.** The tray's Overview tab has an OpenClaw row:
+**Checking it later.** The Features card on the tray's Overview tab has an OpenClaw row:
 
 - **Gateway only** (green): every model OpenClaw calls goes through the gateway.
 - **Not set up** (amber): OpenClaw is installed but has not been onboarded yet.

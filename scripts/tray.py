@@ -3,9 +3,10 @@
 
 It lives in the notification area (on Windows it starts among the hidden icons). Left-click or "Show status" opens a
 window with three tabs:
-  Overview  each service's health with start/stop and links into the UIs, the models loaded in Ollama, and the
-            Hugging Face cache and OpenClaw (where the cache is; whether OpenClaw uses only the gateway, with a
-            Use gateway button that makes it so)
+  Overview  each service's health with start/stop and links into the UIs ("Not installed" when its feature is not),
+            the models loaded in Ollama, the features the installer offers (installed, on or off, linked to the
+            stack; what each takes on this PC; Add features opens the installer; OpenClaw's Use gateway button), and
+            where the Hugging Face cache is
   Usage     every model the stack ran (gateway, Whisper, ComfyUI, direct Ollama calls): requests, tokens, audio,
             images, speed and cost per model, service or client, with a per-day chart
   Settings  models, context sizes, tracing and Ollama runtime options; Apply writes machines/<HOST>.yaml,
@@ -84,14 +85,15 @@ if __name__ == "__main__" and (sys.stdout is None or not sys.stdout.isatty()):
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import psutil  # noqa: E402
 import pystray  # noqa: E402
-from PIL import Image, ImageDraw  # noqa: E402
+from PIL import ImageTk  # noqa: E402
 
-from stacklib import IS_WINDOWS, clients, media, ollama, process_metrics, profile as prof, services  # noqa: E402
+from stacklib import IS_WINDOWS, clients, media, ollama, process_metrics, procname, profile as prof, services  # noqa: E402
+from stacklib.icon import COLORS, make_icon  # noqa: E402
 from stacklib import settings as cfg  # noqa: E402
-from stacklib import comfy_usage, startup, usage, usage_log  # noqa: E402
+from stacklib import comfy_usage, features, startup, usage, usage_log  # noqa: E402
 
 POLL_SECONDS = 10
-CLIENT_SECONDS = 60  # between Hugging Face / OpenClaw checks: measuring the cache walks every file in it
+CLIENT_SECONDS = 60  # between feature and Hugging Face checks: measuring the cache walks every file in it
 START_TIMEOUT = 180  # seconds a started service gets to answer its health check
 RESOURCE_SECONDS = 5  # pause between process samples while the Resources tab is on screen
 RESOURCES_TAB = 3
@@ -115,9 +117,7 @@ ROLES = {
     "kokoro": "text to speech",
     "dictation": "speak into any app (Whisper)",
 }
-CLIENTS = (("huggingface", "Hugging Face cache", "model weights for Python tools"),
-           ("openclaw", "OpenClaw", "agent client; private only through the gateway"))
-COLORS = {"ok": "#2e9d57", "warn": "#d99a1e", "bad": "#c94a3d", "idle": "#8a8f98"}  # tray icon fills
+CLIENTS = (("huggingface", "Hugging Face cache", "model weights for Python tools"),)
 FONT = "Segoe UI" if IS_WINDOWS else "TkDefaultFont"
 
 # Window palette (light / dark): neutral surfaces, one blue accent for data, status colours only for state.
@@ -147,14 +147,6 @@ def ui_links(p: dict) -> dict[str, str]:
         "litellm": f"http://127.0.0.1:{ports['litellm']}/ui",
         "comfyui": f"http://127.0.0.1:{ports['comfyui']}",
     }
-
-
-def make_icon(color: str) -> Image.Image:
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.ellipse((4, 4, 60, 60), fill=color)
-    d.polygon([(32, 14), (48, 50), (40, 50), (32, 30), (24, 50), (16, 50)], fill="white")  # stylised "A"
-    return img
 
 
 def system_theme() -> str:
@@ -187,6 +179,33 @@ def waited(seconds: float | None) -> str:
     return f"... {int(seconds)} s" if seconds and seconds >= 1 else "..."
 
 
+class TextVar:
+    """The get/set of a tk variable for a Text widget (which has none), so the Settings tab treats a text box like
+    every other control."""
+
+    def __init__(self, widget: tk.Text) -> None:
+        self.widget = widget
+
+    def get(self) -> str:
+        return self.widget.get("1.0", "end-1c")
+
+    def set(self, value: str) -> None:
+        self.widget.delete("1.0", "end")
+        self.widget.insert("1.0", value)
+        self.widget.edit_reset()           # Ctrl+Z must not take the box back past what was loaded
+        self.widget.edit_modified(False)   # a load is not an edit (see TrayApp._text_edited)
+
+    def replace(self, value: str) -> None:
+        """Set the text as one edit, which Ctrl+Z takes back whole (Restore default)."""
+        w = self.widget
+        w.configure(autoseparators=False)
+        w.edit_separator()
+        w.delete("1.0", "end")
+        w.insert("1.0", value)
+        w.edit_separator()
+        w.configure(autoseparators=True)
+
+
 class TrayApp:
     def __init__(self, autostart: bool = True) -> None:
         self.profile = prof.resolve_profile()
@@ -199,6 +218,11 @@ class TrayApp:
         self.loaded: list[dict] = []
         self.client_status: dict[str, clients.ClientStatus] = {}
         self.clients_checked = 0.0  # monotonic; 0 = never
+        self.hardware = features.hardware(self.profile)
+        self.feature_status: dict[str, features.Status] = {}  # empty until the first check: service rows as before
+        self.feature_est = features.estimates(self.profile, self.hardware)
+        self.installer: tuple[int, str | None] | None = None  # (pid, start time) of the installer window we opened
+        self.installer_note = ""  # what the last Add features click did, shown under the Features card
         self.openclaw_busy = False
         self.openclaw_result = ""  # why the last Use gateway click failed, shown until the next click
         self.dictation_button: bool | None = None  # floating mic button visible? None while voice typing is down
@@ -224,8 +248,12 @@ class TrayApp:
         self.checked_at = ""
         self.ui_queue: queue.Queue = queue.Queue()
         self.stop_event = threading.Event()
+        procname.set_app_id("tray")  # the taskbar shows the window icon below, not Python's
         self.root = tk.Tk()
         self.root.withdraw()
+        # The tray's icon on every window (title bar, taskbar, Alt+Tab), kept referenced for Tk.
+        self.window_icons = [ImageTk.PhotoImage(make_icon(COLORS["ok"], n)) for n in (16, 32, 64)]
+        self.root.iconphoto(True, *self.window_icons)
         self.window: tk.Toplevel | None = None
         self.refresh_lock = threading.Lock()
         self.icon_color = COLORS["idle"]
@@ -247,6 +275,7 @@ class TrayApp:
         if checked - self.clients_checked >= CLIENT_SECONDS or not self.clients_checked:
             self.clients_checked = checked
             self.client_status = self._check_clients()
+            self._check_features()
         self.checked_at = datetime.now().strftime("%H:%M:%S")
         # Refreshes come from the poller and from start/stop threads; pystray's Windows backend frees the old icon
         # handle on every swap, so two concurrent swaps fail with WinError 1402. Serialise, and swap only on change.
@@ -305,6 +334,15 @@ class TrayApp:
             except Exception as e:  # noqa: BLE001 - a bad config file must not stop the poller
                 out[key] = clients.ClientStatus("warn", "Not checked", str(e) or type(e).__name__)
         return out
+
+    def _check_features(self) -> None:
+        """What is installed, on and linked (stacklib/features.py), and what each feature takes with the models that
+        are loaded now. Reuses the OpenClaw check _check_clients just made."""
+        try:
+            self.feature_status = features.statuses(self.profile, openclaw=self.client_status.get("openclaw"))
+            self.feature_est = features.estimates(self.profile, self.hardware, self.loaded)
+        except Exception as e:  # noqa: BLE001 - the poller must go on; the card keeps its last reading
+            print(f"[tray] feature check failed: {e}")
 
     def _store_rows(self, rows: list[dict], checked: float) -> None:
         """Keep each service's newest reading, so a slow poll that began before an action finished cannot undo it."""
@@ -494,8 +532,14 @@ class TrayApp:
                 mark = "starting..." if pending[0] == "start" else "stopping..."
             elif row and row["state"] == "starting":
                 mark = "◐ starting"
+            elif row and row["healthy"]:
+                mark = "● up"
+            elif features.service_installed(svc, self.feature_status) is False:
+                mark = "not installed"
+            elif svc in features.NOT_INSTALLABLE and svc not in self.managed:
+                mark = "not available yet"
             else:
-                mark = "● up" if row and row["healthy"] else "○ down"
+                mark = "○ down"
             return f"{LABELS[svc]}: {mark}"
 
         return text
@@ -506,6 +550,7 @@ class TrayApp:
             pystray.MenuItem("Show status", lambda *_: self.ui_queue.put(lambda: self.show_window(0)), default=True),
             pystray.MenuItem("Usage by model", lambda *_: self.ui_queue.put(lambda: self.show_window(1))),
             pystray.MenuItem("Settings", lambda *_: self.ui_queue.put(lambda: self.show_window(2))),
+            pystray.MenuItem("Add features...", self.open_installer),
             pystray.Menu.SEPARATOR,
             *[pystray.MenuItem(self._status_text(s), None, enabled=False) for s in ["ollama", *services.SERVICE_ORDER]],
             pystray.Menu.SEPARATOR,
@@ -556,6 +601,31 @@ class TrayApp:
             self.refresh_soon()
 
         threading.Thread(target=run, daemon=True).start()
+
+    def open_installer(self, *_) -> None:
+        """Add features: open the installer window in its own process (stacklib/install.launch_window), unless the one
+        opened last is still open. Its features page shows what is installed and what each feature costs."""
+        def run() -> None:
+            from stacklib import install
+
+            pid, started = self.installer or (0, None)
+            if started is not None and services._proc_info(pid)[1] == started:   # same process, not a reused pid
+                note = "The installer is already open; it may be behind another window."
+            else:
+                try:
+                    pid = install.launch_window()
+                    self.installer = (pid, services._proc_info(pid)[1])
+                    note = "Opening the installer; this card updates once setup has run."
+                except OSError as e:
+                    note = f"Could not open the installer: {e}. Run install.cmd instead."
+            print(f"[tray] {note}")
+
+            def show() -> None:
+                self.installer_note = note
+                self._render_features()
+            self.ui_queue.put(show)
+
+        threading.Thread(target=run, daemon=True, name="open-installer").start()
 
     def _toggle_startup(self) -> None:
         startup.remove() if startup.is_installed() else startup.install()
@@ -686,7 +756,7 @@ class TrayApp:
         t = self.t
         w = tk.Toplevel(self.root, bg=t["page"])
         w.title("Agent Stack")
-        w.geometry(f"940x{min(900, w.winfo_screenheight() - 80)}")  # Overview: services, GPU and loaded models, HF and OpenClaw, action bar
+        w.geometry(f"940x{min(900, w.winfo_screenheight() - 80)}")  # Overview scrolls: services, GPU, features, HF cache
         w.minsize(760, 560)
         w.protocol("WM_DELETE_WINDOW", w.withdraw)  # closing hides it; the tray keeps running
         if IS_WINDOWS and system_theme() == "dark":
@@ -725,6 +795,9 @@ class TrayApp:
             # Tk's own TCombobox binding steps a read-only box to the next value; scroll the tab instead and stop
             # there, so the "all" binding above does not scroll a second time.
             self.root.bind_class("TCombobox", seq, lambda e: (self._wheel(e), "break")[1])
+            # A settings text box scrolls its own text first (Tk's Text binding); the tab scrolls only while the
+            # whole text is in view, so the wheel never moves both at once.
+            self.root.bind_class("SettingText", seq, lambda e: "break" if e.widget.yview() != (0.0, 1.0) else None)
         self._build_overview(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
         self._build_usage(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
         self._build_settings(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
@@ -792,7 +865,38 @@ class TrayApp:
         ttk.Button(gbtn, text="Chat", width=7, command=lambda: self.set_gpu_mode("chat")).pack(side="left", padx=2)
         ttk.Button(gbtn, text="Media", width=7, command=lambda: self.set_gpu_mode("media")).pack(side="left", padx=2)
 
-        extras = self._card(body, "Hugging Face and OpenClaw", row=2, column=0, pady=(12, 0))
+        # The installer's features: installed, on or off, linked to the stack, and what each takes on this PC.
+        feats = self._card(body, "Features", row=2, column=0, pady=(12, 0))
+        feats.columnconfigure(1, weight=1)
+        self.feature_widgets: dict[str, tuple] = {}
+        for n, f in enumerate(features.FEATURES):
+            i = 2 * n + 1
+            dot = tk.Label(feats, text="●", font=(FONT, 12), bg=self.t["card"], fg=self.t["muted"])
+            dot.grid(row=i, column=0, padx=(0, 10), pady=(5, 0), sticky="n")
+            names = ttk.Frame(feats, style="Card.TFrame")
+            names.grid(row=i, column=1, sticky="w")
+            ttk.Label(names, text=f.title, style="Card.TLabel", font=(FONT, 10, "bold")).pack(anchor="w")
+            load = ttk.Label(names, text="", style="Card.Muted.TLabel")
+            load.pack(anchor="w")
+            state = ttk.Label(feats, text="Checking...", style="Card.Sub.TLabel", width=-18)
+            state.grid(row=i, column=2, sticky="w", padx=8)
+            detail = ttk.Label(feats, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
+            detail.grid(row=i + 1, column=1, columnspan=2, sticky="w", pady=(0, 6))
+            fix = None
+            if f.id == "openclaw":
+                fix = ttk.Button(feats, text="Use gateway", command=self.openclaw_use_gateway)
+                fix.grid(row=i, column=3, sticky="e", padx=2)
+                fix.grid_remove()
+            self.feature_widgets[f.id] = (dot, load, state, detail, fix)
+        foot = ttk.Frame(feats, style="Card.TFrame")
+        foot.grid(row=2 * len(features.FEATURES) + 1, column=0, columnspan=4, sticky="we", pady=(4, 0))
+        foot.columnconfigure(0, weight=1)
+        self.features_note = ttk.Label(foot, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
+        self.features_note.grid(row=0, column=0, sticky="w")
+        self.add_features_btn = ttk.Button(foot, text="Add features...", command=self.open_installer)
+        self.add_features_btn.grid(row=0, column=1, sticky="e", padx=(8, 2))
+
+        extras = self._card(body, "Hugging Face cache", row=3, column=0, pady=(12, 0))
         extras.columnconfigure(1, weight=1)
         self.client_widgets: dict[str, tuple] = {}
         for n, (key, label, role) in enumerate(CLIENTS):
@@ -807,12 +911,7 @@ class TrayApp:
             state.grid(row=i, column=2, sticky="w", padx=8)
             detail = ttk.Label(extras, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
             detail.grid(row=i + 1, column=1, columnspan=2, sticky="w", pady=(0, 6))
-            fix = None
-            if key == "openclaw":
-                fix = ttk.Button(extras, text="Use gateway", command=self.openclaw_use_gateway)
-                fix.grid(row=i, column=3, sticky="e", padx=2)
-                fix.grid_remove()
-            self.client_widgets[key] = (dot, state, detail, fix)
+            self.client_widgets[key] = (dot, state, detail)
 
         bar = ttk.Frame(tab, padding=(0, 12, 0, 0))
         bar.grid(row=1, column=0, sticky="we")
@@ -848,6 +947,7 @@ class TrayApp:
         self.startup_var.set(startup.is_installed())
         self._render_loaded()
         self._render_clients()
+        self._render_features()
         if any(r["state"] == "starting" for r in self.rows.values()):
             self._tick_soon()
 
@@ -865,6 +965,7 @@ class TrayApp:
             up += healthy and enabled
             pid = row.get("pid")
             pending = self.pending.get(svc)
+            installed = features.service_installed(svc, self.feature_status)  # None until the first feature check
             if pending:
                 dot.configure(fg=t["warn"])
                 verb = "Starting" if pending[0] == "start" else "Stopping"
@@ -876,15 +977,22 @@ class TrayApp:
                 created = self._created(pid)
                 dot.configure(fg=t["warn"])
                 state.configure(text="Starting" + waited(created and time.time() - created), style="Warn.TLabel")
+            elif installed is False:  # its feature was not installed: Start would only fail
+                dot.configure(fg=t["warn"] if enabled else t["muted"])
+                state.configure(text="Not installed", style="Warn.TLabel" if enabled else "Card.Sub.TLabel")
             elif enabled:
                 dot.configure(fg=t["bad"])
                 state.configure(text="Stopped", style="Card.Sub.TLabel")
+            elif svc in features.NOT_INSTALLABLE:
+                dot.configure(fg=t["muted"])
+                state.configure(text="Not available yet", style="Card.Sub.TLabel")
             else:
                 dot.configure(fg=t["muted"])
                 state.configure(text="Off in settings", style="Card.Sub.TLabel")
             stopping = bool(pending) and pending[0] == "stop"
+            startable = (enabled and installed is not False) or healthy or self._running(svc)
             toggle.configure(text="Stop" if self._running(svc) else "Start",
-                             state="disabled" if self.busy or stopping or not (enabled or healthy) else "normal")
+                             state="disabled" if self.busy or stopping or not startable else "normal")
             problem = self.problems.get(svc)
             if problem and (problem[0] == "start") == healthy:
                 del self.problems[svc]  # it came up (or went down) after all
@@ -916,27 +1024,56 @@ class TrayApp:
         self.start_btn.configure(state="normal" if can_start and not self.busy else "disabled")
         self.stop_btn.configure(state="normal" if can_stop and not self.busy else "disabled")
 
-    def _render_clients(self) -> None:
+    def _level_look(self, level: str) -> tuple[str, str]:
+        """(dot colour, state label style) for a status level: ok, warn, bad or off."""
         t = self.t
-        colour = {"ok": t["good"], "warn": t["warn"], "bad": t["bad"], "off": t["muted"]}
-        style = {"warn": "Warn.TLabel", "bad": "Bad.TLabel"}
-        for key, (dot, state, detail, fix) in self.client_widgets.items():
+        return ({"ok": t["good"], "warn": t["warn"], "bad": t["bad"]}.get(level, t["muted"]),
+                {"warn": "Warn.TLabel", "bad": "Bad.TLabel"}.get(level, "Card.Sub.TLabel"))
+
+    def _render_clients(self) -> None:
+        for key, (dot, state, detail) in self.client_widgets.items():
             s = self.client_status.get(key)
-            if key == "openclaw" and self.openclaw_busy:
-                dot.configure(fg=t["warn"])
+            if s:
+                fg, style = self._level_look(s.level)
+                dot.configure(fg=fg)
+                state.configure(text=s.state, style=style)
+                detail.configure(text=s.detail)
+
+    def _render_features(self) -> None:
+        """The Features card, from the last feature check (once a minute) and OpenClaw's Use gateway state."""
+        if not self._window_built() or not hasattr(self, "feature_widgets"):
+            return
+        status = self.feature_status
+        for fid, (dot, load, state, detail, fix) in self.feature_widgets.items():
+            f, s, e = features.BY_ID[fid], status.get(fid), self.feature_est.get(fid)
+            if e:
+                load.configure(text=("Required  ·  " if f.required else "") + features.brief(e))
+            if fid == "openclaw" and self.openclaw_busy:
+                dot.configure(fg=self.t["warn"])
                 state.configure(text="Setting up...", style="Warn.TLabel")
             elif s:
-                dot.configure(fg=colour.get(s.level, t["muted"]))
-                state.configure(text=s.state, style=style.get(s.level, "Card.Sub.TLabel"))
-                detail.configure(text=(self.openclaw_result + "  " if key == "openclaw" and self.openclaw_result else "")
+                fg, style = self._level_look(s.level)
+                dot.configure(fg=fg)
+                state.configure(text=s.state, style=style)
+                detail.configure(text=(self.openclaw_result + "  " if fid == "openclaw" and self.openclaw_result else "")
                                  + s.detail)
             if fix is not None:
                 # Shown while OpenClaw is installed but not gateway-only; a failure keeps it up so the owner can retry.
-                if self.openclaw_busy or (s and s.level in ("warn", "bad") and s.state != "Not checked"):
+                if self.openclaw_busy or (s and s.installed and not s.on and s.state != "Not checked"):
                     fix.configure(state="disabled" if self.openclaw_busy else "normal")
                     fix.grid()
                 else:
                     fix.grid_remove()
+        missing = [features.BY_ID[fid].short for fid in features.not_installed(status)]
+        if not status:
+            note = "Checking which features are installed..."
+        elif missing:
+            note = (f"Not installed: {', '.join(missing)}. Add features opens the installer, which shows what each one "
+                    "takes on this PC; installed features stay as they are.")
+        else:
+            note = "Every feature is installed. The installer checks and repairs them; Settings turns them off."
+        self.features_note.configure(text=f"{self.installer_note}  {note}" if self.installer_note else note)
+        self.add_features_btn.configure(text="Add features..." if missing or not status else "Open installer...")
 
     def openclaw_use_gateway(self) -> None:
         """Onboard OpenClaw if needed and make the gateway its only model endpoint (clients.setup_openclaw). No
@@ -945,7 +1082,7 @@ class TrayApp:
             return
         self.openclaw_busy = True
         self.openclaw_result = ""
-        self._render_clients()
+        self._render_features()
 
         def run() -> None:
             try:
@@ -953,13 +1090,14 @@ class TrayApp:
             except Exception as e:  # noqa: BLE001 - shown on the row; the log has the trace
                 traceback.print_exc()
                 result = f"Use gateway failed: {e}"
-            status = self._check_clients()
+            self.client_status = self._check_clients()
+            self._check_features()
 
             def done() -> None:
                 self.openclaw_busy = False
                 self.openclaw_result = result if result.startswith("Use gateway failed") else ""
-                self.client_status = status
                 self._render_clients()
+                self._render_features()
             self._on_ui(done)
         threading.Thread(target=run, daemon=True, name="openclaw-setup").start()
 
@@ -1327,9 +1465,11 @@ class TrayApp:
 
         groups = [("Models", "models"), ("Tracing and services", ("observability", "services")),
                   ("Voice typing", "dictation"), ("Refine selected text", "refine"), ("Ollama runtime", "ollama_env")]
-        self.setting_vars: dict[str, tk.Variable] = {}
+        self.setting_vars: dict[str, tk.Variable | TextVar] = {}
         self.model_boxes: list[ttk.Combobox] = []
         self.changed_marks: dict[str, ttk.Label] = {}
+        self.default_buttons: dict[str, tuple[ttk.Button, object]] = {}  # "text" settings: Restore default
+        self.advanced_parts: list[dict] = []
         row = 0
         for title, sections in groups:
             ttk.Label(form, text=title, style="Card.Title.TLabel").grid(row=row, column=0, columnspan=3, sticky="w", pady=(8 if row else 0, 4))
@@ -1338,35 +1478,12 @@ class TrayApp:
                 ttk.Label(form, text="Applying any of these restarts Ollama, which interrupts requests in progress.",
                           style="Card.Muted.TLabel").grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 6))
                 row += 1
-            for s in cfg.SETTINGS:
-                if s.section not in (sections if isinstance(sections, tuple) else (sections,)):
-                    continue
-                sid = cfg.setting_id(s)
-                ttk.Label(form, text=s.label, style="Card.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 24), pady=(6, 0))
-                if s.kind == "bool":
-                    var: tk.Variable = tk.BooleanVar()
-                    widget = ttk.Checkbutton(form, variable=var, text="On", command=self._settings_dirty)
-                elif s.kind == "search":
-                    # Too many values for a drop-down (100 languages): a button that opens the search picker.
-                    var = tk.StringVar()
-                    widget = ttk.Button(form, width=30)
-                    widget.configure(command=lambda s=s, v=var, b=widget: self._pick_setting(s, v, b))
-                    var.trace_add("write", lambda *_a, s=s, v=var, b=widget: b.configure(
-                        text=f"{s.labels.get(v.get(), v.get())}  ▾"))
-                else:
-                    var = tk.StringVar()
-                    widget = ttk.Combobox(form, textvariable=var, values=s.choices, state="readonly", width=30)
-                    widget.bind("<<ComboboxSelected>>", lambda _e: self._settings_dirty())
-                    if s.kind == "model":
-                        self.model_boxes.append(widget)
-                widget.grid(row=row, column=1, sticky="w", pady=(6, 0))
-                mark = ttk.Label(form, text="", style="Warn.TLabel")
-                mark.grid(row=row, column=2, sticky="e", pady=(6, 0))
-                self.changed_marks[sid] = mark
-                self.setting_vars[sid] = var
-                ttk.Label(form, text=s.help, style="Card.Muted.TLabel", wraplength=560, justify="left").grid(
-                    row=row + 1, column=0, columnspan=2, sticky="w", pady=(0, 4))
-                row += 2
+            in_group = [s for s in cfg.SETTINGS if s.section in (sections if isinstance(sections, tuple) else (sections,))]
+            for s in in_group:
+                if not s.advanced:
+                    row = self._add_setting(form, s, row)
+            if any(s.advanced for s in in_group):
+                row = self._build_advanced(form, row, [s for s in in_group if s.advanced])
             if title == "Models":
                 self.cloud_label = ttk.Label(form, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
                 self.cloud_label.grid(row=row, column=0, columnspan=3, sticky="w", pady=(4, 0))
@@ -1387,6 +1504,112 @@ class TrayApp:
         self.apply_log = ttk.Label(bar, text="", style="HeadSub.TLabel", wraplength=820, justify="left")
         self.apply_log.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
         self._load_settings()
+
+    def _add_setting(self, parent, s, row: int) -> int:
+        """One setting from grid row `row`: label, control and "changed" mark, then its help. Returns the next free row.
+        A "text" setting puts its help under the label and its box across the whole width below."""
+        sid = cfg.setting_id(s)
+        ttk.Label(parent, text=s.label, style="Card.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 24), pady=(6, 0))
+        mark = ttk.Label(parent, text="", style="Warn.TLabel")
+        mark.grid(row=row, column=2, sticky="e", pady=(6, 0))
+        self.changed_marks[sid] = mark
+        if s.kind == "text":
+            ttk.Label(parent, text=s.help, style="Card.Muted.TLabel", wraplength=640, justify="left").grid(
+                row=row + 1, column=0, columnspan=3, sticky="w", pady=(0, 4))
+            var, box = self._text_box(parent, s)
+            box.grid(row=row + 2, column=0, columnspan=3, sticky="we", pady=(2, 6))
+            self.setting_vars[sid] = var
+            return row + 3
+        if s.kind == "bool":
+            var: tk.Variable = tk.BooleanVar()
+            widget = ttk.Checkbutton(parent, variable=var, text="On", command=self._settings_dirty)
+        elif s.kind == "search":
+            # Too many values for a drop-down (100 languages): a button that opens the search picker.
+            var = tk.StringVar()
+            widget = ttk.Button(parent, width=30)
+            widget.configure(command=lambda s=s, v=var, b=widget: self._pick_setting(s, v, b))
+            var.trace_add("write", lambda *_a, s=s, v=var, b=widget: b.configure(
+                text=f"{s.labels.get(v.get(), v.get())}  ▾"))
+        else:
+            var = tk.StringVar()
+            widget = ttk.Combobox(parent, textvariable=var, values=s.choices, state="readonly", width=30)
+            widget.bind("<<ComboboxSelected>>", lambda _e: self._settings_dirty())
+            if s.kind == "model":
+                self.model_boxes.append(widget)
+        widget.grid(row=row, column=1, sticky="w", pady=(6, 0))
+        self.setting_vars[sid] = var
+        ttk.Label(parent, text=s.help, style="Card.Muted.TLabel", wraplength=560, justify="left").grid(
+            row=row + 1, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        return row + 2
+
+    def _text_box(self, parent, s) -> tuple["TextVar", ttk.Frame]:
+        """A setting of several lines (voice typing's cleanup prompt): a text box, and Restore default under it."""
+        t = self.t
+        frame = ttk.Frame(parent, style="Card.TFrame")
+        frame.columnconfigure(0, weight=1)
+        box = tk.Text(frame, height=12, width=72, wrap="word", undo=True, maxundo=-1, font=(FONT, 10),
+                      bg=t["page"], fg=t["ink"], insertbackground=t["ink"], selectbackground=t["select"],
+                      selectforeground=t["ink"], inactiveselectbackground=t["select"], relief="flat", borderwidth=0,
+                      padx=8, pady=6, highlightthickness=2, highlightbackground=t["border"], highlightcolor=t["accent"])
+        box.grid(row=0, column=0, sticky="we")
+        # After Tk's own Text bindings: stop the wheel from also scrolling the tab while the box scrolls its text.
+        box.bindtags((str(box), "Text", "SettingText", *box.bindtags()[2:]))
+        box.bind("<<Modified>>", lambda _e: self._text_edited(box))
+        box.bind("<Tab>", lambda _e: self._focus_step(box, 1))      # Tk would type a tab character; move on instead
+        box.bind("<Shift-Tab>", lambda _e: self._focus_step(box, -1))
+        var = TextVar(box)
+        reset = ttk.Button(frame, text="Restore default",
+                           command=lambda: (var.replace(s.default), self._settings_dirty(), box.focus_set()))
+        reset.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.default_buttons[cfg.setting_id(s)] = (reset, s)
+        return var, frame
+
+    def _text_edited(self, box: tk.Text) -> None:
+        """<<Modified>> fires once per change of the box's modified flag: clear it so the next keystroke fires again."""
+        if box.edit_modified():
+            box.edit_modified(False)
+            self._settings_dirty()
+
+    @staticmethod
+    def _focus_step(widget, step: int) -> str:
+        target = widget.tk_focusNext() if step > 0 else widget.tk_focusPrev()
+        if target is not None:
+            target.focus_set()
+        return "break"
+
+    def _build_advanced(self, form, row: int, items: list) -> int:
+        """A group's rarely changed settings behind Show advanced, closed until opened. A note beside the button says
+        when one of them is not the built-in value, so a closed part never hides a change from you."""
+        head = ttk.Frame(form, style="Card.TFrame")
+        head.grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 2))
+        part = {"items": items, "open": False, "button": ttk.Button(head),
+                "note": ttk.Label(head, text="", style="Card.Muted.TLabel")}
+        part["button"].configure(command=lambda: self._toggle_advanced(part))
+        part["button"].pack(side="left")
+        part["note"].pack(side="left", padx=(10, 0))
+        before = set(form.grid_slaves())
+        row += 1
+        for s in items:
+            row = self._add_setting(form, s, row)
+        part["widgets"] = [w for w in form.grid_slaves() if w not in before]
+        self.advanced_parts.append(part)
+        self._toggle_advanced(part, False)
+        return row
+
+    def _toggle_advanced(self, part: dict, show: bool | None = None) -> None:
+        part["open"] = not part["open"] if show is None else show
+        for w in part["widgets"]:
+            if part["open"]:
+                w.grid()
+            else:
+                w.grid_remove()
+        part["button"].configure(text=("Hide advanced  ▴" if part["open"] else "Show advanced  ▾"))
+
+    def _note_advanced(self, part: dict) -> None:
+        values = cfg.current_values(self.profile)
+        own = [s.label.lower() for s in part["items"]
+               if s.kind == "text" and values[cfg.setting_id(s)] != cfg.tidy_text(s.default)]
+        part["note"].configure(text=f"Your own {' and '.join(own)} is in use." if own else "")
 
     def _pick_setting(self, s, var: tk.StringVar, button: ttk.Button) -> None:
         """Open the type-to-search picker under a "search" setting's button (voice typing's 100 languages)."""
@@ -1421,6 +1644,8 @@ class TrayApp:
         self.cloud_label.configure(text=(
             "External models: off. Every tier runs on local models, whatever .env holds; external models wait for "
             "the privacy gate and external.enabled in policy/privacy.yaml (docs/plans/)."))
+        for part in self.advanced_parts:
+            self._note_advanced(part)
         self._settings_dirty()
 
     def _edits(self) -> dict[str, object]:
@@ -1438,8 +1663,10 @@ class TrayApp:
         if not edits["observability.jsonl_traces"]:
             warn = (warn + " " if warn else "") + "With usage traces off, the Usage tab and the retrospective get no new data."
         self.settings_warning.configure(text=warn)
+        for sid, (button, s) in self.default_buttons.items():
+            button.configure(state="normal" if cfg.tidy_text(edits[sid]) != cfg.tidy_text(s.default) else "disabled")
         if todo:
-            effects = sorted({cfg.EFFECT_TEXT[s.effect] for s in todo})
+            effects = cfg.effect_texts(todo)
             self.pending_label.configure(text=f"{len(todo)} unsaved change{'s' if len(todo) > 1 else ''}. Apply will: " + "; ".join(effects) + ".")
         else:
             self.pending_label.configure(text=f"Saved in machines/{self.profile['name']}.yaml. Defaults come from machines/_defaults.yaml.")
@@ -1475,6 +1702,7 @@ class TrayApp:
                 log(f"Failed: {e}")
             finally:
                 self.busy = ""
+                self.clients_checked = 0.0  # a service turned on or off changes the Features card: check again now
                 self.ui_queue.put(self._load_settings)
                 self.refresh_soon()
 

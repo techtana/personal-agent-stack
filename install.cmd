@@ -1,7 +1,7 @@
 @echo off
 rem Agent Stack installer for Windows: double-click this file.
-rem Installs uv if missing, prepares the project environment, then opens the installer window, which asks where the
-rem models and Python tools go and runs the rest of setup in the background.
+rem Installs uv if missing, prepares the project environment, installs the app into its own folder, then opens the
+rem installer window there, which asks where the models and Python tools go and runs the rest of setup in the background.
 setlocal
 cd /d "%~dp0"
 where uv >nul 2>nul
@@ -30,5 +30,18 @@ if errorlevel 1 (
 )
 rem python.exe, not pythonw.exe: where no signed Python exists, Smart App Control blocks the venv's pythonw.exe
 rem launcher (CodeIntegrity 3033) but allows python.exe. The installer hides its own console window as soon as it starts.
-set "AGENT_STACK_HIDE_CONSOLE=1"
-start "" /min ".venv\Scripts\python.exe" "scripts\installer.py"
+if exist ".agent-stack-app.json" (
+    rem This is the installed app: open its installer to change folders or run setup again.
+    set "AGENT_STACK_HIDE_CONSOLE=1"
+    start "" /min ".venv\Scripts\python.exe" "scripts\installer.py"
+    exit /b 0
+)
+rem A source checkout: copy the app into its own folder (%LOCALAPPDATA%\Programs\AgentStack, or AGENT_STACK_HOME) with
+rem its own environment, bring this checkout's settings and data over once, then open the installer from there. After
+rem this the app never reads or writes this folder; run install.cmd here again to update the app.
+".venv\Scripts\python.exe" "scripts\stack.py" deploy --launch
+if errorlevel 1 (
+    echo Installing the app failed; see the messages above.
+    pause
+    exit /b 1
+)

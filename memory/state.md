@@ -1,11 +1,12 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-07 night (refine selected text in every app; open item 27). Before that, 2026-11-07 night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25late evening (uv tools start through their own Python; pid files carry start times). Earlier the
+Updated: 2026-11-08 (the installer makes an app apart from the repository; open item 32). Before that, the same day (the installer asks which features to install, with their load on this PC, and the tray's Features card; open item 30). Before that, 2026-11-08 (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
 Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; design in docs/ORCHESTRATOR-DESIGN.md.
 
-## Machine: SEKAIHOME (profile: machines/SEKAIHOME.yaml, class moe-12gb-32ram, primary overridden to qwen3.5:9b)
+## Reference machine (local profile machines/<HOST>.yaml, class moe-12gb-32ram, primary overridden to qwen3.5:9b)
 - Windows 11 Pro, AMD Ryzen 5 5500 (6C/12T), 32 GB DDR4-2133 (2x16), RTX 3060 12 GB (driver 610.88, ~1.0 GB idle VRAM), C: ~36 GB free after installs, D: ~788 GB free.
 - D: is a USB SSD (Micron Crucial X8); C: is an NVMe SSD (Kingston SNV3S). Model loads from D: are USB-bound.
   2026-11-01 `winsat`: D: read 41.6 MB/s (USB 2.0 link) until the owner turned the USB-C plug over, then 376 MB/s read /
@@ -29,7 +30,7 @@ Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; des
 
 ## Media: images (2026-11-04, branch claude/hf-not-working-0777b4)
 - Owner chose `D:\media` (ComfyUI, models, inputs, outputs, uv cache) and `D:\huggingface` (HF_HOME) as the only
-  folders for media tools and agent sessions; both are in `agent_access.allowed_roots` of machines/SEKAIHOME.yaml.
+  folders for media tools and agent sessions; both are in `agent_access.allowed_roots` of machines/<HOST>.yaml.
 - ComfyUI 0.44.0 (commit 56f179f6) in `D:\media\comfyui`, venv from python.org Python 3.14.7, torch 2.14.1+cu130
   (CUDA available on the RTX 3060). First `import torch` took 47 s (Smart App Control scanning the new DLLs).
 - Smart App Control refused PyAV 19.0.2 (`av\audio\frame.pyd`, CodeIntegrity 3033) and 16.0.1; 17.0.0 runs. Pinned.
@@ -51,7 +52,7 @@ Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; des
 - `local-primary` and `local-small` both serve qwen3.5:9b at num_ctx 32768 with Ollama's default load options, so all
   eight 9B deployments (primary, small, six `<dept>-local`) share one runner and never reload between tiers.
 - The class default primary, qwen3.6:35b-a3b-coding, stays on disk (22 GB on D:) but no gateway alias uses it now.
-  To bring it back as the default, delete the four override lines under `models:` in machines/SEKAIHOME.yaml and rebuild.
+  To bring it back as the default, delete the four override lines under `models:` in machines/<HOST>.yaml and rebuild.
 - `local-reviewer` still points at flint:40b-a2b, which is not pulled; no department tier routes to it.
 
 ## Services (native, `uv run scripts/stack.py up|down|status`)
@@ -236,7 +237,7 @@ once across a session restart.
    GPU through Ollama's `lib\ollama\cuda_v12\cublas64_12.dll`. Load 5-8 s; 0.3 s for 3.5 s of speech, 0.6 s for
    15 s; +1.2 GB VRAM (9.2 of 12 GB with the 9B). CPU turbo: 9.7 s for 15 s, so `cpu_model: small`. Cleanup via
    `local-small` with `think: false` and JSON mode: 0.55-1.2 s. `services.dictation: native` is set in
-   machines/SEKAIHOME.yaml. Verified: 39 new unit tests (180 passed in total); `stack.py dictate transcribe` on Windows
+   machines/<HOST>.yaml. Verified: 39 new unit tests (180 passed in total); `stack.py dictate transcribe` on Windows
    TTS recordings (phrases, silence stop, Thursday->Friday correction); the running app with a replayed recording
    pasting into a Tk test window (clipboard restored) and typing live phrases. Ctrl+Alt+Space is taken here (Claude
    desktop quick entry), hence Ctrl+Alt+D. Not verified: a live microphone and hand-pressed hotkey, the bubble's look
@@ -247,6 +248,16 @@ once across a session restart.
    Also verified: cancel, a second instance, hold-to-talk with injected Ctrl+Alt+D (live text typed at release). A
    code review's eight findings and its clipboard-owner risk were fixed (owner window per clipboard operation; restore
    after 1 s). At the end of the session the app was left running from the worktree (pid file in the worktree's .run).
+   2026-11-07 late evening (branch claude/voice-typing-cleanup-config-d44300): the cleanup prompt is a setting,
+   `dictation.cleanup_prompt` (`''` = the built-in text, which is unchanged), edited in the tray under Settings > Voice
+   typing > Show advanced. Apply hands it to the running app (`POST /reload`, also `stack.py dictate reload`) instead
+   of restarting it. The concise rule, the JSON reply format and the reply checks stay in code. yamledit now writes
+   multi-line text as a literal block and replaces a multi-line value whole. Verified: unit tests (`uv run --with
+   pytest pytest -q`); a render harness of the Settings tab (dark and light, closed and open, edit, save, Restore
+   default, Ctrl+Z, Tab) against a temp copy of the machine file; the app's reload in the voice typing venv; both
+   prompts on qwen3.5:9b through Ollama directly (LiteLLM was down): a custom spelling-and-digits rule held 6/6 and the
+   self-correction 6/6. Not verified: the live tray and app (they run the new code only after a restart from the main
+   checkout), and a dictation through LiteLLM with a custom prompt. At 23:00 only Ollama was up (the 9B loaded).
 24. Claude security audit (2026-11-07, branch claude/awesome-jackson-45840e): skill `.claude/skills/claude-security-audit`
    (`scripts/audit.py`, standard library; state and reports in `%LOCALAPPDATA%\claude-security-audit`, outside every
    repository). Baseline run on this machine: 2 high, 6 medium, 7 low, 9 info.
@@ -399,6 +410,138 @@ once across a session restart.
    `refine.keep_minutes` (30; tray: Keep refine history for), are hidden at once and deleted from the file within a
    minute (prune at start, before each entry, and every 60 s); the file goes with its last entry. Unit tests only
    (66 in tests/test_refine.py); not yet run in the live app.
+28. Privacy cleanup (2026-11-07, branch claude/personal-info-cleanup-0f23d8). The repository is public, and
+   it named the computer and the Windows account. Now machine profiles are local: `machines/*.yaml` except
+   `_defaults.yaml` is ignored, the installer writes the profile, and a linked worktree reads the main checkout's
+   (`profile.machine_file`). Docs say "the reference machine", `<owner>` and `machines/<HOST>.yaml`, and the generated
+   LiteLLM header no longer names the machine. `tests/test_personal_info.py` checks every file git would publish for
+   this machine's names and git email, plus words in the ignored `.personal-terms`. The stray `litellm.db*` (an Open
+   WebUI database committed 2026-10-26) is gone; it held the live LITELLM_MASTER_KEY, so the key must be rotated (.env,
+   Open WebUI's connection, `~/.openclaw/.env`). The main checkout's profile has uncommitted Settings edits, and a
+   plain pull refuses to remove it, so before pulling: copy `machines/<HOST>.yaml` out of the repository,
+   `git checkout -- machines/<HOST>.yaml`, pull, copy it back (tested on a scratch repo; `git rm --cached` first makes
+   the pull refuse instead). Not done: git history, GitHub's pull request pages and three commits' author email still
+   carry the names. Same day: 26 branches deleted on GitHub (25 merged, plus the superseded
+   multimodal-stack-planning-s1 at c5d9a7e) and 20 locally (four subagent worktrees removed; four idle session
+   worktrees detached, files kept). `claude/ux-rules-research-skill-a11269` stays for its unmerged `a8400c9`.
+29. Process names (2026-11-07, branch claude/pas-process-naming-bc10e1). Every process the stack starts runs as
+   `PAS-<Name>.exe` (stacklib/procname.py): Tray, Phoenix, LiteLLM, Orchestrator, ComfyUI, Kokoro, OpenWebUI,
+   VoiceTyping, Recordings (Whisper MCP), Supervisor (Task Scheduler), Installer (setup worker). Each is a copy of its
+   venv's base python(w).exe plus DLLs in `<venv>\pas\`, so one process replaces launcher + child interpreter. The
+   orchestrator now starts on .venv's Python directly, not `uv run`. Task Manager's Processes tab shows the file's
+   description and icon: copies get "PAS-<Name>" and the tray icon only where Smart App Control is off, because writing
+   them unsigns the file. Here (SAC on) copies stay byte-identical: Details tab, tasklist and the tray's Resources tab
+   show PAS names; the Processes tab still says "Python". A refused copy (WinError 4551) falls back to the plain command
+   and its folder stays signed-only. Tray and setup windows carry the tray icon; Start menu and login shortcuts are
+   rewritten to PAS-Tray.exe with that icon. Off switch: AGENT_STACK_PROCESS_NAMES=0 (AGENT_STACK_PROCESS_ICON=0 for
+   branding only). Verified: unit tests; a branded copy's resources read back (FileDescription, icon, unsigned; not
+   run here); a PAS-Orchestrator.exe from the worktree venv ran as one process under SAC and imported the orchestrator.
+   Not verified: the live tray and services as PAS processes, branded copies running on a machine without SAC, Linux
+   (unchanged). After merging: restart the tray through `stack.py tray` (rewrites the shortcuts), rerun
+   `stack.py whisper install` and `stack.py tasks install` if used, so their saved commands name the PAS copies.
+30. Installer features and the tray's Features card (2026-11-07, branch claude/installer-features-resources-0e9481).
+   - `stacklib/features.py` holds the catalog, the load estimates, the fit check and each feature's status, read from
+     the system. Required: local models, gateway. Optional: Open WebUI, Phoenix, images, voice typing, recordings in
+     Claude Desktop, OpenClaw.
+   - The installer's page 1 is "Which features do you want?": one row per feature with disk, GPU memory, GPU work,
+     CPU and RAM on this PC, and a box that adds up the choice. Page 2 holds the folders; the media folder shows only
+     for images or recordings.
+   - `install.save_features` writes services.open_webui, comfyui and dictation, observability.phoenix and media.root.
+     It never turns off a feature that is installed and on.
+   - New setup step `recordings`: Whisper for Claude Desktop, registered after a backup of its config.
+   - The tray's Overview has a Features card. A service row says "Not installed" when its program is missing. **Add
+     features...** (card and menu) opens the installer.
+   - `stack.py features [--details]` prints the same.
+
+   Measured for the estimates on this box (2026-11-07):
+   - uv tool environments: litellm 0.57 GB, arize-phoenix 0.54 GB, open-webui 1.94 GB;
+   - ComfyUI 16.8 GB (venv 4.5 GB, models 12.2 GB);
+   - Whisper environments: voice typing 0.25 GB, recordings 2.38 GB; large-v3-turbo is 1.62 GB in the HF cache;
+   - OpenClaw 0.50 GB;
+   - a running LiteLLM: 0.3 GB working set;
+   - qwen3.5:9b at 32k: 6,166,413,310 bytes on the GPU (5.7 GB of 2**30).
+
+   Not measured (estimates in the code): the memory of Open WebUI, Phoenix, ComfyUI (idle and after a job), voice
+   typing, the recordings server, OpenClaw, the orchestrator and the tray. Only Ollama was running that night, and
+   another LiteLLM process was up, so no service was started to measure them.
+
+   Verified:
+   - unit tests (322 passed);
+   - the installer window built hidden in tests: locked rows, the summary following the ticks, Back and Next keeping
+     the ticks, Install writing the choice and starting the plan (mocks);
+   - renders of both installer pages and the tray's Overview from this worktree, with this PC's real status and with
+     a fake fresh PC. A 700 px screen scrolls the features page and keeps the buttons in view; the scrollbar is
+     mapped (geometry checked) but does not show in the capture;
+   - `stack.py features --details` on this PC;
+   - the terminal feature question, with scripted answers and every write stubbed.
+
+   A code review's findings were fixed:
+   - a recordings entry already in Claude Desktop is never rewritten;
+   - a worktree adds none;
+   - a failed check ("Not checked") leaves the feature's switch as it is;
+   - a feature that is on but broken is ticked for repair;
+   - the page scrolls on short screens;
+   - the terminal installer re-asks after a typo;
+   - the orchestrator's row never reads "Not installed";
+   - a failed `uv tool dir` is retried;
+   - Claude Desktop's config is read even with a byte order mark;
+   - doctor's GPU baseline is capped at 2.5 GB;
+   - images with only a model missing count only that model.
+
+   Not verified:
+   - a real install run with the new page (a fresh PC, or adding a feature here);
+   - the recordings step for real (Claude Desktop's config);
+   - Add features from the live tray, which runs the main checkout's code;
+   - the terminal installer's feature question, typed by hand;
+   - Linux and macOS.
+
+   After merging, restart the tray from the main checkout.
+
+   2026-11-08, same branch: drop-downs under four features set what they install with (chat model and context,
+   image size and steps, Whisper model and hotkey for voice typing, Whisper model for recordings); the estimates follow
+   each change and `install.option_edits` writes only changed values. Seen on this PC that morning, through the
+   page: the main checkout's new local profile (written fresh after the privacy cleanup untracked the old one) had
+   no model override, so setup pulled the class default qwen3.6:35b-a3b-coding (30.9 GB) and voice typing was off; the
+   page flags the 35B as not fitting next to the other features (11.4 GB of GPU memory against 9.5 GB free), and the
+   recordings entry in Claude Desktop still points at the old D: drive ("Files missing"). Voice typing was reinstalled
+   under C:\media\dictation by then and worked. Picking qwen3.5:9b in the drop-down restores the earlier primary.
+31. GitHub account name in the security audit (2026-11-08, branch claude/dazzling-brattain-729c88): kind `owner-login`.
+   Sources: gh (local config, `gh api user` when online), a no-reply git address, `logins` in identity.local.json, and a
+   github.com origin owner only when it matches one of them or owns the current repository. `scrub` turns links to
+   the repository's own PRs and issues into `PR #N` / `issue #N` and other mentions into `<owner>`, in prose and
+   Claude's files; code and config are reported (IDENTITY-LOGIN-CODE). Verified: unit tests with a made-up login;
+   a dry run here found the 27 hits in 10 files that PR #46 then removed by hand, and `collect` also found the name in
+   Claude's own instruction files (not changed: `scrub --apply --local-only` fixes them). Not verified: a scheduled
+   run; the live scheduled task's prompt still lacks the new "GitHub account name" wording in scheduled-task.md.
+32. Installed app apart from the repository (2026-11-08, branch claude/installation-app-independence-db332c).
+   Before this, every path came from the folder the code ran from, so the installed stack's tray log, pid files,
+   `.run` data, traces, `.env`, profile, generated configs, the Start menu and login shortcuts and Claude Desktop's
+   recordings entry (its AGENT_STACK_USAGE_DIR) all lived in or pointed at the checkout. Open WebUI's database also
+   stores each upload's absolute path (`file.path`).
+   - `install.cmd` (and `stack.py install|setup` from a checkout) now runs `stack.py deploy` first
+     (stacklib/deploy.py). It copies the git-tracked files without tests/ into `%LOCALAPPDATA%\Programs\AgentStack`
+     (AGENT_STACK_HOME or `--to` override it) and builds the app's own signed `.venv`. It brings `.env`, the profile,
+     `.run` (without pids, logs, install), traces and orchestrator/data over once, only where the app has none
+     yet, and rewrites the source paths in the copied SQLite databases. Then the installer opens from the app.
+   - Before copying, deploy stops the checkout's tray and services and an earlier install's. A reinstall overwrites
+     the code and removes the files the source dropped (`.agent-stack-files.json`). It keeps the app's data and
+     `memory/`.
+   - Marker `.agent-stack-app.json`: it also records the "checkout is behind origin" warning for the app's installer.
+   - New setup step **Point Claude Desktop and start-up entries at this app**: it re-registers local-whisper when
+     its entry differs, rewrites the Linux autostart file, and warns about scheduled tasks registered from another
+     folder.
+   - `stack.py tray`, `start.cmd` and `stop.cmd` in a checkout hand over to the installed app; `--here` keeps the
+     old in-checkout behaviour for development.
+   Verified:
+   - unit tests;
+   - a copy of this worktree into a temp folder: `make_venv` built a signed `.venv` there, the copy reported
+     itself as the app, `stack.py tray --status` in the worktree handed over to it, then the temp folder was
+     deleted.
+   Not run: install.cmd end to end on this machine, because it would stop the live tray and copy the main
+   checkout's data.
+   After merging, run install.cmd from the main checkout once. Then check that the Start menu entry and the login
+   shortcut start `%LOCALAPPDATA%\Programs\AgentStack`, and that Open WebUI shows the old chats and images. Then
+   restart Claude Desktop (recordings). Delete the checkout's `.run`, `traces` and `.env` when the app works.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

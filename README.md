@@ -53,8 +53,12 @@ Docker is optional (`infrastructure/docker-compose.yml`); the reference machine 
 ## Quick start
 
 ```powershell
-# Windows: double-click install.cmd (or run .\scripts\setup.ps1). A window asks where the models and the
-# Python tools go, then setup runs in the background: .env secrets, Ollama env, uv tools, configs, model downloads.
+# Windows: double-click install.cmd (or run .\scripts\setup.ps1). It installs the app into its own folder
+# (%LOCALAPPDATA%\Programs\AgentStack; its logs, settings and data stay there, not in this repository). Then a
+# window asks which features to install (each row shows its disk, GPU, CPU and RAM load on this PC; the local
+# models and the gateway are required) and where the models and the Python tools go, and setup runs in the
+# background: .env secrets, Ollama env, uv tools, configs, model downloads. Run install.cmd again after a pull
+# to update the app, or Add features in the tray to add more.
 uv run scripts/stack.py up   # start phoenix, litellm, orchestrator, open_webui
 uv run scripts/stack.py smoke
 ```
@@ -107,7 +111,7 @@ Then:
 | Where | What |
 |---|---|
 | `machines/_defaults.yaml` | hardware classes -> model lineup, Ollama env, ports, service modes |
-| `machines/<HOST>.yaml` | detected hardware + your overrides (`models.primary`, `model_store`) |
+| `machines/<HOST>.yaml` | detected hardware + your overrides (`models.primary`, `model_store`); written by the installer, local to this computer, never committed |
 | `policy/privacy.yaml` | private-first policy: deployment location, `external.enabled` (off; the build refuses `true` until the privacy gate exists) |
 | `agents/<id>.yaml` | one department: prompt, tools, Claude Code model alias, routing tiers, evals |
 | `agents/_common.md` | working agreements appended to every department prompt |
@@ -154,7 +158,7 @@ symptom → cause → fix table. Logs are in `.run/logs/<service>.log`; Ollama's
 
 - It is built for one developer on one workstation. Every service listens on 127.0.0.1 only, and nothing is multi-user.
 - It needs an NVIDIA GPU with at least 8 GB of VRAM. On 32 GB of RAM, the 35B MoE decodes at about 25 tok/s,
-  against about 52 for the dense 9B (SEKAIHOME, 2026-10-25).
+  against about 52 for the dense 9B (the reference machine, 2026-10-25).
 - Only Windows is verified (2026-10-26). Service management on Linux and macOS is written but untested, and so is the Docker compose path.
 - Cloud tiers have not been exercised yet, because no API key is on the reference machine. Claude Code profile B has
   not been run as a live session yet. Since 2026-10-28 the build is private only, so no tier can reach an external
@@ -166,9 +170,9 @@ symptom → cause → fix table. Logs are in `.run/logs/<service>.log`; Ollama's
 
 ## Known issues
 
-Tracker: https://github.com/techtana/personal-agent-stack/issues
+Tracker: this repository's GitHub issues.
 
-- Phoenix does not start on SEKAIHOME since 2026-10-26: Smart App Control blocks compiled modules in its tool
+- Phoenix does not start on the reference machine since 2026-10-26: Smart App Control blocks compiled modules in its tool
   environment (pyarrow, sqlalchemy, pandas). The plans remove Phoenix; until then turn **Phoenix tracing** off in the
   tray's Settings tab. The tray's Usage tab reads the JSONL traces and does not need Phoenix.
 - Smart App Control may also start blocking the uv tool environments' `python.exe` (see the open items in `memory/state.md`).
@@ -183,11 +187,15 @@ Tracker: https://github.com/techtana/personal-agent-stack/issues
   (or with `@` in the input box), and `local-primary` is always the local model.
 - `/ux-rules` lives in `.claude/skills/ux-rules/`, not in the `skills/` library. The commit that moves it (`a8400c9`)
   landed on the PR branch after PR #13 merged (2026-11-01).
-- D: on SEKAIHOME is exFAT, which has no file permissions, so any account can read everything on it (found
+- D: on the reference machine is exFAT, which has no file permissions, so any account can read everything on it (found
   2026-10-30). Personal data there must move, or the drive must be reformatted to NTFS, before the agent account split
   can protect it.
-- An empty Open WebUI database (`litellm.db`, `litellm.db-shm`, `litellm.db-wal`) has been committed at the repository
-  root since 2026-10-26 (`d93211b`). Its tables hold no rows; it is not used by the stack.
+- From 2026-10-26 (`d93211b`) to 2026-11-07 a stray Open WebUI database (`litellm.db`, `-shm`, `-wal`) was committed at
+  the repository root. Its user and chat tables were empty, but its settings held the gateway's `LITELLM_MASTER_KEY`,
+  and it is still in the public history. Rotate that key.
+- Until 2026-11-07 the machine profile, docs and three commits' author field named the owner's computer, Windows
+  account or email address. The current files no longer do; the git history and the pull request pages on GitHub
+  still do.
 - The Claude Code hook log (`scripts/hooks/log_turn.py`, `traces/claude/`) keeps the first 200 characters of the last
   assistant message and the first 300 characters of each Bash command, although its docstring says no prompt or file
   contents are stored (found 2026-11-01).
@@ -199,7 +207,7 @@ Running list. Add new items; don't rewrite old ones.
 - 2026-10-27: elevated steps from B-S0/B2b: `winget configure --enable`, then `stack.py tasks install --trigger startup`
   once B2 lands.
 - 2026-10-27: apply `winget/configuration.winget` on a clean Windows account (B3).
-- 2026-10-27: remove Phoenix from the stack (plan item R); it no longer starts on SEKAIHOME.
+- 2026-10-27: remove Phoenix from the stack (plan item R); it no longer starts on the reference machine.
 - 2026-10-26: tray app design, plus CPU, RAM and GPU use per process (#4). Design and usage done 2026-10-27 (PR #9);
   the per-process view (Resources tab) landed with PR #8.
 - 2026-10-25: confirm that the tray and its services start on their own after a reboot.
@@ -216,9 +224,13 @@ Running list. Add new items; don't rewrite old ones.
   V-F checks, then build `stack.py isolate` (I2) ([plan](docs/plans/AGENT-FILE-ISOLATION.md)).
 - 2026-11-01: merge `a8400c9` to move `/ux-rules` into `skills/`; run the second `ux-rules` eval round with the
   sharper assertions.
-- 2026-11-01: remove the stray `litellm.db*` files from the repository root and ignore them.
+- 2026-11-01: remove the stray `litellm.db*` files from the repository root and ignore them. Done 2026-11-07.
 - 2026-11-01: multimodal stack (vision, speech, images, style transfer, video with audio, music, web search, routing
   per message): plan proposed, nothing built. Start from [docs/HANDOFF-2026-11-01-multimodal.md](docs/HANDOFF-2026-11-01-multimodal.md).
+- 2026-11-07: rotate `LITELLM_MASTER_KEY` (it was in the committed `litellm.db`): `.env`, Open WebUI's gateway
+  connection and `~/.openclaw/.env`, then restart the tray.
+- 2026-11-07: decide whether to rewrite git history so past commits no longer carry the computer name, the account
+  name, the database or a personal email address; GitHub keeps pull request pages until GitHub Support purges them.
 
 ## Design decisions
 
@@ -233,7 +245,7 @@ are indexed in [docs/design/](docs/design/README.md).
 - 2026-10-24: Define each department once in `agents/*.yaml` and generate every tool's files from it. Duplicated prompts drifted.
 - 2026-10-24: Self-improvement is a human-gated PR loop with an eval gate. Nothing merges automatically.
 - 2026-10-24: Name the orchestrator secret `ORCHESTRATOR_BEARER`, because Claude Code blanks `*_TOKEN` and `*_API_KEY` in `.mcp.json`.
-- 2026-10-25: Make SEKAIHOME's primary `qwen3.5:9b` at 32k instead of the 35B MoE: twice the decode speed and
+- 2026-10-25: Make the reference machine's primary `qwen3.5:9b` at 32k instead of the 35B MoE: twice the decode speed and
   about 17 GB of RAM left free.
 - 2026-10-25: Local tiers that share a model use the same `num_ctx` and load options, so Ollama never reloads between them.
 - 2026-10-25: Start uv tools through their environment's `python.exe`, because Smart App Control blocked the `~/.local/bin` launchers.
@@ -257,6 +269,9 @@ are indexed in [docs/design/](docs/design/README.md).
   proprietary or personal-data skills, because the repository is public.
 - 2026-11-01: UX reviews use `/ux-rules`, a catalog of 122 researched rules with evidence grades; it will not help
   A/B-test deceptive patterns.
+- 2026-11-07: Machine profiles are local: the installer writes `machines/<HOST>.yaml` and git ignores it, because the
+  repository is public and the profile names the computer. Docs say "the reference machine" and "the owner"; a test
+  fails when this machine's own names reach a tracked file.
 
 ## Background knowledge
 

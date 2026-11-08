@@ -15,7 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from stacklib import disks, install  # noqa: E402
 
-# `winsat disk -drive d` on SEKAIHOME, 2026-11-01, with the USB-C plug the wrong way round (USB 2.0 link)
+# `winsat disk -drive d` on the reference machine, 2026-11-01, with the USB-C plug the wrong way round (USB 2.0 link)
 WINSAT_D = """> Disk  Random 16.0 Read                       40.82 MB/s          6.3
 > Disk  Sequential 64.0 Read                   41.57 MB/s          5.1
 > Disk  Sequential 64.0 Write                  41.67 MB/s          5.1
@@ -94,7 +94,7 @@ class FileTest(unittest.TestCase):
 class NodeForOpenClaw(unittest.TestCase):
     def test_engine_range(self):
         ok = install.node_ok_for_openclaw
-        self.assertFalse(ok((24, 20, 0)))   # what SEKAIHOME had on 2026-11-01
+        self.assertFalse(ok((24, 20, 0)))   # what the reference machine had on 2026-11-01
         self.assertTrue(ok((24, 22, 1)))
         self.assertFalse(ok((25, 1, 0)))
         self.assertFalse(ok((26, 12, 0)))

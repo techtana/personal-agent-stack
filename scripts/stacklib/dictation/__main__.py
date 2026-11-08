@@ -114,8 +114,9 @@ def cmd_transcribe(a, profile: dict) -> int:
     if cfg.style != "verbatim" and raw:
         gateway = f"http://127.0.0.1:{profile['ports']['litellm']}"
         res = cleanup.polish(raw, cfg.style, base_url=gateway, api_key=env_value("LITELLM_MASTER_KEY"),
-                             model=cfg.cleanup_model)
-        status = "cleaned by " + cfg.cleanup_model if res.polished else f"NOT cleaned ({res.note})"
+                             model=cfg.cleanup_model, prompt=cfg.cleanup_prompt)
+        prompt = "custom" if cfg.cleanup_prompt else "built-in"
+        status = f"cleaned by {cfg.cleanup_model}, {prompt} prompt" if res.polished else f"NOT cleaned ({res.note})"
         print(f"\n{cfg.style.upper()} ({status}, {res.seconds:.2f} s):\n{res.text}")
     return 0
 

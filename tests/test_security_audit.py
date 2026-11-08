@@ -6,6 +6,7 @@ together at run time, so no address-like string sits in this file (the audit sca
 """
 from __future__ import annotations
 
+import collections
 import importlib.util
 import json
 import os
@@ -25,6 +26,7 @@ USER = "fixtureuser"
 EMAIL = "owner.fixture" + "@" + "mailhost-fixture.net"
 OTHER = "someone.else" + "@" + "corp-fixture.org"
 NAME = "Fixture " + "Ownerperson"
+LOGIN = "fx-" + "octowner"  # a made-up GitHub account name
 
 
 def make_ctx(tmp: str, system: str = "windows", cwd=None, offline: bool = True) -> "audit.Ctx":
@@ -40,7 +42,9 @@ def make_ctx(tmp: str, system: str = "windows", cwd=None, offline: bool = True) 
     env = {**keep, "USERNAME": USER, "USER": USER, "HOME": str(home), "USERPROFILE": str(home),
            "APPDATA": str(home / "AppData" / "Roaming"), "LOCALAPPDATA": str(home / "AppData" / "Local"),
            "PROGRAMFILES": str(Path(tmp) / "ProgramFiles"), "GIT_CONFIG_GLOBAL": str(gitcfg), "GIT_CONFIG_NOSYSTEM": "1",
-           "NPM_CONFIG_USERCONFIG": str(npmrc), "AUDIT_NO_REGISTRY": "1", "COMPUTERNAME": "BUILDBOX"}
+           "NPM_CONFIG_USERCONFIG": str(npmrc), "AUDIT_NO_REGISTRY": "1", "AUDIT_NO_GH": "1",
+           "GIT_CEILING_DIRECTORIES": str(Path(tmp).resolve().parent),  # never find a real repository above
+           "COMPUTERNAME": "BUILDBOX"}
     return audit.Ctx(home=home, state=Path(tmp) / "state", cwd=cwd or tmp, offline=offline, environ=env, system=system)
 
 
@@ -57,7 +61,7 @@ def git(ctx, *args, cwd=None) -> str:
 def identity_free(text: str) -> bool:
     low = text.lower()
     return EMAIL.lower() not in low and NAME.lower() not in low and not re.search(
-        r"(?i)(?<![a-z0-9])" + USER + r"(?![a-z0-9])", text) and "ownerperson" not in low
+        r"(?i)(?<![a-z0-9])" + USER + r"(?![a-z0-9])", text) and "ownerperson" not in low and LOGIN not in low
 
 
 class Identity(unittest.TestCase):
@@ -386,6 +390,128 @@ class ScanAndScrub(unittest.TestCase):
         drift = next(f for f in r3["findings"] if f["id"] == "DRIFT")
         self.assertEqual(drift["severity"], "medium")
         self.assertIn("MCP-UNPINNED", {f["id"] for f in r3["findings"]})
+
+
+class GitHubLogin(unittest.TestCase):
+    """The GitHub account name: found from gh, a no-reply git address or the current repository's remote, reported
+    as owner-login, and scrubbed: links to the repository's own PRs and issues become plain text, the rest <owner>."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ctx = make_ctx(self.tmp.name)
+        self.repo = self.new_repo("repo", f"https://github.com/{LOGIN}/widget-lab.git")
+        self.ctx.cwd = self.repo
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def new_repo(self, folder: str, origin: str | None = None, files: dict | None = None) -> Path:
+        repo = Path(self.tmp.name) / folder
+        repo.mkdir()
+        for rel, text in (files or {"README.md": "x\n"}).items():
+            (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / rel).write_text(text, encoding="utf-8")
+        git(self.ctx, "init", "-q", str(repo))
+        if origin:
+            git(self.ctx, "remote", "add", "origin", origin, cwd=repo)
+        git(self.ctx, "add", "-A", cwd=repo)
+        git(self.ctx, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "fixture", cwd=repo)
+        return repo
+
+    def test_remote_parsing(self):
+        for url in (f"https://github.com/{LOGIN}/widget-lab.git", f"git@github.com:{LOGIN}/widget-lab.git",
+                    f"ssh://git@ssh.github.com:443/{LOGIN}/widget-lab", f"https://tok@github.com/{LOGIN}/widget-lab/"):
+            m = audit.GITHUB_REMOTE.match(url)
+            self.assertEqual((m.group(1), m.group(2)), (LOGIN, "widget-lab"), url)
+        self.assertIsNone(audit.GITHUB_REMOTE.match(f"https://gitlab.com/{LOGIN}/widget-lab.git"))
+        self.assertEqual(audit.noreply_login(f"12345+{LOGIN}@users.noreply.github.com"), LOGIN)
+        self.assertEqual(audit.noreply_login("41898282+github-actions[bot]@users.noreply.github.com"), "")
+
+    def test_sources(self):
+        upstream = self.new_repo("clone", "git@github.com:upstream-org/thing.git")
+        ident = audit.discover_identity(self.ctx, [self.repo, upstream])
+        self.assertEqual(ident.logins, {LOGIN})  # the current repository's owner, when nothing else names one
+        self.assertEqual(ident.github, {"sources": ["origin remote"], "remotes_matched": 1, "remotes_other_owner": 1})
+        self.assertIn(LOGIN, ident.bare_logins)
+        elsewhere = make_ctx(self.tmp.name, cwd=self.tmp.name)  # not in a repository: another repo's owner never counts
+        self.assertEqual(audit.discover_identity(elsewhere, [upstream]).logins, set())
+        from unittest import mock
+        with mock.patch.object(audit, "gh_logins", return_value=["Gh-Person"]):
+            ident = audit.discover_identity(self.ctx, [self.repo])
+        self.assertEqual(ident.logins, {"gh-person"})  # gh names the account: a different remote owner is not it
+        self.assertEqual(ident.github["remotes_other_owner"], 1)
+        Path(self.tmp.name, "gitconfig").write_text(f"[user]\n\temail = 9+{LOGIN}@users.noreply.github.com\n",
+                                                    encoding="utf-8")
+        with mock.patch.object(audit, "gh_logins", return_value=["Gh-Person"]):
+            ident = audit.discover_identity(self.ctx, [self.repo])
+        self.assertEqual(ident.logins, {"gh-person", LOGIN})
+        self.assertEqual(ident.github["sources"], ["gh", "git no-reply address"])
+        self.ctx.environ["USERNAME"] = LOGIN  # same as the OS user name: on its own it stays the user name
+        self.assertEqual(audit.discover_identity(self.ctx).bare_logins, set())
+
+    def test_collect_reports_and_scrub_rewrites(self):
+        lab = f"https://github.com/{LOGIN}/widget-lab"
+        doc = (f"Source: [PR #13]({lab}/pull/13), [issue #4]({lab}/issues/4).\n"
+               f"Git: PR #1 open against `main`\n({lab}/pull/1). Keep pushing.\n"
+               f"See the design discussion ({lab}/issues/9).\n"
+               f"Also {lab}/pull/21/files#diff-1.\n"
+               f"Sibling: [PR #3](https://github.com/{LOGIN}/other-tool/pull/3).\n"
+               f"The repository is PUBLIC on GitHub ({LOGIN}/widget-lab), and {LOGIN} owns it.\n"
+               f"Commits use 12345+{LOGIN}@users.noreply.github.com.\n"
+               f"Others: https://github.com/{LOGIN}-bot/widget-lab/pull/2 and https://github.com/elsewhere/x/pull/2.\n")
+        files = {"docs/history.md": doc, "scripts/release.py": f'REPO = "{LOGIN}/widget-lab"\n',
+                 "notes.md": f"Mail 12345+{LOGIN}@users.noreply.github.com only.\n"}
+        for rel, text in files.items():
+            (self.repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.repo / rel).write_text(text, encoding="utf-8")
+        git(self.ctx, "add", "-A", cwd=self.repo)
+        git(self.ctx, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "links", cwd=self.repo)
+        memory = self.ctx.home / ".claude" / "projects" / "p" / "memory"
+        memory.mkdir(parents=True)
+        (memory / "note.md").write_text(f"Merged as {lab}/pull/5.\n", encoding="utf-8")
+
+        r = audit.collect(self.ctx, [], include_projects=False, include_versions=False)
+        logins = [i for i in r["identity"]["items"] if i["kind"] == "owner-login"]
+        by_file = collections.Counter((i["file"].split("/", 1)[-1], i["action"]) for i in logins)
+        self.assertEqual(by_file[("docs/history.md", "replace")], 6)  # one item per line; not the no-reply or -bot lines
+        self.assertEqual(by_file[("scripts/release.py", "report")], 1)  # code: reported, never changed
+        self.assertNotIn("notes.md", {f for f, _ in by_file})
+        self.assertTrue(any(f.endswith("memory/note.md") and a == "replace" for f, a in by_file))
+        self.assertIn("github-login", r["identity"]["kinds_searched"])
+        ids = {f["id"]: f for f in r["findings"]}
+        self.assertIn("owner-login", ids["IDENTITY-PUBLISHED"]["detail"])
+        self.assertIn("IDENTITY-LOGIN-CODE", ids)
+        self.assertIn("IDENTITY-INSTRUCTIONS", ids)
+        self.assertTrue(identity_free(json.dumps(r)), "collect output must not name the account")
+        self.assertIn("[owner-login]", json.dumps(r))
+
+        audit.scrub(self.ctx, [self.repo], local=True, published=True, apply=True, include_dirty=False)
+        self.assertEqual((self.repo / "docs" / "history.md").read_text(encoding="utf-8"), (
+            "Source: PR #13, issue #4.\n"
+            "Git: PR #1 open against `main`. Keep pushing.\n"
+            "See the design discussion (issue #9).\n"
+            "Also PR #21.\n"
+            "Sibling: [PR #3](https://github.com/<owner>/other-tool/pull/3).\n"
+            "The repository is PUBLIC on GitHub (<owner>/widget-lab), and <owner> owns it.\n"
+            f"Commits use 12345+{LOGIN}@users.noreply.github.com.\n"
+            f"Others: https://github.com/{LOGIN}-bot/widget-lab/pull/2 and https://github.com/elsewhere/x/pull/2.\n"))
+        self.assertIn(LOGIN, (self.repo / "scripts" / "release.py").read_text(encoding="utf-8"))
+        self.assertEqual((memory / "note.md").read_text(encoding="utf-8"),
+                         "Merged as https://github.com/<owner>/widget-lab/pull/5.\n")
+        again = audit.identity_scan(self.ctx, [self.repo], [])
+        self.assertEqual([i for i in again["items"] if i["kind"] == "owner-login" and i["action"] == "replace"], [])
+
+    def test_link_labels(self):
+        lab = f"https://github.com/{LOGIN}/widget-lab"
+        rx = [audit.login_regex(LOGIN, True)]
+        cases = {f"[the tray PR]({lab}/pull/3)": "the tray PR (PR #3)",
+                 f"[{lab}/pull/3]({lab}/pull/3)": "PR #3",
+                 f"[#3]({lab}/pull/3 \"title\")": "#3",
+                 f"<{lab}/issues/8>": "issue #8",
+                 f"Notes:\n\n({lab}/pull/3) first": "Notes:\n\n(PR #3) first",
+                 f"[pr3]: {lab}/pull/3": f"[pr3]: {lab}/pull/3"}  # a link definition is left to the <owner> rule
+        for before, after in cases.items():
+            self.assertEqual(audit.own_links(before, LOGIN, "widget-lab", rx)[0], after, before)
 
 
 class SkillFiles(unittest.TestCase):
