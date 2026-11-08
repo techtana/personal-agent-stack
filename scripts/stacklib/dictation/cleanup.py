@@ -61,7 +61,7 @@ def request_body(raw: str, style: str, model: str) -> dict:
         "response_format": {"type": "json_object"},
         "think": False,              # forwarded by LiteLLM to Ollama; see the module docstring
         "temperature": 0.2,          # local models only (AGENTS.md rule 3 is about Anthropic models)
-        "max_tokens": min(4096, len(raw) + 200),   # a character per token covers Thai; English needs far fewer
+        "max_tokens": min(4096, len(raw) + 200),   # a token per character covers any script; English needs far fewer
         "stream": False,
     }
 

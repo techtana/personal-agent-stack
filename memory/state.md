@@ -241,7 +241,8 @@ once across a session restart.
    TTS recordings (phrases, silence stop, Thursday->Friday correction); the running app with a replayed recording
    pasting into a Tk test window (clipboard restored) and typing live phrases. Ctrl+Alt+Space is taken here (Claude
    desktop quick entry), hence Ctrl+Alt+D. Not verified: a live microphone and hand-pressed hotkey, the bubble's look
-   (screen capture refused), pasting into Logseq/Word/Notion, Thai, the tray's new row and settings in the live tray.
+   (screen capture refused), pasting into Logseq/Word/Notion, languages other than English, the tray's new row and
+   settings in the live tray.
    Also verified: cancel, a second instance, hold-to-talk with injected Ctrl+Alt+D (live text typed at release). A
    code review's eight findings and its clipboard-owner risk were fixed (owner window per clipboard operation; restore
    after 1 s). At the end of the session the app was left running from the worktree (pid file in the worktree's .run).

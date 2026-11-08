@@ -52,7 +52,7 @@ cleaned up (fillers removed, sentences shortened) the way Pixel's AI keyboard do
 - A live microphone and a person speaking (the tests replayed recordings); the hotkey pressed by hand (hold-to-talk
   was driven by injected key events); the bubble's look (a screen capture was refused); an unplugged microphone.
 - Pasting into Logseq, Word and Notion themselves (the test window was a Tk text box).
-- Thai dictation and the cleanup prompt on Thai text.
+- Dictation and the cleanup in languages other than English (every test recording was English).
 - The tray's new row, settings group and menu item in the live tray (it runs the old code until restarted from the main
   checkout); Linux and macOS (the recorder falls back to sounddevice, but hotkeys and input are Windows only).
 
