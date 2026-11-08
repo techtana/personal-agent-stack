@@ -242,8 +242,56 @@ def manifest_path(store: str, model: str) -> Path:
     return Path(store, "manifests", *parts, tag or "latest")
 
 
+def app_model_store() -> str:
+    """The Ollama app's own Settings > Model location, "" when none is set. It overrides OLLAMA_MODELS."""
+    from . import ollama
+
+    return ollama.app_model_location()
+
+
+def effective_model_store(profile: dict) -> str:
+    """Where Ollama really keeps models: the app's Model location when set, otherwise the profile's folder."""
+    return app_model_store() or model_store(profile)
+
+
+def store_override_note(profile: dict, store: str | None = None) -> str:
+    """Why `store` (default: the profile's) is not where Ollama puts models, or "" when it is."""
+    app = app_model_store()
+    store = store or model_store(profile)
+    if not app or not store or Path(app) == Path(store):
+        return ""
+    return (f"The Ollama app's own Settings > Model location is {app}, which overrides {store}: Ollama keeps its "
+            f"models there. Use {app} as the models folder (installer), or change Model location in Ollama's "
+            "Settings first.")
+
+
+_tags_cache: dict[str, tuple[float, set[str] | None]] = {}
+
+
+def ollama_models(profile: dict) -> set[str] | None:
+    """Names the running Ollama reports (/api/tags); None when it does not answer. Kept for 5 s, because one status
+    pass asks twice (estimate and status) and a refused localhost connect takes about 2 s on Windows."""
+    import time
+
+    from . import ollama
+
+    port = (profile.get("ports") or {}).get("ollama") or 11434
+    base = f"http://127.0.0.1:{port}"
+    hit = _tags_cache.get(base)
+    if hit and time.monotonic() - hit[0] < 5:
+        return hit[1]
+    names = ollama.model_names(base)
+    _tags_cache[base] = (time.monotonic(), names)
+    return names
+
+
 def missing_models(profile: dict) -> list[str]:
-    store = model_store(profile)
+    """Models the profile wants that Ollama does not have. Asks the running Ollama first, since only it knows which
+    folder it reads; when it is off, looks for the manifests where it will read them (effective_model_store)."""
+    have = ollama_models(profile)
+    if have is not None:
+        return [m for m in models_to_pull(profile) if m not in have]
+    store = effective_model_store(profile)
     return [m for m in models_to_pull(profile) if not manifest_path(store, m).is_file()]
 
 
@@ -690,9 +738,14 @@ def _status_models(profile: dict, **_) -> Status:
         return Status(False, True, "Not installed", "Ollama is not installed: run the installer, which can install it "
                                                     "with winget.", "bad")
     missing = missing_models(profile)
+    note = store_override_note(profile)
     if missing:
         return Status(False, True, "Models missing", f"{', '.join(missing)} not downloaded yet: run the installer "
-                                                     "again, or `uv run scripts/stack.py pull`.", "warn")
+                                                     "again, or `uv run scripts/stack.py pull`." + (f" {note}" if note else ""),
+                      "warn")
+    if note:
+        return Status(True, True, "Installed", f"{', '.join(models_to_pull(profile))} in "
+                                               f"{effective_model_store(profile)}. {note}", "warn")
     return Status(True, True, "Installed", f"{', '.join(models_to_pull(profile))} in {model_store(profile)}.")
 
 

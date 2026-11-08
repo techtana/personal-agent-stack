@@ -441,7 +441,7 @@ class Installer:
             checks.append((self.media_root, self.media_msg, media_gb))
         ok = True
         for var, label, need in checks:
-            chk = install.check_dir(var.get(), need)
+            chk = install.check_dir(var.get(), need, models=var is self.store)
             label.configure(text=chk.message, foreground=OK_FG if chk.ok else ERROR_FG)
             ok &= chk.ok
         self.install_btn.state(["!disabled"] if ok else ["disabled"])
