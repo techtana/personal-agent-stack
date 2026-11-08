@@ -5,6 +5,7 @@ to text for Open WebUI's microphone.
     POST /toggle|start|stop|cancel|show|hide|quit
     POST /refine|revert          refine the selection of the window in front (or put its original back), as the hotkey
     POST /show_refine|hide_refine
+    POST /reload                    re-read the settings that apply without a restart (the cleanup prompt)
     POST /v1/audio/transcriptions   OpenAI-compatible, with a bearer key (transcriptions.py)
     POST /plugin/styles|refine|revert|commit   refine a Logseq block for the Logseq plugin, with its own bearer key
                                     (pluginapi.py)
@@ -31,7 +32,7 @@ from typing import Callable, Mapping
 from . import transcriptions
 
 ACTIONS = ("toggle", "start", "stop", "cancel", "show", "hide", "quit", "refine", "revert", "show_refine",
-           "hide_refine")
+           "hide_refine", "reload")
 PLUGIN_PREFIX = "plugin/"           # pluginapi.PREFIX; not imported, so the tray's import of this module stays small
 PLUGIN_MAX_BODY = 256 * 1024        # pluginapi.MAX_BODY_BYTES
 LINGER_BYTES = 2 * transcriptions.MAX_BODY_BYTES  # what a refused upload may still send before the socket closes

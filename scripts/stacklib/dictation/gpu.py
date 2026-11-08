@@ -2,7 +2,7 @@
 
 CTranslate2's Windows wheel ships cuDNN but not cuBLAS. Ollama ships the CUDA 12 runtime (cudart, cuBLAS, cuBLASLt,
 signed by NVIDIA) in lib/ollama/cuda_v12, and every machine in this stack has Ollama, so voice typing borrows those
-DLLs instead of downloading the 0.5 GB nvidia-cublas-cu12 wheel. Measured on SEKAIHOME (2026-11-07): large-v3-turbo
+DLLs instead of downloading the 0.5 GB nvidia-cublas-cu12 wheel. Measured on the reference machine (2026-11-07): large-v3-turbo
 with int8_float16 on the RTX 3060 transcribed 15 s of speech in 0.6 s with Ollama's copy.
 """
 from __future__ import annotations

@@ -24,7 +24,7 @@ STYLES = ("verbatim", "clean", "concise")
 INSERTS = ("paste", "type")
 DEVICES = ("auto", "cuda", "cpu")
 
-# Versions that loaded under Smart App Control on SEKAIHOME (2026-11-07; Python 3.14 from python.org). Smart App
+# Versions that loaded under Smart App Control on the reference machine (2026-11-07; Python 3.14 from python.org). Smart App
 # Control judges compiled modules file by file, so a new version is a new judgement: test it in a throwaway venv first.
 PACKAGES = (
     "faster-whisper==1.2.1",
@@ -56,6 +56,7 @@ class Config:
     max_minutes: float = 10.0
     insert: str = "paste"
     cleanup_model: str = "local-small"
+    cleanup_prompt: str = ""      # '' = cleanup.DEFAULT_PROMPT
     vocabulary: str = ""
     mic: str = ""
     unload_after_min: float = 30.0

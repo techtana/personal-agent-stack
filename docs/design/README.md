@@ -12,6 +12,7 @@ today's code; it gets a dated "Outcome" note instead.
 | Date | Plan | Status |
 |---|---|---|
 | 2026-11-08 | [Refine a Logseq block from its right-click menu](plans/2026-11-08-logseq-refine-plugin.md) | built on branch `claude/sleepy-perlman-c4c162` (on top of the refine branch); tested in a throwaway Logseq 2.0.2, not yet in the owner's |
+| 2026-11-08 | [Voice typing that learns the owner's voice](plans/2026-11-08-dictation-learning.md) | proposed; nothing built; P1-P2 need no owner decision, P3-P5 wait on L1-L4 |
 | 2026-11-07 | [Voice typing in every app](plans/2026-11-07-voice-typing.md) | built on branch `claude/whisper-speech-to-text-extension-99ad1f`; tested with recorded speech, not yet with a live microphone |
 | 2026-11-07 | [Refine selected text in every app](plans/2026-11-07-refine-selection.md) | built on branch `claude/ai-text-refinement-contextmenu-70d19f`; tested in test windows, a throwaway Word document and Edge, not yet in Logseq or Notion |
 | 2026-11-01 | [Multimodal stack: vision, speech, images, video with audio, music, routing per message](plans/2026-11-01-multimodal-stack.md) | proposed; nothing built; next session starts from the [handoff](../HANDOFF-2026-11-01-multimodal.md) |

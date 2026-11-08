@@ -3,7 +3,7 @@
 Revised 2026-10-26: every tier runs locally; external APIs optional, off by default, and only by intentional user
 choice; native runtime (Harbor optional, not installed); no add-ons for clients outside the privacy boundary.
 
-The local server is the main processor: SEKAIHOME by default, or any machine with a `machines/<host>.yaml` profile.
+The local server is the main processor: the reference machine by default, or any machine with a `machines/<host>.yaml` profile.
 Every department and complexity tier runs on the local GPU. External APIs (Anthropic, Vertex AI, Hugging Face and
 others) can be enabled by an admin and used only as described in `SHARED-COMPONENTS.md` section 2: explicit model
 choice, per-user opt-in, per-conversation consent, and the local gate refusing anything sensitive.
@@ -14,12 +14,12 @@ Prerequisites: `SHARED-COMPONENTS.md`, `INSTALL.md` section 2.1.
 
 ```
 Remote and LAN users
-      │ HTTPS (end to end to SEKAIHOME)
+      │ HTTPS (end to end to the reference machine)
       ▼
 Edge VM (e2-micro, `edge` mode only): pure TCP relay (SNI passthrough) for auth.<domain> and chat.<domain>;
-      │ terminates nothing, stores nothing; WireGuard to SEKAIHOME (home dials out)
+      │ terminates nothing, stores nothing; WireGuard to the reference machine (home dials out)
       ▼
-SEKAIHOME (native runtime: stack.py up / tray, no Docker)
+The reference machine (native runtime: stack.py up / tray, no Docker)
  ├─ Caddy (TLS for both domains)
  ├─ Keycloak (S7, native through Java)                     (B-S0 confirms it as a Windows service)
  ├─ Open WebUI + filter (S4)
@@ -30,7 +30,7 @@ SEKAIHOME (native runtime: stack.py up / tray, no Docker)
 ```
 
 Keycloak ships an official Windows service install but needs about 1.3-1.5 GB of RAM (V7). If that does not fit the RAM budget in B-S0, identity moves to a Confidential VM at the edge
-(n2d, ~$60 a month), which then terminates TLS for `auth.<domain>` only; chat stays end to end to SEKAIHOME.
+(n2d, ~$60 a month), which then terminates TLS for `auth.<domain>` only; chat stays end to end to the reference machine.
 
 ### 1.1 Access modes
 
@@ -39,7 +39,7 @@ Keycloak ships an official Windows service install but needs about 1.3-1.5 GB of
 | `owner` | the owner on this machine; no identity layer | none |
 | `edge` | invited users anywhere | e2-micro relay (sees only encrypted traffic) |
 
-When SEKAIHOME is off, the relay has nothing to forward and the browser shows a connection error; an offline page
+When the reference machine is off, the relay has nothing to forward and the browser shows a connection error; an offline page
 would need TLS at the edge, which this plan avoids.
 
 ## 2. Routing
@@ -76,8 +76,8 @@ would need TLS at the edge, which this plan avoids.
 | B2b | Supervision for `edge` mode: Task Scheduler "at startup" tasks with restart on failure (services run before sign-in); keep the launch helper (uv tool `python.exe` start, `.env`, logs) and `stack.py status`; drop pid files and the tray's supervisor role (tray stays as an optional status viewer). On Linux, generate systemd units instead of finishing the untested native code | M | B2 |
 | R | Remove redundant parts (shared file section 5) | S | B2 |
 | B3 | `stack.py install --mode local-led [--access owner|edge]`: `INSTALL.md` 2.1 and 3 with checks and prompts; ends with smoke and gate-eval | M | B1, B2 |
-| S7 | Identity: **Keycloak** on SEKAIHOME (or a confidential edge VM per B-S0) | M | B-S0 |
-| B4 | Edge relay (`edge` mode): Terraform `infrastructure/edge-gcp/` (e2-micro, static IP, firewall 80/443/tcp, 51820/udp), nginx stream SNI passthrough for both domains, WireGuard hub; SEKAIHOME WireGuard client (`stack.py wg-config`) and Windows Firewall rule limiting 443 to the tunnel | M | S7 |
+| S7 | Identity: **Keycloak** on the reference machine (or a confidential edge VM per B-S0) | M | B-S0 |
+| B4 | Edge relay (`edge` mode): Terraform `infrastructure/edge-gcp/` (e2-micro, static IP, firewall 80/443/tcp, 51820/udp), nginx stream SNI passthrough for both domains, WireGuard hub; the reference machine's WireGuard client (`stack.py wg-config`) and Windows Firewall rule limiting 443 to the tunnel | M | S7 |
 | B5 | Tests (section 4) | M | all |
 | B6 | User guide: the privacy boundary, alerts, external consent | S | B5 |
 
@@ -109,7 +109,7 @@ B5 -> B6.
 
 | Item | Month |
 |---|---|
-| SEKAIHOME | $0 cloud |
+| The reference machine | $0 cloud |
 | Edge relay (`edge` mode) | ~$0-5 (e2-micro free tier in some US regions; static IPv4 may be billed) |
 | Confidential edge VM (only if identity cannot run on Windows) | ~$60 |
 | External APIs (optional) | per token |
@@ -131,7 +131,7 @@ B5 -> B6.
 |---|---|
 | Weaker answers than cloud models for complex work | larger local model after a RAM upgrade; the owner can enable external models for non-sensitive work, deliberately |
 | Gate false negatives once external is enabled | off by default; consent per conversation; S8 recall gate; audit review |
-| SEKAIHOME is a single point of failure | start at sign-in through the tray; daily use already depends on it |
+| The reference machine is a single point of failure | start at sign-in through the tray; daily use already depends on it |
 | New native services add RAM pressure | memory targets in S1 and test 6; PostgreSQL `shared_buffers=128MB` |
 | Identity components lack Windows builds | B-S0 first; confidential edge VM as the fallback |
 | A LiteLLM or Open WebUI upgrade changes hook or settings behaviour | versions pinned in setup; S8 canary before upgrades |

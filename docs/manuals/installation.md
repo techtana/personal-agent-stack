@@ -3,7 +3,7 @@
 This guide sets up the stack on one workstation. When you finish, the local models, the gateway and the agent tools
 all run on your own machine. Cloud models stay off until you add an Anthropic API key.
 
-The reference machine is SEKAIHOME (Windows 11, RTX 3060 12 GB, 32 GB RAM). Linux and macOS have setup scripts,
+The reference machine runs Windows 11 with an RTX 3060 12 GB and 32 GB of RAM. Linux and macOS have setup scripts,
 but nobody has tested service management on them yet (2026-10-26).
 
 ## What you need
@@ -86,7 +86,8 @@ setup as a background process. You can close the window: setup keeps going, and 
 Setup does the following, in this order:
 
 1. Installs uv if it is missing (`Installing uv (astral.sh)...`).
-2. Detects your hardware and writes `machines/<HOST>.yaml`. `<HOST>` is your computer name.
+2. Detects your hardware and writes `machines/<HOST>.yaml`. `<HOST>` is your computer name. The file stays on this
+   computer: git ignores it, so your computer name and folders never reach the public repository.
 3. Creates `.env` with new random values for `LITELLM_MASTER_KEY`, `ORCHESTRATOR_BEARER`, `WEBUI_SECRET_KEY`,
    `DICTATION_BEARER` (Open WebUI's microphone) and `REFINE_BEARER` (the Logseq refine plugin); keys already set stay.
    It also adds an empty `ANTHROPIC_API_KEY`. It never overwrites values that are already there.
@@ -126,7 +127,7 @@ If setup reports problems, see [troubleshooting.md](troubleshooting.md).
 Open `machines/<HOST>.yaml`. The `detected:` block is regenerated on refresh. You can change everything else, for example:
 
 - `model_store`: the folder for Ollama models; the installer sets it (and `ollama_env.OLLAMA_MODELS`) for you.
-- `models.primary`: replace the class default model. SEKAIHOME uses `qwen3.5:9b`.
+- `models.primary`: replace the class default model. The reference machine uses `qwen3.5:9b`.
 
 After you edit it, run:
 
@@ -205,7 +206,7 @@ uv run scripts/stack.py smoke
 ```
 
 You should see `smoke: 8/8 passed`. The first run loads the primary model from disk, which took about 2 minutes on
-SEKAIHOME.
+the reference machine.
 
 ### 6. Set up Open WebUI (optional, one time)
 
@@ -271,7 +272,8 @@ launch. `gh` must be signed in (`gh auth status`) for the task to push and open 
 
 ## Adding another machine
 
-On the new machine, clone the repository and run setup (step 2). It writes that machine's own `machines/<HOST>.yaml`.
+On the new machine, clone the repository and run setup (step 2). It writes that machine's own `machines/<HOST>.yaml`,
+which stays on that machine (do not commit it).
 To detect the hardware again later, for example after a RAM upgrade:
 
 ```powershell
