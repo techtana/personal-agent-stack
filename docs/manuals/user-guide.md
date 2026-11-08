@@ -146,9 +146,29 @@ Two modes, chosen with a right-click on the button (or in the tray's Settings ta
 - **Type as I speak** (`live`): each phrase is typed when you pause for 0.7 seconds. Only the filler sounds (um, uh)
   are removed; there is no model cleanup.
 
-On the reference machine (RTX 3060 with the 9B chat model loaded) Whisper takes 0.3 to 0.5 s per phrase and the cleanup about
-1 s. Whisper holds about 1.2 GB of VRAM and frees it after 30 idle minutes; the next dictation loads it again (5 s,
-while you are already talking).
+How the text is made: two models, both on this PC.
+
+1. **Whisper writes down what was said.** faster-whisper (`dictation.model`, `large-v3-turbo` by default) transcribes
+   each phrase when you pause, verbatim, fillers included. It gets the text so far as a prompt (for continuity) and
+   `dictation.vocabulary` as hints. Whisper does not clean or shorten anything.
+2. **The chat model cleans it up (polish mode, Clean or Concise only).** When you stop, the joined transcript goes
+   to the gateway alias `dictation.cleanup_model` (`local-small`, the 9B in Ollama on the reference machine), with
+   instructions to remove fillers and false starts, keep only self-corrections, fix punctuation, keep your words and
+   meaning, and never answer what you said. Concise also asks it to shorten. The request uses JSON output and turns
+   the model's thinking off (with thinking on, the 9B returned nothing after 49 s).
+
+The reply is checked before it is typed. If it grew, shrank too much or reads like an answer, or the gateway does not
+answer, the raw transcript is typed instead, with only um/uh/er removed by a simple text rule (no model).
+
+| Mode | Whisper | Chat-model cleanup |
+|---|---|---|
+| Polish, Clean or Concise | yes | yes |
+| Polish, Verbatim | yes | no |
+| Live | yes | no (only the um/uh rule) |
+
+On the reference machine (RTX 3060 with the 9B chat model loaded) Whisper takes 0.3 to 0.5 s per phrase and the
+cleanup about 1 s. Whisper holds about 1.2 GB of VRAM and frees it after 30 idle minutes; the next dictation loads it
+again (5 s, while you are already talking).
 
 Good to know:
 
@@ -163,8 +183,10 @@ Good to know:
   then). Audio stays in memory and is never saved; the log keeps lengths and timings, not words.
 - **Names and jargon.** Add words Whisper should expect to `dictation.vocabulary` in `machines/<HOST>.yaml`, for
   example `vocabulary: 'Logseq, LiteLLM, Ollama'`. In a test, "Logseq" came out as "Logsake" without it.
-- **Language.** It is detected from your first phrase. If short phrases come out in the wrong language, set one under
-  **Language** in the button's menu. Thai works with the default model.
+- **Language.** It is detected from your first phrase. If short phrases come out in the wrong language, set one:
+  **Language** in the button's menu (or on the tray's Settings tab) opens a search box over all 100 languages the
+  Whisper model knows. Type part of a name, another common name or a code (`nor`, `farsi`, `pt`), move with the arrow
+  keys and press Enter, or click a language. Esc closes it. English-only models (`small.en`, distil) offer English only.
 - **Hotkey.** Ctrl+Alt+D by default, because the Claude desktop app uses Ctrl+Alt+Space for its quick entry. Change
   it in the tray's Settings tab. If another program already has the key, the bubble says so at start; the button still
   works.

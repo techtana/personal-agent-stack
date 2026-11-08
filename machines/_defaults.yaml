@@ -115,7 +115,7 @@ dictation:
                              # is the Claude desktop app's quick entry)
   mode: polish               # polish: type when you finish, cleaned up | live: type each phrase when you pause
   style: clean               # polish cleanup: verbatim | clean (fillers, false starts, punctuation) | concise (also shorter)
-  language: auto             # auto, or a Whisper language code: en, th, ja, ...
+  language: auto             # auto, or any of Whisper's 100 language codes: en, de, es, ...
   model: large-v3-turbo      # faster-whisper model on the GPU (1.6 GB, cached in HF_HOME)
   cpu_model: small           # used when the GPU is not available (turbo needs ~10 s per 15 s of speech on a 6-core CPU)
   device: auto               # auto (GPU when it works) | cuda | cpu

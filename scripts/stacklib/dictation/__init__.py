@@ -85,6 +85,12 @@ class Config:
             if getattr(cfg, name) not in allowed:
                 warn(f"dictation.{name}: {getattr(cfg, name)!r} is not one of {', '.join(allowed)}; using {getattr(cls, name)!r}")
                 setattr(cfg, name, getattr(cls, name))
+        from .models import valid_language
+
+        cfg.language = cfg.language.lower() or "auto"
+        if not valid_language(cfg.language):
+            warn(f"dictation.language: {cfg.language!r} is not a Whisper language code; detecting the language instead")
+            cfg.language = "auto"
         cfg.silence_stop_s = min(max(cfg.silence_stop_s, 0.8), 30.0)
         cfg.start_timeout_s = min(max(cfg.start_timeout_s, 2.0), 60.0)
         cfg.phrase_pause_s = min(max(cfg.phrase_pause_s, 0.3), 3.0)
