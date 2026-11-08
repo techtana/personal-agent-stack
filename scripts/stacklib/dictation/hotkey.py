@@ -18,6 +18,9 @@ VK_ESCAPE = 0x1B
 # "insert endnote" in Word). Ctrl+Alt+Space is the Claude desktop app's quick entry; Ctrl+Shift+Space is parameter hints
 # in VS Code; Ctrl+Alt+V is Paste Special in Office; F9 toggles a breakpoint in VS Code.
 CHOICES = ["ctrl+alt+d", "ctrl+alt+h", "alt+`", "win+alt+h", "ctrl+alt+space", "ctrl+shift+space", "pause", "scrolllock"]
+# For the refine hotkey. Ctrl+Alt+R is Word's shortcut for the registered sign, which this replaces while the app runs;
+# Win+Alt+R and Win+Alt+G belong to the Xbox Game Bar, Ctrl+Shift+R reloads a browser page.
+REFINE_CHOICES = ["ctrl+alt+r", "ctrl+alt+e", "ctrl+alt+g", "ctrl+alt+q", "scrolllock", "pause"]
 
 
 class HotkeyError(ValueError):

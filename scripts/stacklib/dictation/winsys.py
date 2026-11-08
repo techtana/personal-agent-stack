@@ -28,7 +28,7 @@ MOD_NOREPEAT = 0x4000
 WM_HOTKEY, WM_QUIT, WM_APP, WM_USER = 0x0312, 0x0012, 0x8000, 0x0400
 PM_NOREMOVE = 0
 VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN = 0x10, 0x11, 0x12, 0x5B, 0x5C
-VK_RETURN, VK_TAB, VK_INSERT, VK_V = 0x0D, 0x09, 0x2D, 0x56
+VK_RETURN, VK_TAB, VK_INSERT, VK_V, VK_C = 0x0D, 0x09, 0x2D, 0x56, 0x43
 INPUT_KEYBOARD = 1
 KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE = 0x1, 0x2, 0x4
 INJECTED_TAG = 0x0D1C7A7E  # dwExtraInfo on our own key events
@@ -94,6 +94,9 @@ _sig(user32.EnumClipboardFormats, (wintypes.UINT,), wintypes.UINT)
 _sig(user32.GetClipboardData, (wintypes.UINT,), wintypes.HANDLE)
 _sig(user32.SetClipboardData, (wintypes.UINT, wintypes.HANDLE), wintypes.HANDLE)
 _sig(user32.RegisterClipboardFormatW, (wintypes.LPCWSTR,), wintypes.UINT)
+_sig(user32.GetClipboardFormatNameW, (wintypes.UINT, wintypes.LPWSTR, ctypes.c_int), ctypes.c_int)
+_sig(user32.GetWindowTextLengthW, (wintypes.HWND,), ctypes.c_int)
+_sig(user32.GetWindowTextW, (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int), ctypes.c_int)
 _sig(user32.GetClipboardSequenceNumber, (), wintypes.DWORD)
 _sig(user32.GetOpenClipboardWindow, (), wintypes.HWND)
 _sig(user32.CreateWindowExW, (wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_int,
@@ -238,6 +241,17 @@ def window_pid(hwnd: int) -> int:
     return pid.value
 
 
+def window_title(hwnd: int) -> str:
+    """The caption. For another process's window Windows returns the stored text without sending it a message, so a
+    hung app cannot block this."""
+    n = user32.GetWindowTextLengthW(hwnd) if hwnd else 0
+    if n <= 0:
+        return ""
+    buf = ctypes.create_unicode_buffer(min(n, 1024) + 1)
+    user32.GetWindowTextW(hwnd, buf, len(buf))
+    return buf.value
+
+
 def process_name(pid: int) -> str:
     handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
     if not handle:
@@ -355,6 +369,16 @@ def _send(events: list[INPUT]) -> int:
         return 0
     arr = (INPUT * len(events))(*events)
     return user32.SendInput(len(events), arr, ctypes.sizeof(INPUT))
+
+
+def send_copy(ctrl_insert: bool = False) -> bool:
+    """Ctrl+C, or Ctrl+Insert (the other Copy key, which never interrupts a program in a terminal panel)."""
+    if ctrl_insert:
+        seq = [_key(VK_CONTROL), _key(VK_INSERT, flags=KEYEVENTF_EXTENDEDKEY),
+               _key(VK_INSERT, flags=KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP), _key(VK_CONTROL, flags=KEYEVENTF_KEYUP)]
+    else:
+        seq = [_key(VK_CONTROL), _key(VK_C), _key(VK_C, flags=KEYEVENTF_KEYUP), _key(VK_CONTROL, flags=KEYEVENTF_KEYUP)]
+    return _send(seq) == len(seq)
 
 
 def send_paste(shift_insert: bool = False) -> bool:
@@ -485,14 +509,54 @@ class Clipboard:
 
     def text(self) -> str:
         with _Clipboard():
-            handle = user32.GetClipboardData(CF_UNICODETEXT)
-            if not handle:
-                return ""
-            ptr = kernel32.GlobalLock(handle)
-            try:
-                return ctypes.wstring_at(ptr) if ptr else ""
-            finally:
-                kernel32.GlobalUnlock(handle)
+            return _read_text()
+
+    def read(self, limit: int = 1 << 20) -> dict:
+        """What a copy put on the clipboard, read in one open: the text, the HTML ("HTML Format", to spot pictures and
+        tables), the names of the registered formats and Chromium's custom data as text (to spot an editor's
+        whole-line copy). HTML and custom data are cut at `limit` bytes."""
+        out: dict = {"text": "", "html": "", "formats": set(), "custom": ""}
+        with _Clipboard():
+            fmt = 0
+            name = ctypes.create_unicode_buffer(256)
+            while True:
+                fmt = user32.EnumClipboardFormats(fmt)
+                if not fmt:
+                    break
+                if fmt >= 0xC000 and user32.GetClipboardFormatNameW(fmt, name, len(name)):
+                    out["formats"].add(name.value)
+            out["text"] = _read_text()
+            out["html"] = _read_bytes(user32.RegisterClipboardFormatW("HTML Format"), limit).decode("utf-8", "replace")
+            custom = _read_bytes(user32.RegisterClipboardFormatW("Chromium Web Custom MIME Data Format"), limit)
+            out["custom"] = custom.decode("utf-16-le", "ignore")
+        return out
+
+
+def _read_text() -> str:
+    """CF_UNICODETEXT of the open clipboard."""
+    handle = user32.GetClipboardData(CF_UNICODETEXT)
+    if not handle:
+        return ""
+    ptr = kernel32.GlobalLock(handle)
+    try:
+        return ctypes.wstring_at(ptr) if ptr else ""
+    finally:
+        kernel32.GlobalUnlock(handle)
+
+
+def _read_bytes(fmt: int, limit: int) -> bytes:
+    """Up to `limit` bytes of one memory-block format of the open clipboard; b"" when it is not there."""
+    handle = user32.GetClipboardData(fmt) if fmt else None
+    size = kernel32.GlobalSize(handle) if handle else 0
+    if not size:
+        return b""
+    ptr = kernel32.GlobalLock(handle)
+    if not ptr:
+        return b""
+    try:
+        return ctypes.string_at(ptr, min(size, limit))
+    finally:
+        kernel32.GlobalUnlock(handle)
 
 
 def sequence() -> int:
