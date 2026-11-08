@@ -2,7 +2,7 @@
 """Record on-prem verification results in docs/research/verification-status.json.
 
 Usage: uv run scripts/update_verification.py            (idempotent; edits claims by index)
-Each entry below adds an `onprem` vote with what was observed on SEKAIHOME on 2026-10-24 and sets the
+Each entry below adds an `onprem` vote with what was observed on the reference machine on 2026-10-24 and sets the
 claim's status/verdict. Extend the RESULTS list when new measurements land (e.g. after `stack.py bench`).
 """
 from __future__ import annotations
@@ -15,7 +15,7 @@ PATH = Path(__file__).resolve().parents[1] / "docs" / "research" / "verification
 
 RESULTS: list[dict] = [
     {"index": 2, "verdict": "contested", "status": "complete", "refuted": False,
-     "note": "Measured on SEKAIHOME (RTX 3060 12GB, 32GB DDR4-2133, Ryzen 5 5500) with Ollama 0.40.11 llama-server fit, not bare llama.cpp: see memory/state.md Benchmarks. The 39-47 tok/s figures assume faster RAM/CPU."},
+     "note": "Measured on the reference machine (RTX 3060 12GB, 32GB DDR4-2133, Ryzen 5 5500) with Ollama 0.40.11 llama-server fit, not bare llama.cpp: see memory/state.md Benchmarks. The 39-47 tok/s figures assume faster RAM/CPU."},
     {"index": 3, "verdict": "REFUTED", "status": "complete", "refuted": True,
      "note": "Ollama 0.40.11 runs GGUF via upstream llama-server with LLAMA_ARG_FIT=on (MoE-aware placement); LLAMA_ARG_N_CPU_MOE passes through. No separate llama-server needed; adopted the recency lens' corrected claim."},
     {"index": 4, "verdict": "holding", "status": "complete", "refuted": False,
@@ -46,11 +46,11 @@ def main() -> int:
         if not c:
             print(f"claim {r['index']} not found", file=sys.stderr)
             continue
-        c.setdefault("votes", {})["onprem"] = {"refuted": r["refuted"], "confidence": "high", "checked_on": "2026-10-24", "machine": "SEKAIHOME", "reasoning": r["note"]}
+        c.setdefault("votes", {})["onprem"] = {"refuted": r["refuted"], "confidence": "high", "checked_on": "2026-10-24", "machine": "reference machine", "reasoning": r["note"]}
         c["status"] = r["status"]
         c["verdict_so_far"] = r["verdict"]
         changed += 1
-    doc["onprem_verification"] = {"date": "2026-10-24", "machine": "SEKAIHOME", "claims_updated": [r["index"] for r in RESULTS], "see": "memory/state.md, docs/ORCHESTRATOR-DESIGN.md section 2"}
+    doc["onprem_verification"] = {"date": "2026-10-24", "machine": "reference machine", "claims_updated": [r["index"] for r in RESULTS], "see": "memory/state.md, docs/ORCHESTRATOR-DESIGN.md section 2"}
     PATH.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"updated {changed} claims in {PATH.name}")
     return 0

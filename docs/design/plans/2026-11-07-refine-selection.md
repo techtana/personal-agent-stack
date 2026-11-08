@@ -1,7 +1,8 @@
 # Refine selected text in every app
 
-Date: 2026-11-07. Status: built on branch `claude/ai-text-refinement-contextmenu-70d19f`; verified on SEKAIHOME in
-test windows, a throwaway Word document and Edge text fields (details below); not yet used in Logseq or Notion.
+Date: 2026-11-07. Status: built on branch `claude/ai-text-refinement-contextmenu-70d19f`; verified on the reference
+machine in test windows, a throwaway Word document and Edge text fields (details below); not yet used in Logseq or
+Notion.
 Manual: [user-guide.md, "Refine selected text"](../../manuals/user-guide.md#refine-selected-text). Code:
 `scripts/stacklib/dictation/` (`refine.py`, `refinelog.py`, `selection.py`, `refiner.py`, `history.py`, `overlay.py`).
 
@@ -29,7 +30,7 @@ so a change can be reverted.
 | R11 | Interface | One bar window holding both buttons, keeping its right edge when a button is hidden or shown; a shared bubble; a History window that takes the focus, with a word diff; one activity at a time (dictation or refine); Esc taken from other apps only while the model works | The mic must not move when the pencil appears. |
 | R12 | Settings | A `refine:` section (hotkey, default, model, button, max_chars, timeout_s, prompts); a tray group; showing or hiding the pencil applies at once, a hotkey change restarts the app | Same pattern as `dictation:`. |
 
-## Measurements (SEKAIHOME, 2026-11-07)
+## Measurements (the reference machine, 2026-11-07)
 
 The owner's tray had stopped its services that evening, so the tests used a private gateway on port 4010 with this
 branch's config and a second copy of the app on port 8791 with test hotkeys; qwen3.5:9b in Ollama.

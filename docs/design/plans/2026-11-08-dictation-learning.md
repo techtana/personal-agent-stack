@@ -29,7 +29,7 @@ cheapest first:
 
 | Piece | Where | State |
 |---|---|---|
-| Whisper hotwords | `dictation.vocabulary` -> `engine._decode(hotwords=...)` | Works; the setting is empty on SEKAIHOME. |
+| Whisper hotwords | `dictation.vocabulary` -> `engine._decode(hotwords=...)` | Works; the setting is empty on the reference machine. |
 | Whisper prompt | `initial_prompt` = the text so far in the recording | Works; carries context between phrases only. |
 | Cleanup | `cleanup.polish()` via `local-small`, JSON mode, `think: false`, temperature 0.2, `acceptable()` guard | Works; system prompt has rules but no examples; no vocabulary. |
 | Rule fallback | `textops.strip_fillers()` | Works. |

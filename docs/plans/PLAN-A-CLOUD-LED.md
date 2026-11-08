@@ -37,14 +37,14 @@ Browser ─TLS ends inside the VM─▶ Main VM: Confidential VM (N2D, AMD SEV-S
           private, by priority      │
           ┌─────────────────────────┼──────────────────────────────┐
           ▼                         ▼                              ▼
-  Confidential model server   On-prem: SEKAIHOME            Deferred queue (encrypted)
+  Confidential model server   On-prem: reference machine    Deferred queue (encrypted)
   (C3 + Intel TDX on CPU,     Ollama over WireGuard          when no private host is up
    or A3 + H100 CC on GPU)
   started on demand,
   stopped when idle
           ┆ external (off by default; explicit, consented, non-sensitive only)
           └┄▶ Anthropic API · Vertex AI · Hugging Face · OpenAI-compatible
-Key broker: Trustee (Key Broker Service + Attestation Service) on owned hardware (SEKAIHOME or the admin's machine),
+Key broker: Trustee (Key Broker Service + Attestation Service) on owned hardware (the reference machine or the admin's machine),
 reached over WireGuard. Fallback if V8 fails: Clevis + Tang (network-bound unlock, no attestation) plus admin unlock.
 Backups: restic -> Cloud Storage, encrypted client-side.
 ```
@@ -55,7 +55,7 @@ Backups: restic -> Cloud Storage, encrypted client-side.
 |---|---|---|---|---|---|
 | `confidential-cpu` | C3 with Intel TDX and AMX, 8-22 vCPU | 4-9B quantised text models | to measure in A-S0 (CPU inference) | ~$0.4-1 per hour | first |
 | `confidential-gpu` | A3 with one H100 in confidential-computing mode | large and vision models | fast | ~$10+ per hour | off; for heavy work, started deliberately by an admin or a scheduled window |
-| `onprem` | SEKAIHOME over WireGuard | 9B now (52 tok/s), 35B MoE | measured | $0 | second |
+| `onprem` | The reference machine over WireGuard | 9B now (52 tok/s), 35B MoE | measured | $0 | second |
 
 ```yaml
 # machines/<main-vm>.yaml (class cloud-first, runtime compose)
@@ -110,7 +110,7 @@ Table `deferred_requests` in PostgreSQL on the encrypted disk: `id` (`Q-…`), `
 | A2 | Terraform `infrastructure/gcp/`: Confidential VMs (main and model server), firewall (443/tcp, 51820/udp), static IP, a service account limited to starting and stopping the model servers, billing budget alert, no Secret Manager for app secrets | M | A-S0 |
 | A3 | Key release and encryption: **Trustee** (KBS + Attestation Service) on owned hardware with reference values for the VM images; LUKS unlock at boot through a custom initramfs hook (attester plus KBS fetch; no shipped Trustee unlock client yet, V8) over WireGuard; manual admin unlock as fallback (Clevis + Tang if V8 fails); restic backups with keys held as Trustee resources; restore script | M | A2 |
 | A4 | Confidential model server image: llama.cpp (CPU) or vLLM (GPU option), weights on the LUKS disk; controller in privacy-gate (start on demand, idle stop, health) | M | A2, A3 |
-| A5 | On-prem link: WireGuard hub; `stack.py wg-config` for SEKAIHOME; Ollama on the tunnel address only | M | A2 |
+| A5 | On-prem link: WireGuard hub; `stack.py wg-config` for the reference machine; Ollama on the tunnel address only | M | A2 |
 | A6 | Deferred queue (section 4.1) | L | S2, S3 |
 | S7 | Identity: **Authentik** inside the main VM (V6) | M | A1 |
 | A7 | Installer `scripts/gcp-install.sh`, run from the admin's own machine (gcloud + Terraform) so key material never passes through Google-hosted shells; `destroy`, `restore <date>` | M | A1-A6, S7 |
@@ -156,7 +156,7 @@ confidential-capable machine types are larger than e2.
 |---|---|---|
 | A-D1 | Private host order | `confidential-cpu`, then `onprem` |
 | A-D2 | GPU confidential server | off |
-| A-D3 | Where Trustee runs | SEKAIHOME (owned hardware); manual unlock if it is offline at a reboot |
+| A-D3 | Where Trustee runs | The reference machine (owned hardware); manual unlock if it is offline at a reboot |
 | A-D4 | External models | disabled; if enabled, which providers and which groups |
 | A-D5 | Special categories on confidential cloud hosts | allowed (`special_categories_location: any`) |
 | A-D6 | Region (must offer the chosen confidential machine types) | from A-S0 |

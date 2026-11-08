@@ -114,7 +114,7 @@ Changes the most common values in your machine profile, `machines/<HOST>.yaml`, 
 | Models | **Memory-map primary weights** | Needed for the 35B MoE model; leave off for dense models. |
 | Models | **Small model**, **Small context (tokens)** | The model behind `local-small`. Keep the context equal to the primary's when both use the same model. |
 | Tracing and services | **Write usage traces** | Writes `traces/litellm/` and `traces/usage/`. The Usage tab and `retro` need it. |
-| Tracing and services | **Phoenix tracing** | Runs Phoenix. Leave off on SEKAIHOME: Smart App Control blocks it. |
+| Tracing and services | **Phoenix tracing** | Runs Phoenix. Leave off on the reference machine: Smart App Control blocks it. |
 | Tracing and services | **Open WebUI (chat)** | Runs the chat at http://127.0.0.1:3000. |
 | Ollama runtime | **Keep models loaded for**, **KV cache precision**, **Flash attention**, **Parallel requests per model** | Ollama's memory and speed options. |
 
@@ -130,7 +130,7 @@ Cloud tiers are shown but cannot be changed here. Turning them on is a deliberat
 - `uv run scripts/stack.py status` lists each service as `UP`.
 - `uv run scripts/stack.py smoke` prints `smoke: 8/8 passed`.
 - A reply from the 9B model starts within a few seconds once the model is loaded. The first request after a long idle
-  period reloads the model, which takes about 2 minutes from the USB drive on SEKAIHOME.
+  period reloads the model, which takes about 2 minutes from the USB drive on the reference machine.
 
 | Service | Address | What it is for |
 |---|---|---|
@@ -148,7 +148,7 @@ image button works:
 
 1. In a chat, click **Image** under the message box (or ask the model to draw something; Open WebUI turns the
    request into an image prompt), then send your description.
-2. The image appears in the chat. The first one after a start or a GPU switch takes about 30 s on SEKAIHOME while
+2. The image appears in the chat. The first one after a start or a GPU switch takes about 30 s on the reference machine while
    the model loads from D:; later ones take about 11 s at 1024 x 1024.
 
 The model is Z-Image-Turbo (Apache-2.0) with 8 steps. Images are saved in `<media.root>\outputs\open-webui`.
@@ -194,10 +194,10 @@ How the text is made: two models, both on this PC.
    each phrase when you pause, verbatim, fillers included. It gets the text so far as a prompt (for continuity) and
    `dictation.vocabulary` as hints. Whisper does not clean or shorten anything.
 2. **The chat model cleans it up (polish mode, Clean or Concise only).** When you stop, the joined transcript goes
-   to the gateway alias `dictation.cleanup_model` (`local-small`, the 9B in Ollama on SEKAIHOME), with instructions
-   to remove fillers and false starts, keep only self-corrections, fix punctuation, keep your words and meaning, and
-   never answer what you said. Concise also asks it to shorten. The request uses JSON output and turns the model's
-   thinking off (with thinking on, the 9B returned nothing after 49 s).
+   to the gateway alias `dictation.cleanup_model` (`local-small`, the 9B in Ollama on the reference machine), with
+   instructions to remove fillers and false starts, keep only self-corrections, fix punctuation, keep your words and
+   meaning, and never answer what you said. Concise also asks it to shorten. The request uses JSON output and turns
+   the model's thinking off (with thinking on, the 9B returned nothing after 49 s).
 
 The reply is checked before it is typed. If it grew, shrank too much or reads like an answer, or the gateway does not
 answer, the raw transcript is typed instead, with only um/uh/er removed by a simple text rule (no model).
@@ -208,9 +208,9 @@ answer, the raw transcript is typed instead, with only um/uh/er removed by a sim
 | Polish, Verbatim | yes | no |
 | Live | yes | no (only the um/uh rule) |
 
-On SEKAIHOME (RTX 3060 with the 9B chat model loaded) Whisper takes 0.3 to 0.5 s per phrase and the cleanup about
-1 s. Whisper holds about 1.2 GB of VRAM and frees it after 30 idle minutes; the next dictation loads it again (5 s,
-while you are already talking).
+On the reference machine (RTX 3060 with the 9B chat model loaded) Whisper takes 0.3 to 0.5 s per phrase and the
+cleanup about 1 s. Whisper holds about 1.2 GB of VRAM and frees it after 30 idle minutes; the next dictation loads it
+again (5 s, while you are already talking).
 
 Good to know:
 
@@ -293,9 +293,9 @@ instructions.
 How it works, all on this PC:
 
 1. It presses Ctrl+C in the app to read the selection, then puts back what was on your clipboard.
-2. The gateway alias `refine.model` (`local-primary`, the 9B on SEKAIHOME) rewrites the text. With the style's
-   instructions it gets fixed rules: keep the language; keep names, numbers, links, `[[page links]]`, `#tags`,
-   `((block references))` and markdown; never answer a question in the text, only rewrite it.
+2. The gateway alias `refine.model` (`local-primary`, the 9B on the reference machine) rewrites the text. With the
+   style's instructions it gets fixed rules: keep the language; keep names, numbers, links, `[[page links]]`,
+   `#tags`, `((block references))` and markdown; never answer a question in the text, only rewrite it.
 3. The reply is checked. If it reads like an answer to you, grew or shrank far more than the style allows, or is empty,
    your text stays as it was. The suggestion still goes into the history.
 4. It presses Ctrl+C once more. Only if the same text is still selected in the same window does it paste the new text

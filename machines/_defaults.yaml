@@ -1,6 +1,6 @@
 # Hardware classes and the model lineup each one gets.
 # `uv run scripts/stack.py doctor --write-profile` detects RAM/VRAM and picks a class;
-# the per-machine file (machines/<HOSTNAME>.yaml) can override any value here.
+# the per-machine file (machines/<HOSTNAME>.yaml, local to each computer and ignored by git) can override any value here.
 # Verify tags with `ollama pull` before adding new models: sizes below were read from
 # ollama.com on 2026-10-24.
 

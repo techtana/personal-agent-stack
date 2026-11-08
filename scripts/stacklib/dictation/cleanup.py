@@ -1,7 +1,7 @@
 """Polish a transcript with the gateway's local model: drop fillers and false starts, fix punctuation, optionally
 shorten. Standard library only (urllib), so the project's tests cover it without the app's environment.
 
-Three details from measurements on SEKAIHOME (2026-11-07), qwen3.5:9b behind `local-small`:
+Three details from measurements on the reference machine (2026-11-07), qwen3.5:9b behind `local-small`:
   - `think: false` is required. With thinking on, the model spent all 400 tokens reasoning and returned no text after
     49 s; with it off the same request took 0.8 s.
   - `response_format: json_object` keeps the gateway's "**Used:** ..." footer off the reply (custom_callbacks.py skips

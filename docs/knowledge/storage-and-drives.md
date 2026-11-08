@@ -42,7 +42,7 @@ link, not the flash memory, is the bottleneck, so the kind of access stops matte
 sides. The slow USB 2.0 wires work in either orientation, but the fast USB 3 data uses one of two sets of contact
 pairs, chosen by orientation. If a contact in one set is worn or dirty, that orientation cannot set up a USB 3 link,
 and the drive quietly falls back to USB 2.0. Turned over, it uses the other set and runs at full speed. That is what
-happened on SEKAIHOME on 2026-11-01.
+happened on the reference machine on 2026-11-01.
 
 **Measuring past the cache.** Windows keeps recently read files in spare RAM (the file cache). If a test writes a
 file and immediately reads it back normally, the read comes from RAM and reports an impossibly high speed. The
@@ -58,11 +58,11 @@ loads and downloads fail.
 
 | Item | Typical value | Source |
 |---|---|---|
-| USB 2.0 in practice | 35 to 42 MB/s | general knowledge; measured 41.6 MB/s on SEKAIHOME |
-| USB 3.2 Gen 1 (5 Gbps) in practice | about 400 MB/s | measured 376 MB/s with `winsat` on SEKAIHOME |
+| USB 2.0 in practice | 35 to 42 MB/s | general knowledge; measured 41.6 MB/s on the reference machine |
+| USB 3.2 Gen 1 (5 Gbps) in practice | about 400 MB/s | measured 376 MB/s with `winsat` on the reference machine |
 | USB 3.2 Gen 2 (10 Gbps) | about 1,000 MB/s | the Crucial X8's rated speed, source not recorded in the repo |
 | Spinning hard disk, sequential | about 150 MB/s | general knowledge, source not recorded |
-| PCIe NVMe SSD (consumer) | 2,000 to 7,000 MB/s | measured 2,762 to 2,990 MB/s on SEKAIHOME's Kingston SNV3S |
+| PCIe NVMe SSD (consumer) | 2,000 to 7,000 MB/s | measured 2,762 to 2,990 MB/s on the reference machine's Kingston SNV3S |
 | "Slow" threshold in `disks.py` | under 100 MB/s | project choice: below a hard disk |
 | "Good" threshold in `disks.py` | 200 MB/s or more | project choice: a 6.6 GB model in about 30 s |
 | Free space to keep on the system drive | 15 to 20 percent | common advice, source not recorded |
@@ -92,7 +92,7 @@ loads and downloads fail.
 
 ## What we found
 
-- 2026-11-01, SEKAIHOME: D: (Crucial X8, USB) read 41.6 MB/s with `winsat`; turning the USB-C plug over gave
+- 2026-11-01, the reference machine: D: (Crucial X8, USB) read 41.6 MB/s with `winsat`; turning the USB-C plug over gave
   376 MB/s. C: (NVMe) read 2,762 to 2,990 MB/s. A second USB drive, E:, read 42 to 43 MB/s with the test file,
   likely the same USB 2.0 problem. Full table in [../manuals/choosing-drives.md](../manuals/choosing-drives.md).
 - The 130 to 161 s cold loads of the 9B recorded on 2026-10-24 and 2026-10-25 (`memory/state.md`) match the 41 MB/s
@@ -101,7 +101,7 @@ loads and downloads fail.
 ## Open questions
 
 - The cold-load time of the 9B over the fixed USB 3 link has not been measured yet.
-- Whether a 10 Gbps port on SEKAIHOME brings the X8 near 1,000 MB/s is untested.
+- Whether a 10 Gbps port on the reference machine brings the X8 near 1,000 MB/s is untested.
 - Why E: is slow (cable, port, or the drive) is not known.
 
 ## Sources and further reading
