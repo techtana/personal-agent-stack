@@ -30,6 +30,7 @@ separate optional choice in the installer, handled gracefully when it is not ins
 | A12 | Less waiting (asked 2026-11-08) | Sentence-sized pieces (first up to 120 characters, later up to 160, joining short sentences), so no piece takes long to make; the first is made alone, then later pieces by worker threads (two on the CPU sharing Kokoro's six threads, one on the GPU) and handed to the player in order, up to 30 s of speech ahead on the CPU and 60 s on the GPU. While the processors are more than 85% busy (GetSystemTimes), one at a time and one ahead. Kokoro loads while the selection is copied, and when the pointer rests on the speaker button | Pieces of up to 320 characters made one at a time left a 3-4 s silence after the first sentence on the CPU. Two sessions for two workers would double the memory; two concurrent runs on one session (4.3x real time against 3.3x) use no more threads. Three runs (5.0x) would take the processors from other programs. |
 | A13 | Read it again (asked 2026-11-08) | The last reading's audio stays in memory (up to 64 MB, about 23 minutes) keyed by its text, voice, speed and weights; Read it again replays it and makes only pieces that are missing (a reading stopped partway). A replay writes no usage record. Never on disk | Re-running the model for the same text was wasted work. |
 | A14 | The tray's Kokoro row (asked 2026-11-08) | While the standalone Kokoro service is off, the Kokoro row shows read aloud (from voice typing's /health): off, not installed, starts with voice typing, ready, loaded on the GPU or CPU, reading, paused, failed; it carries Hide/Show speaker and has no Start button | The row said "Not available yet" while read aloud was using Kokoro. |
+| A15 | Pauses (asked 2026-11-08: the gap after a sentence felt slightly long, after a paragraph too short) | Each sentence is its own piece; the voices' own silence is trimmed to 40 ms each side (Kokoro left 0.25-0.36 s before and 0.4-0.7 s after a sentence, Zira 0.1 s and 0.77 s, so a sentence gap was about 0.8 s and a paragraph only 0.35 s more); then `pause_sentence_ms` 300, `pause_item_ms` 600 (list items, headings, table rows, marked in the speech text), `pause_paragraph_ms` 1000, and `break_ms` 1500 every `break_every` 5 sentences in a row within a paragraph; 120 ms between the parts of a sentence split at a comma. Tray: Read aloud > Show advanced | Joining short sentences into one piece let Kokoro choose the pause between them, which the settings could not change. |
 
 ## Measurements (the reference machine, 2026-11-08)
 
@@ -57,6 +58,10 @@ separate optional choice in the installer, handled gracefully when it is not ins
   first): first speech after 1.74 s, again no waiting between pieces.
 - CPU parallelism (12 logical processors): one run at a time with 6 threads 3.3x real time, with 3 threads 2.2x; two
   runs at once sharing 6 threads 4.3x, three 5.0x; two runs on 3 threads each 3.5x.
+
+- Pauses (CPU, Heart, through `dictation speak` in voice typing's environment): measured silences 0.38 s after a
+  sentence, 0.68 s after a list item, 1.04-1.08 s after a paragraph and 1.58 s for the break after the fifth
+  sentence (each setting plus the two 40 ms margins).
 
 ## Not verified
 

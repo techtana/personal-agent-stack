@@ -37,8 +37,6 @@ from . import speak
 from .selection import Selection, SelectionError, capture
 
 LOOKAHEAD_S = 30.0        # prepare at most this much speech ahead of what plays (the owner's hooks may say more)
-SENTENCE_GAP_S = 0.05
-PARAGRAPH_GAP_S = 0.35
 PREVIEW = 260
 
 
@@ -77,6 +75,7 @@ class Job:
     note: str = ""
     pieces: list = field(default_factory=list)
     index: int = -1
+    run: int = 0                    # sentences in a row since the last long pause (speak.pause_after)
     hint: str = ""
     reuse: dict = field(default_factory=dict)   # again: piece index -> audio kept from the last reading
     made: dict = field(default_factory=dict)    # piece index -> audio made (or reused) in this reading
@@ -322,7 +321,7 @@ class Reader:
                 audio = self._make(job, 0, voice, cfg)
         if audio is not None and not job.cancelled:
             self._add(stats, audio)
-            player.play(audio.pcm + silence(PARAGRAPH_GAP_S if first.paragraph_end else SENTENCE_GAP_S), 0)
+            player.play(audio.pcm + self._pause(job, first, cfg), 0)
             failed = self._prefetch(job, voice, cfg, player, stats)
         audio_s, run_s, load_s, tokens = stats["audio_s"], stats["run_s"], stats["load_s"], stats["tokens"]
         if job.kind != "sample":
@@ -350,6 +349,13 @@ class Reader:
                          f"{voice.name} read {speak.seconds_text(stats['played_s'])} of speech"
                          + (" (replayed: nothing was made again)." if job.reuse and not audio_s else ".")
                          + (f" {note}" if note else ""))
+
+    @staticmethod
+    def _pause(job: Job, piece: speak.Piece, cfg: speak.Config) -> bytes:
+        """The silence after a piece: read_aloud.pause_* for its end, and every break_every sentences a longer break.
+        Pieces are played in order, so the count follows the text."""
+        seconds, job.run = speak.pause_after(piece, cfg, job.run)
+        return silence(seconds)
 
     @staticmethod
     def _audio_key(text: str, voice: speak.Voice, cfg: speak.Config) -> tuple:
@@ -451,7 +457,7 @@ class Reader:
                 break
             self._add(stats, result)
             piece = job.pieces[i]
-            player.play(result.pcm + silence(PARAGRAPH_GAP_S if piece.paragraph_end else SENTENCE_GAP_S), i)
+            player.play(result.pcm + self._pause(job, piece, cfg), i)
             with cond:
                 state["played"] += 1
                 cond.notify_all()

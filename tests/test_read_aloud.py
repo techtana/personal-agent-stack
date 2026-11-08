@@ -102,22 +102,24 @@ class Configuration(unittest.TestCase):
 class SpeechText(unittest.TestCase):
     def test_markup_goes_and_every_line_ends_in_punctuation(self):
         lines = speak.speech_text(ARTICLE).split("\n")
-        self.assertEqual(lines[:3], ["Release notes.", "Fixed the login bug, see github.com for details.",
-                                     "Dr. Smith reviewed Project Apollo on 3 May."])
+        item = speak.ITEM   # list items and headings keep a mark, so their pause can differ from a paragraph's
+        self.assertEqual(lines[:3], [item + "Release notes.", item + "Fixed the login bug, see github.com for details.",
+                                     item + "Dr. Smith reviewed Project Apollo on 3 May."])
         self.assertEqual(lines[3], "")   # the paragraph break stays; the Logseq property is gone
         self.assertTrue(lines[4].startswith("The quick brown fox"))
         self.assertNotIn("id::", speak.speech_text(ARTICLE))
 
     def test_more_markup(self):
         cases = {
-            "| Name | Cost |\n|---|---|\n| Server | 12 |": "Name, Cost.\nServer, 12.",
+            "| Name | Cost |\n|---|---|\n| Server | 12 |": f"{speak.ITEM}Name, Cost.\n{speak.ITEM}Server, 12.",
+            "1. first\n2) second": f"{speak.ITEM}1. first.\n{speak.ITEM}2) second.",
             "> quoted *text* and `code` and ~~gone~~ stays": "quoted text and code and gone stays.",
             "[the docs](https://example.com/a(b)) and ![a chart](x.png)": "the docs and a chart.",
             "((6543a1b2-1234-4567-89ab-0123456789ab)) {{embed [[x]]}} see #project-plan": "see project plan.",
             "```python\nprint('hi')\n```": "print('hi').",
             "snake_case_name stays, 2*3*4 too": "snake_case_name stays, 2*3*4 too.",
             "Line one\r\nLine two\x0bLine three\u2028Four": "Line one.\nLine two.\nLine three.\nFour.",
-            "- [ ] buy milk\n- [x] done": "buy milk.\ndone.",
+            "- [ ] buy milk\n- [x] done": f"{speak.ITEM}buy milk.\n{speak.ITEM}done.",
             "---\n***": "",
             "   \n\n  ": "",
         }
@@ -140,14 +142,16 @@ class Pieces(unittest.TestCase):
                              "See e.g. the notes."])
         self.assertEqual(speak.sentences("你好。今天很好！"), ["你好。", "今天很好！"])
 
-    def test_first_piece_is_one_short_sentence_then_pieces_grow(self):
+    def test_every_sentence_is_its_own_piece(self):
         text = " ".join(f"This is sentence number {i} of a long paragraph that keeps going." for i in range(12))
         parts = speak.pieces(text)
+        self.assertEqual(len(parts), 12)
         self.assertEqual(parts[0].text, "This is sentence number 0 of a long paragraph that keeps going.")
-        self.assertGreater(len(parts[1].text), len(parts[0].text) * 2)
-        self.assertTrue(all(len(p.text) <= speak.PIECE_CHARS for p in parts))
-        self.assertEqual([p.paragraph_end for p in parts], [False] * (len(parts) - 1) + [True])
+        self.assertEqual([p.end for p in parts], ["sentence"] * 11 + ["paragraph"])
         self.assertEqual(" ".join(p.text for p in parts), text)
+        ends = [p.end for p in speak.pieces("Short one. " + ", ".join(["a long clause here"] * 40) + ".")]
+        self.assertEqual(ends[:3], ["sentence", "clause", "clause"])
+        self.assertEqual(ends[-1], "paragraph")
 
     def test_long_sentences_are_split_at_commas_then_words(self):
         clause = "and then the committee discussed the budget at great length"
@@ -159,8 +163,41 @@ class Pieces(unittest.TestCase):
 
     def test_paragraphs_and_list_items_are_their_own_pieces(self):
         parts = speak.pieces(speak.speech_text(ARTICLE))
-        self.assertEqual(parts[0], speak.Piece("Release notes.", True))
-        self.assertTrue(all(p.paragraph_end for p in parts[:3]))
+        self.assertEqual(parts[0], speak.Piece("Release notes.", "item"))
+        self.assertEqual([p.end for p in parts[:3]], ["item"] * 3)
+        self.assertEqual(parts[-1].end, "paragraph")
+        self.assertTrue(all(not p.text.startswith(speak.ITEM.strip()) for p in parts))   # the mark is not read
+
+    def test_pauses(self):
+        cfg = speak.Config()
+        self.assertEqual((cfg.pause_sentence_ms, cfg.pause_item_ms, cfg.pause_paragraph_ms, cfg.break_every,
+                          cfg.break_ms), (300, 600, 1000, 5, 1500))
+        self.assertEqual(speak.Config.from_profile({"read_aloud": prof.load_defaults()["read_aloud"]}), cfg)
+        sentence, item, para = (speak.Piece("x", e) for e in ("sentence", "item", "paragraph"))
+        self.assertEqual(speak.pause_after(speak.Piece("x", "clause"), cfg, 2), (speak.CLAUSE_PAUSE_MS / 1000, 2))
+        self.assertEqual(speak.pause_after(sentence, cfg, 0), (0.3, 1))
+        self.assertEqual(speak.pause_after(item, cfg, 3), (0.6, 0))          # and so does a list item
+        self.assertEqual(speak.pause_after(para, cfg, 2), (1.0, 0))          # a paragraph restarts the count
+        self.assertEqual(speak.pause_after(sentence, cfg, 4), (1.5, 0))      # the fifth sentence in a row: a break
+        self.assertEqual(speak.pause_after(para, cfg, 4), (1.5, 0))          # the break when it is longer
+        run, gaps = 0, []
+        for _ in range(12):
+            gap, run = speak.pause_after(sentence, cfg, run)
+            gaps.append(gap)
+        self.assertEqual([i for i, g in enumerate(gaps) if g == 1.5], [4, 9])
+        self.assertEqual(speak.pause_after(sentence, speak.Config(break_every=0), 99), (0.3, 100))   # never
+        odd = speak.Config.from_profile({"read_aloud": {"pause_sentence_ms": -5, "break_ms": 99999, "break_every": 900}})
+        self.assertEqual((odd.pause_sentence_ms, odd.break_ms, odd.break_every), (0, 5000, 50))
+
+    def test_the_reader_plays_the_configured_pauses(self):
+        """The silence after each piece is the configured one: sentence, list item, paragraph, then a break."""
+        from stacklib.dictation import reader
+
+        job = reader.Job("read")
+        cfg = speak.Config(pause_sentence_ms=200, pause_paragraph_ms=900, break_every=3, break_ms=2000)
+        got = [len(reader.Reader._pause(job, speak.Piece("x", e), cfg)) / 2 / speak.SAMPLE_RATE
+               for e in ("sentence", "sentence", "sentence", "paragraph")]
+        self.assertEqual(got, [0.2, 0.2, 2.0, 0.9])
 
 
 # ---------------------------------------------------------------- language and voice
@@ -638,7 +675,15 @@ class Wiring(unittest.TestCase):
         ids = {settings.setting_id(s) for s in settings.SETTINGS if s.section == "read_aloud"}
         self.assertEqual(ids, {"read_aloud.enabled", "read_aloud.hotkey", "read_aloud.voice", "read_aloud.speed",
                                "read_aloud.auto_language", "read_aloud.button", "read_aloud.esc_stops",
-                               "read_aloud.kokoro", "read_aloud.device"})
+                               "read_aloud.kokoro", "read_aloud.device", "read_aloud.pause_sentence_ms",
+                               "read_aloud.pause_item_ms", "read_aloud.pause_paragraph_ms", "read_aloud.break_every",
+                               "read_aloud.break_ms"})
+        pause = next(s for s in settings.SETTINGS if settings.setting_id(s) == "read_aloud.pause_sentence_ms")
+        self.assertEqual((settings._to_file_value(pause, "400"), pause.effect, pause.advanced), (400, "read_aloud", True))
+        defaults = speak.Config()
+        for key in ("pause_sentence_ms", "pause_item_ms", "pause_paragraph_ms", "break_every", "break_ms"):
+            s = next(s for s in settings.SETTINGS if settings.setting_id(s) == f"read_aloud.{key}")
+            self.assertIn(str(getattr(defaults, key)), s.choices, key)
         p = {"models": {}, "observability": {}, "services": {}, "ollama_env": {}, "dictation": {}, "refine": {},
              "read_aloud": {"speed": 1.25, "voice": "bf_emma", "enabled": True}}
         values = settings.current_values(p)

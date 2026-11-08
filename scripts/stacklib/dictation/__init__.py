@@ -277,6 +277,8 @@ def install(profile: dict, report=lambda *a: None, download_model: bool = True) 
     packages = [READ_GPU_PACKAGES[0] if pkg.startswith("onnxruntime==") and read_aloud_gpu_installed(profile) else pkg
                 for pkg in PACKAGES]
     _run([uv, "pip", "install", "--python", python, *packages], env=env)
+    if packages != list(PACKAGES):
+        _restore_gpu_runtime(profile, uv, python, env, report)   # faster-whisper pulled the CPU build back in
     check = subprocess.run([str(python), "-c", IMPORT_CHECK], capture_output=True, text=True, check=False)
     if check.returncode:
         tail = (check.stderr or "").strip().splitlines()[-1:] or ["no output"]
@@ -334,10 +336,28 @@ def read_aloud_installed(profile: dict) -> bool:
     return kokoro_cached(profile, ReadConfig.from_profile(profile).kokoro)
 
 
+def _cpu_runtime(site: Path) -> bool:
+    return any(site.glob("onnxruntime-*.dist-info"))
+
+
 def read_aloud_gpu_installed(profile: dict) -> bool:
-    """onnxruntime-gpu and cuDNN are in voice typing's environment (read aloud's GPU option)."""
+    """onnxruntime-gpu and cuDNN are in voice typing's environment (read aloud's GPU option), and the CPU build is not
+    there beside it: both install into the same onnxruntime folder, and whichever came last owns the files."""
     site = _site_packages(profile)
-    return any(site.glob("onnxruntime_gpu-*.dist-info")) and (site / "nvidia" / "cudnn" / "bin" / "cudnn64_9.dll").exists()
+    return (any(site.glob("onnxruntime_gpu-*.dist-info")) and not _cpu_runtime(site)
+            and (site / "nvidia" / "cudnn" / "bin" / "cudnn64_9.dll").exists())
+
+
+def _restore_gpu_runtime(profile: dict, uv: str, python: Path, env: dict, report) -> None:
+    """Put onnxruntime-gpu's files back after something installed the CPU onnxruntime over them. faster-whisper
+    depends on `onnxruntime`, which onnxruntime-gpu does not satisfy, so every voice typing install pulls the CPU
+    build in again (seen on the reference machine, 2026-11-08: both installed, CUDA gone)."""
+    site = _site_packages(profile)
+    if not _cpu_runtime(site):
+        return
+    report("putting ONNX Runtime for CUDA back (the CPU build was installed over it)")
+    _run([uv, "pip", "uninstall", "--python", python, "onnxruntime"], env=env)
+    _run([uv, "pip", "install", "--python", python, "--reinstall", "--no-deps", READ_GPU_PACKAGES[0]], env=env)
 
 
 def wants_gpu(profile: dict) -> bool:
@@ -362,9 +382,9 @@ def _install_gpu(profile: dict, uv: str, python: Path, env: dict, report) -> str
     try:
         report("installing ONNX Runtime for CUDA and cuDNN 9 (about 0.8 GB) for read aloud on the GPU")
         site = _site_packages(profile)
-        if any(site.glob("onnxruntime-*.dist-info")) and not any(site.glob("onnxruntime_gpu-*.dist-info")):
+        if _cpu_runtime(site):
             _run([uv, "pip", "uninstall", "--python", python, "onnxruntime"], env=env)
-        _run([uv, "pip", "install", "--python", python, READ_GPU_PACKAGES[0]], env=env)
+        _run([uv, "pip", "install", "--python", python, "--reinstall", READ_GPU_PACKAGES[0]], env=env)
         _run([uv, "pip", "install", "--python", python, "--no-deps", READ_GPU_PACKAGES[1]], env=env)
     finally:
         if was_up:

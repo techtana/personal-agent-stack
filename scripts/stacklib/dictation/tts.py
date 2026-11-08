@@ -49,6 +49,22 @@ def _short(e: BaseException) -> str:
     return text[:160]
 
 
+TRIM_LEVEL = 0.01       # quieter than this counts as silence (about -40 dBFS)
+TRIM_MARGIN_S = 0.04    # silence kept at each end, so a word's first and last sound are not clipped
+
+
+def trim(pcm: bytes, rate: int = SAMPLE_RATE) -> bytes:
+    """16-bit PCM without the silence a voice puts around a sentence (measured 2026-11-08: Kokoro 0.25-0.36 s before
+    and 0.4-0.7 s after, a Windows voice 0.1 s before and 0.77 s after), keeping TRIM_MARGIN_S at each end."""
+    x = np.frombuffer(pcm, dtype="<i2")
+    loud = np.flatnonzero(np.abs(x.astype(np.int32)) > int(TRIM_LEVEL * 32768))
+    if not len(loud):
+        return pcm
+    margin = int(TRIM_MARGIN_S * rate)
+    a, b = max(0, loud[0] - margin), min(len(x), loud[-1] + 1 + margin)
+    return x[a:b].tobytes()
+
+
 def _pcm16(audio: np.ndarray) -> bytes:
     return (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
 
@@ -399,11 +415,16 @@ class Speech:
         return 60.0 if voice.engine != "kokoro" or self.kokoro.device == "cuda" else 30.0
 
     def synth(self, text: str, voice: Voice, speed: float, cfg: speak.Config) -> Audio:
+        """One piece of speech, its own silence trimmed (trim), so the pauses between pieces are the configured ones."""
         if voice.engine == "kokoro":
             if cfg.kokoro == "off":
                 raise SpeechError("Kokoro is off (read_aloud.kokoro)")
-            return self.kokoro.synth(text, voice, speed, cfg.kokoro, cfg.device)
-        return self.windows.synth(text, voice, speed)
+            audio = self.kokoro.synth(text, voice, speed, cfg.kokoro, cfg.device)
+        else:
+            audio = self.windows.synth(text, voice, speed)
+        audio.pcm = trim(audio.pcm)
+        audio.seconds = len(audio.pcm) / 2 / SAMPLE_RATE
+        return audio
 
     def model_name(self, voice: Voice, cfg: speak.Config) -> str:
         if voice.engine == "kokoro":

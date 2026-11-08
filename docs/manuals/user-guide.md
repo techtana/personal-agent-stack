@@ -463,7 +463,18 @@ How it works, all on this PC:
    second, no more processors), up to 30 seconds of speech ahead (60 on the GPU). While the PC is busy (its processors
    more than 85% in use) it makes one at a time and keeps only one ready, leaving room for the rest. Kokoro on the CPU
    uses at most half the logical processors.
-4. Nothing is saved to disk. The text and the sound of the last reading stay in memory until the app quits or you
+4. Between pieces it plays the pauses you set. The voices put their own silence around every sentence (Kokoro about
+   0.3 s before and 0.4-0.7 s after, a Windows voice up to 0.8 s after), so that is trimmed to 40 ms first. Then:
+
+   | Setting (Settings > Read aloud > Show advanced) | Default | After |
+   |---|---|---|
+   | Pause after a sentence (`pause_sentence_ms`) | 300 ms | each sentence in a paragraph |
+   | Pause after a list item or heading (`pause_item_ms`) | 600 ms | each bullet, numbered item, heading or table row |
+   | Pause after a paragraph (`pause_paragraph_ms`) | 1000 ms | each paragraph |
+   | Longer break every (`break_every`) / Longer break (`break_ms`) | 5 sentences / 1500 ms | every 5th sentence in a row within a paragraph, to take them in; a paragraph or list item starts the count again; 0 turns it off |
+
+   A sentence split at a comma (very long ones) gets 120 ms between its parts. Changes apply at the next reading.
+5. Nothing is saved to disk. The text and the sound of the last reading stay in memory until the app quits or you
    read something else, so **Read it again** replays the sound without running the model again (with the same voice
    and speed; up to about 23 minutes of speech is kept). The tray's Usage tab counts each reading (seconds of speech,
    the voice, the time it took to make), never the words; a replay counts nothing, since no model ran.

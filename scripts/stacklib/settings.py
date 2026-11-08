@@ -141,6 +141,21 @@ SETTINGS = [
             "read_aloud"),
     Setting("read_aloud", "button", "Show the read aloud button", "bool",
             "The speaker button next to the mic; the hotkey works without it.", "dictation"),
+    Setting("read_aloud", "pause_sentence_ms", "Pause after a sentence (ms)", "choice",
+            "Silence between sentences. The voices' own silence around each sentence is trimmed first, so this is "
+            "the whole gap.", "read_aloud", ["100", "200", "300", "400", "500", "700"], advanced=True),
+    Setting("read_aloud", "pause_item_ms", "Pause after a list item or heading (ms)", "choice",
+            "Silence after each bullet, numbered item, heading or table row.", "read_aloud",
+            ["300", "400", "600", "800", "1000", "1500"], advanced=True),
+    Setting("read_aloud", "pause_paragraph_ms", "Pause after a paragraph (ms)", "choice",
+            "Silence between paragraphs.", "read_aloud", ["500", "700", "1000", "1500", "2000", "3000"],
+            advanced=True),
+    Setting("read_aloud", "break_every", "Longer break every (sentences)", "choice",
+            "After this many sentences in a row, a longer break gives the listener a moment to take them in; a "
+            "paragraph break starts the count again. 0 = never.", "read_aloud",
+            ["0", "3", "4", "5", "6", "8", "10"], advanced=True),
+    Setting("read_aloud", "break_ms", "Longer break (ms)", "choice", "How long that break lasts.", "read_aloud",
+            ["1000", "1500", "2000", "2500", "3000"], advanced=True),
     Setting("read_aloud", "esc_stops", "Esc stops reading", "bool",
             "While it reads, Esc stops it, and other apps do not get Esc until it finishes.", "read_aloud",
             advanced=True),
@@ -247,6 +262,8 @@ def _to_file_value(s: Setting, ui_value: object) -> object:
         return int(float(ui_value))
     if s.section == "read_aloud" and s.key == "speed":
         return float(ui_value)
+    if s.section == "read_aloud" and (s.key.endswith("_ms") or s.key == "break_every"):
+        return int(float(ui_value))
     return str(ui_value)
 
 
