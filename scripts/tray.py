@@ -90,7 +90,7 @@ from PIL import ImageTk  # noqa: E402
 from stacklib import IS_WINDOWS, clients, media, ollama, process_metrics, procname, profile as prof, services  # noqa: E402
 from stacklib.icon import COLORS, make_icon  # noqa: E402
 from stacklib import settings as cfg  # noqa: E402
-from stacklib import comfy_usage, features, startup, usage, usage_log  # noqa: E402
+from stacklib import comfy_usage, features, gpu_models, startup, usage, usage_log  # noqa: E402
 
 POLL_SECONDS = 10
 CLIENT_SECONDS = 60  # between feature and Hugging Face checks: measuring the cache walks every file in it
@@ -216,6 +216,8 @@ class TrayApp:
         self.row_checked: dict[str, float] = {}  # service -> when the check behind its row began (monotonic)
         self.rows_lock = threading.Lock()
         self.loaded: list[dict] = []
+        self.gpu_rows: list[dict] = []     # every model on the GPU: Ollama's, Whisper, ComfyUI's
+        self.dictation_health: dict | None = None
         self.client_status: dict[str, clients.ClientStatus] = {}
         self.clients_checked = 0.0  # monotonic; 0 = never
         self.hardware = features.hardware(self.profile)
@@ -272,6 +274,7 @@ class TrayApp:
         self._store_rows(rows, checked)
         self._check_dictation()
         self._collect_usage()
+        self._check_gpu_models()
         if checked - self.clients_checked >= CLIENT_SECONDS or not self.clients_checked:
             self.clients_checked = checked
             self.client_status = self._check_clients()
@@ -302,16 +305,28 @@ class TrayApp:
         """Whether voice typing's floating button is showing, from its own control endpoint."""
         if not self.rows.get("dictation", {}).get("healthy"):
             self.dictation_button = self.refine_button = None
+            self.dictation_health = None
             return
         from stacklib.dictation import control
 
         try:
             health = control.call(int(self.profile["ports"]["dictation"]), "health", 1.5)
+            self.dictation_health = health if isinstance(health, dict) else None
             self.dictation_button = bool(health.get("button", True))
             refine = health.get("refine")
             self.refine_button = bool(refine.get("button", True)) if isinstance(refine, dict) else None
         except (OSError, ValueError, AttributeError):
             self.dictation_button = self.refine_button = None
+            self.dictation_health = None
+
+    def _check_gpu_models(self) -> None:
+        """The GPU card's rows: Ollama's models plus voice typing's Whisper and ComfyUI's models when they hold the card."""
+        stats, label = None, ""
+        if self.rows.get("comfyui", {}).get("healthy"):
+            stats = gpu_models.comfy_stats(int(self.profile["ports"]["comfyui"]))
+            workflow = media.media(self.profile).get("image_workflow") or "z_image_turbo"
+            label = media.WORKFLOW_LABELS.get(workflow, workflow)
+        self.gpu_rows = gpu_models.rows(self.loaded, self.dictation_health, stats, label)
 
     def _collect_usage(self) -> None:
         """ComfyUI's finished jobs into usage records: Open WebUI asks ComfyUI for images directly, past the gateway."""
@@ -851,8 +866,8 @@ class TrayApp:
             show.grid_remove()
             self.reason_widgets[svc] = (reason, show)
 
-        # One card for the GPU: what Ollama holds, and the switch that hands the card to chat or to media (plan G1).
-        models = self._card(body, "GPU: loaded in Ollama", row=1, column=0, pady=(12, 0))
+        # One card for the GPU: every model loaded (Ollama, Whisper, ComfyUI), and the switch that hands the card to chat or to media (plan G1).
+        models = self._card(body, "GPU: loaded models", row=1, column=0, pady=(12, 0))
         models.columnconfigure(0, weight=1)
         self.loaded_frame = ttk.Frame(models, style="Card.TFrame")
         self.loaded_frame.grid(row=1, column=0, columnspan=2, sticky="we")
@@ -1104,22 +1119,15 @@ class TrayApp:
     def _render_loaded(self) -> None:
         for child in self.loaded_frame.winfo_children():
             child.destroy()
-        if not self.loaded:
+        if not self.gpu_rows:
             ttk.Label(self.loaded_frame, text="No model is loaded. The first request loads one (this can take a minute or two).",
                       style="Card.Muted.TLabel").grid(row=0, column=0, sticky="w")
             return
-        for c, h in enumerate(("Model", "Size", "On GPU", "Context", "Unloads")):
+        for c, h in enumerate(("Model", "Used by", "Size", "On GPU", "Context", "Unloads")):
             ttk.Label(self.loaded_frame, text=h, style="Card.Muted.TLabel").grid(row=0, column=c, sticky="w", padx=(0, 24))
-        for r, m in enumerate(self.loaded, start=1):
-            size, vram = int(m.get("size") or 0), int(m.get("size_vram") or 0)
-            gpu = f"{100 * vram / size:.0f}%" if size else "-"
-            try:
-                exp = datetime.fromisoformat(m["expires_at"])
-                left = (exp - datetime.now(timezone.utc)).total_seconds()
-                unloads = "never" if left > 86400 * 365 else (f"in {int(left // 60)} min" if left > 0 else "soon")
-            except (KeyError, ValueError, TypeError):
-                unloads = "-"
-            vals = (m.get("name", "?"), human_bytes(size), gpu, compact(m.get("context_length") or 0), unloads)
+        for r, m in enumerate(self.gpu_rows, start=1):
+            size = ("~" if m["estimate"] else "") + human_bytes(m["bytes"]) if m["bytes"] else "-"
+            vals = (m["name"], m["by"], size, m["gpu"], compact(m["context"]) if m["context"] else "-", m["unloads"])
             for c, v in enumerate(vals):
                 ttk.Label(self.loaded_frame, text=v, style="Card.TLabel").grid(row=r, column=c, sticky="w", padx=(0, 24), pady=2)
 
