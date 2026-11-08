@@ -1305,7 +1305,7 @@ class TrayApp:
         self.form = form
 
         groups = [("Models", "models"), ("Tracing and services", ("observability", "services")),
-                  ("Voice typing", "dictation"), ("Ollama runtime", "ollama_env")]
+                  ("Voice typing", "dictation"), ("Refine selected text", "refine"), ("Ollama runtime", "ollama_env")]
         self.setting_vars: dict[str, tk.Variable] = {}
         self.model_boxes: list[ttk.Combobox] = []
         self.changed_marks: dict[str, ttk.Label] = {}

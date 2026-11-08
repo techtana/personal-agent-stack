@@ -3,6 +3,8 @@ to text for Open WebUI's microphone.
 
     GET  /health                    -> {"ok": true, "state": "idle", "engine": "ready", "device": "cuda", ...}
     POST /toggle|start|stop|cancel|show|hide|quit
+    POST /refine|revert          refine the selection of the window in front (or put its original back), as the hotkey
+    POST /show_refine|hide_refine
     POST /v1/audio/transcriptions   OpenAI-compatible, with a bearer key (transcriptions.py)
 
 It listens on 127.0.0.1 only. A web page could still aim a request at 127.0.0.1 (cross-site request forgery, or DNS
@@ -24,7 +26,8 @@ from typing import Callable, Mapping
 
 from . import transcriptions
 
-ACTIONS = ("toggle", "start", "stop", "cancel", "show", "hide", "quit")
+ACTIONS = ("toggle", "start", "stop", "cancel", "show", "hide", "quit", "refine", "revert", "show_refine",
+           "hide_refine")
 LINGER_BYTES = 2 * transcriptions.MAX_BODY_BYTES  # what a refused upload may still send before the socket closes
 LINGER_S = 10.0
 
