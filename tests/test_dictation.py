@@ -423,5 +423,71 @@ class Integration(unittest.TestCase):
         self.assertEqual(dirs[0], str(Path(r"C:\venv") / "Lib" / "site-packages" / "nvidia" / "cublas" / "bin"))
 
 
+class Languages(unittest.TestCase):
+    def test_every_whisper_language_is_offered(self):
+        self.assertEqual(len(models.WHISPER_LANGUAGES), 100)
+        for code in ("en", "zh", "jw", "haw", "yue"):
+            self.assertIn(code, models.WHISPER_LANGUAGES)
+        codes = [code for code, _ in models.LANGUAGES]
+        self.assertEqual(codes[0], "auto")
+        self.assertEqual(sorted(codes[1:]), sorted(models.WHISPER_LANGUAGES))
+        names = [name for _, name in models.LANGUAGES[1:]]
+        self.assertEqual(names, sorted(names))
+        self.assertEqual(len(set(names)), len(names))
+        for code in models.ALIASES:
+            self.assertTrue(code == "auto" or code in models.WHISPER_LANGUAGES, code)
+
+    def test_matches_the_installed_faster_whisper(self):
+        try:
+            from faster_whisper.tokenizer import _LANGUAGE_CODES
+        except ImportError:
+            self.skipTest("faster-whisper is not installed in this environment (it is in the voice typing one)")
+        self.assertEqual(set(models.WHISPER_LANGUAGES), set(_LANGUAGE_CODES))
+
+    def test_search(self):
+        def codes(q):
+            return [c for c, _ in models.search(q)]
+
+        self.assertEqual(codes(""), [c for c, _ in models.LANGUAGES])
+        self.assertEqual(codes("en")[0], "en")             # the exact code first
+        self.assertIn("hy", codes("en"))                   # then names containing it (Armenian)
+        self.assertEqual(codes("ch")[0], "zh")             # a name that starts with it before ones containing it
+        self.assertEqual(codes("NOR"), ["no", "nn"])       # case-insensitive
+        self.assertEqual(codes("bokmal"), ["no"])          # other names, accents ignored
+        self.assertEqual(codes("farsi"), ["fa"])
+        self.assertEqual(codes("jv"), ["jw"])
+        self.assertEqual(codes("detect"), ["auto"])
+        self.assertEqual(codes("  port "), ["pt"])
+        self.assertEqual(codes("zzz"), [])
+        self.assertEqual(models.search("ital", [("it", "Italian"), ("de", "German")]), [("it", "Italian")])
+
+    def test_english_only_models(self):
+        for model in ("small.en", "medium.en", "distil-large-v3.5", "distil-whisper/distil-large-v3.5-ct2"):
+            self.assertEqual(models.languages_for(model), [models.AUTO, ("en", "English")], model)
+        self.assertEqual(len(models.languages_for("large-v3-turbo")), 101)
+
+    def test_names_and_validation(self):
+        self.assertEqual(models.language_name("en"), "English")
+        self.assertEqual(models.language_name("auto"), "Detect automatically")
+        self.assertEqual(models.language_name("xx"), "xx")
+        cfg = dictation.Config.from_profile({"dictation": {"language": "EN"}})
+        self.assertEqual(cfg.language, "en")
+        with mock.patch("stacklib.dictation.warn") as warned:
+            cfg = dictation.Config.from_profile({"dictation": {"language": "english"}})
+        self.assertEqual(cfg.language, "auto")
+        warned.assert_called_once()
+
+    def test_tray_setting_searches_all_languages(self):
+        s = next(s for s in settings.SETTINGS if settings.setting_id(s) == "dictation.language")
+        self.assertEqual(s.kind, "search")
+        self.assertEqual(s.choices[0], "auto")
+        self.assertEqual(len(s.choices), 101)
+        self.assertEqual(s.labels["en"], "English")
+        values = settings.current_values({"models": {}, "observability": {}, "services": {}, "ollama_env": {},
+                                          "dictation": {"language": "pt"}})
+        self.assertEqual(values["dictation.language"], "pt")
+        self.assertEqual(settings._to_file_value(s, "pt"), "pt")
+
+
 if __name__ == "__main__":
     unittest.main()

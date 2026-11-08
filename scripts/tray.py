@@ -1279,6 +1279,13 @@ class TrayApp:
                 if s.kind == "bool":
                     var: tk.Variable = tk.BooleanVar()
                     widget = ttk.Checkbutton(form, variable=var, text="On", command=self._settings_dirty)
+                elif s.kind == "search":
+                    # Too many values for a drop-down (100 languages): a button that opens the search picker.
+                    var = tk.StringVar()
+                    widget = ttk.Button(form, width=30)
+                    widget.configure(command=lambda s=s, v=var, b=widget: self._pick_setting(s, v, b))
+                    var.trace_add("write", lambda *_a, s=s, v=var, b=widget: b.configure(
+                        text=f"{s.labels.get(v.get(), v.get())}  ▾"))
                 else:
                     var = tk.StringVar()
                     widget = ttk.Combobox(form, textvariable=var, values=s.choices, state="readonly", width=30)
@@ -1313,6 +1320,24 @@ class TrayApp:
         self.apply_log = ttk.Label(bar, text="", style="HeadSub.TLabel", wraplength=820, justify="left")
         self.apply_log.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
         self._load_settings()
+
+    def _pick_setting(self, s, var: tk.StringVar, button: ttk.Button) -> None:
+        """Open the type-to-search picker under a "search" setting's button (voice typing's 100 languages)."""
+        from stacklib.dictation import models
+        from stacklib.dictation.picker import Picker
+
+        t = self.t
+        palette = {"bg": t["card"], "field": t["page"], "fg": t["ink"], "muted": t["muted"], "border": t["border"],
+                   "select_bg": t["accent"], "select_fg": t["accent_ink"], "accent": t["accent"]}
+        anchor = (button.winfo_rootx(), button.winfo_rooty(), button.winfo_width(), button.winfo_height())
+
+        def choose(code: str) -> None:
+            var.set(code)
+            self._settings_dirty()
+            button.focus_set()
+
+        Picker(self.window, [(c, s.labels.get(c, c)) for c in s.choices], var.get(), choose, models.search,
+               title=s.label, anchor=anchor, palette=palette)
 
     def _load_settings(self) -> None:
         self.profile = prof.resolve_profile(self.profile["name"])
