@@ -609,6 +609,28 @@ once across a session restart.
      by ear.
    - After merging: rerun install.cmd from the main checkout and tick Read aloud (or `uv run scripts/stack.py
      read-aloud install`), then Stop and Start the Voice typing row; the tray shows its new group after a restart.
+   - Same day, after the owner tried it (the speaker worked, the tray's Kokoro row said "Not available yet", it felt
+     slow): `read_aloud.device` auto|gpu|cpu (tray: Runs on; installer option). GPU = onnxruntime-gpu 1.31.1 (CUDA 13)
+     + nvidia-cudnn-cu13 9.28.1.4 (no deps) + Ollama's lib/ollama/cuda_v13, about 0.8 GB, added by `read-aloud
+     install` for gpu or auto on an NVIDIA PC (it stops voice typing while it swaps onnxruntime). Measured: 0.3-0.4 s
+     per sentence, 1.0 GB VRAM. DirectML failed on Kokoro's ConvTranspose. Pieces are sentence-sized and made ahead in
+     parallel (two on the CPU sharing six threads: 4.3x real time against 3.3x; one on the GPU), up to 30/60 s ahead,
+     one at a time while the CPU is over 85% busy; Kokoro loads while the selection is copied and on hover. Read it
+     again replays the last reading's audio from memory (64 MB cap), no model run. The tray's Kokoro row now shows
+     read aloud's state and carries Hide/Show speaker. Verified: unit tests (72 in tests/test_read_aloud.py, 599 in
+     total); the real Speech and Reader in a throwaway venv, sound into WAV files at real-time pace: first speech
+     0.85 s on the GPU and 1.74 s on the CPU, no gaps between the 7 pieces on either, replay made nothing. Not
+     verified: the tray row live.
+   - Same day, pauses: each sentence is its own piece, the voices' own silence is trimmed to 40 ms (Kokoro left 0.3 s
+     before and 0.4-0.7 s after each sentence), then read_aloud.pause_sentence_ms 300, pause_item_ms 600 (list items,
+     headings, table rows), pause_paragraph_ms 1000, and break_ms 1500 every break_every 5 sentences in a row within a
+     paragraph (tray: Read aloud > Show advanced). Measured in a WAV: 0.38 / 0.68 / 1.04 / 1.58 s.
+   - Found on this PC: C:\media\dictation\.venv has both onnxruntime and onnxruntime-gpu 1.31.1, the CPU build's files
+     on top, so CUDA is gone and Kokoro runs on the CPU. Cause: faster-whisper depends on `onnxruntime`, so a voice
+     typing install puts the CPU build back. Fixed in code: a mixed install counts as not installed, `read-aloud
+     install` removes the CPU build and reinstalls the GPU one, and the voice typing install restores the GPU build
+     after faster-whisper. Not run here: rerun `uv run scripts/stack.py read-aloud install` (it stops and restarts
+     voice typing).
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

@@ -20,7 +20,7 @@ from .dictation.cleanup import DEFAULT_PROMPT as CLEANUP_PROMPT  # noqa: E402
 from .dictation.hotkey import CHOICES as HOTKEY_CHOICES, MENU_CHOICES, READ_CHOICES, REFINE_CHOICES  # noqa: E402
 from .dictation.models import CHOICES as MODEL_CHOICES, LANGUAGES  # noqa: E402
 from .dictation.refine import BUILTIN as REFINE_STYLES  # noqa: E402
-from .dictation.speak import KOKORO_CHOICES, SPEEDS, voice_choices  # noqa: E402
+from .dictation.speak import DEVICES, KOKORO_CHOICES, SPEEDS, voice_choices  # noqa: E402
 
 VOICES = voice_choices()   # Kokoro's voices and this PC's Windows voices (from the registry)
 
@@ -135,11 +135,31 @@ SETTINGS = [
             [vid for vid, _ in VOICES], labels=dict(VOICES), show_code=False),
     Setting("read_aloud", "speed", "Speed", "choice", "How fast the voice reads; 1.0 is its normal pace.",
             "read_aloud", list(SPEEDS)),
+    Setting("read_aloud", "device", "Runs on", "choice",
+            "Where Kokoro makes speech. gpu: about 0.3 s per sentence and 1 GB of GPU memory (needs the GPU libraries, "
+            "which `stack.py read-aloud install` adds when this is gpu or auto on an NVIDIA PC). cpu: about 1.5 s per "
+            "sentence, no GPU memory. auto: the GPU when its libraries are installed. Applies at the next reading.",
+            "read_aloud", list(DEVICES)),
     Setting("read_aloud", "auto_language", "Voice per language", "bool",
             "Text clearly written in another language is read by a voice for that language, when one is available.",
             "read_aloud"),
     Setting("read_aloud", "button", "Show the read aloud button", "bool",
             "The speaker button next to the mic; the hotkey works without it.", "dictation"),
+    Setting("read_aloud", "pause_sentence_ms", "Pause after a sentence (ms)", "choice",
+            "Silence between sentences. The voices' own silence around each sentence is trimmed first, so this is "
+            "the whole gap.", "read_aloud", ["100", "200", "300", "400", "500", "700"], advanced=True),
+    Setting("read_aloud", "pause_item_ms", "Pause after a list item or heading (ms)", "choice",
+            "Silence after each bullet, numbered item, heading or table row.", "read_aloud",
+            ["300", "400", "600", "800", "1000", "1500"], advanced=True),
+    Setting("read_aloud", "pause_paragraph_ms", "Pause after a paragraph (ms)", "choice",
+            "Silence between paragraphs.", "read_aloud", ["500", "700", "1000", "1500", "2000", "3000"],
+            advanced=True),
+    Setting("read_aloud", "break_every", "Longer break every (sentences)", "choice",
+            "After this many sentences in a row, a longer break gives the listener a moment to take them in; a "
+            "paragraph break starts the count again. 0 = never.", "read_aloud",
+            ["0", "3", "4", "5", "6", "8", "10"], advanced=True),
+    Setting("read_aloud", "break_ms", "Longer break (ms)", "choice", "How long that break lasts.", "read_aloud",
+            ["1000", "1500", "2000", "2500", "3000"], advanced=True),
     Setting("read_aloud", "esc_stops", "Esc stops reading", "bool",
             "While it reads, Esc stops it, and other apps do not get Esc until it finishes.", "read_aloud",
             advanced=True),
@@ -246,6 +266,8 @@ def _to_file_value(s: Setting, ui_value: object) -> object:
         return int(float(ui_value))
     if s.section == "read_aloud" and s.key == "speed":
         return float(ui_value)
+    if s.section == "read_aloud" and (s.key.endswith("_ms") or s.key == "break_every"):
+        return int(float(ui_value))
     return str(ui_value)
 
 

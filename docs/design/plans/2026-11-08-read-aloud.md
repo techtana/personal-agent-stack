@@ -26,6 +26,11 @@ separate optional choice in the installer, handled gracefully when it is not ins
 | A8 | Controls | Hotkey Ctrl+Alt+S (free on the reference machine by RegisterHotKey probe) toggles; a click stops, or resumes a pause; Esc stops while it reads (`esc_stops`); right-click menu: pause, read it again, voice (search picker with a sample), speed, the language switch, hide | Same shape as refine. Esc is taken from other apps only during a reading. |
 | A9 | With dictation | Starting to dictate stops a reading; a reading waits while you dictate | The microphone would hear the voice. |
 | A10 | Records | One usage record per reading (source `read-aloud`, kind `speech`): seconds of speech, the time the voice worked, load time, phoneme tokens, voice, language, speed, whether it was stopped; the wall clock ends when the last piece is made, not when playback ends. Nothing about the text, and nothing on disk but that | The Usage tab already shows speech rows in seconds and times real time (AGENTS.md rule 11). |
+| A11 | GPU or CPU (asked 2026-11-08) | `read_aloud.device` auto, gpu or cpu. GPU through onnxruntime-gpu 1.31.1 (CUDA 13) with cuDNN 9.28 for CUDA 13 (`nvidia-cudnn-cu13`, installed without dependencies) and the CUDA 13 runtime and cuBLAS that Ollama ships in `lib/ollama/cuda_v13`; onnxruntime-gpu replaces onnxruntime in voice typing's environment (it includes the CPU provider, and the VAD asks for the CPU). Installed by `read-aloud install` for gpu, or auto on an NVIDIA PC (about 0.8 GB). fp32 only on the GPU. A failed GPU run (out of memory) moves Kokoro to the CPU until voice typing restarts | DirectML (any GPU, one 20 MB wheel) failed on Kokoro's ConvTranspose layers ("The parameter is incorrect"). onnxruntime-gpu's own dependency tree would add cuBLAS 13 again (0.64 GB) that Ollama already ships. int8 on CUDA ran 5-6x real time, slower than fp32 (12-20x). |
+| A12 | Less waiting (asked 2026-11-08) | Sentence-sized pieces (first up to 120 characters, later up to 160, joining short sentences), so no piece takes long to make; the first is made alone, then later pieces by worker threads (two on the CPU sharing Kokoro's six threads, one on the GPU) and handed to the player in order, up to 30 s of speech ahead on the CPU and 60 s on the GPU. While the processors are more than 85% busy (GetSystemTimes), one at a time and one ahead. Kokoro loads while the selection is copied, and when the pointer rests on the speaker button | Pieces of up to 320 characters made one at a time left a 3-4 s silence after the first sentence on the CPU. Two sessions for two workers would double the memory; two concurrent runs on one session (4.3x real time against 3.3x) use no more threads. Three runs (5.0x) would take the processors from other programs. |
+| A13 | Read it again (asked 2026-11-08) | The last reading's audio stays in memory (up to 64 MB, about 23 minutes) keyed by its text, voice, speed and weights; Read it again replays it and makes only pieces that are missing (a reading stopped partway). A replay writes no usage record. Never on disk | Re-running the model for the same text was wasted work. |
+| A14 | The tray's Kokoro row (asked 2026-11-08) | While the standalone Kokoro service is off, the Kokoro row shows read aloud (from voice typing's /health): off, not installed, starts with voice typing, ready, loaded on the GPU or CPU, reading, paused, failed; it carries Hide/Show speaker and has no Start button | The row said "Not available yet" while read aloud was using Kokoro. |
+| A15 | Pauses (asked 2026-11-08: the gap after a sentence felt slightly long, after a paragraph too short) | Each sentence is its own piece; the voices' own silence is trimmed to 40 ms each side (Kokoro left 0.25-0.36 s before and 0.4-0.7 s after a sentence, Zira 0.1 s and 0.77 s, so a sentence gap was about 0.8 s and a paragraph only 0.35 s more); then `pause_sentence_ms` 300, `pause_item_ms` 600 (list items, headings, table rows, marked in the speech text), `pause_paragraph_ms` 1000, and `break_ms` 1500 every `break_every` 5 sentences in a row within a paragraph; 120 ms between the parts of a sentence split at a comma. Tray: Read aloud > Show advanced | Joining short sentences into one piece let Kokoro choose the pause between them, which the settings could not change. |
 
 ## Measurements (the reference machine, 2026-11-08)
 
@@ -44,6 +49,19 @@ separate optional choice in the installer, handled gracefully when it is not ins
   the tray's side; three usage records.
 - WinMM player with silence (inaudible): three 0.5 s pieces started 0.5 s apart and ended after 1.56 s; stop took
   11 ms.
+
+- GPU (2026-11-08, throwaway venv with onnxruntime-gpu 1.31.1, cuDNN 9.28.1.4 for CUDA 13, Ollama's cuda_v13): 18.6 s
+  of speech in 0.86 s (fp32, warm), 0.3-0.4 s per sentence, the first of a new length up to 0.7 s; 1.0 GB of GPU
+  memory (9.0 of 12 GB on the card with the 9B and Whisper loaded). The parallel reader on the GPU: first speech
+  0.85 s after the request with Kokoro loaded, no waiting between the 7 pieces of a 751-character text (47 s of speech
+  made in 3.3 s); Read it again started at once and made nothing. The same on the CPU (two workers, Kokoro loaded
+  first): first speech after 1.74 s, again no waiting between pieces.
+- CPU parallelism (12 logical processors): one run at a time with 6 threads 3.3x real time, with 3 threads 2.2x; two
+  runs at once sharing 6 threads 4.3x, three 5.0x; two runs on 3 threads each 3.5x.
+
+- Pauses (CPU, Heart, through `dictation speak` in voice typing's environment): measured silences 0.38 s after a
+  sentence, 0.68 s after a list item, 1.04-1.08 s after a paragraph and 1.58 s for the break after the fifth
+  sentence (each setting plus the two 40 ms margins).
 
 ## Not verified
 

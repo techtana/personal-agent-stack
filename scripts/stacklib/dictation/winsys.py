@@ -619,3 +619,45 @@ def sequence() -> int:
 def clipboard_busy() -> bool:
     """True while some window has the clipboard open (for example the target, reading what we pasted)."""
     return bool(user32.GetOpenClipboardWindow())
+
+
+# ---------------------------------------------------------------- processor load
+
+class _FILETIME(ctypes.Structure):
+    _fields_ = [("lo", wintypes.DWORD), ("hi", wintypes.DWORD)]
+
+
+_sig(kernel32.GetSystemTimes, (ctypes.POINTER(_FILETIME), ctypes.POINTER(_FILETIME), ctypes.POINTER(_FILETIME)),
+     wintypes.BOOL)
+
+
+def _ft(t: _FILETIME) -> int:
+    return (t.hi << 32) | t.lo
+
+
+class CpuLoad:
+    """How busy all processors are, from GetSystemTimes between two calls at least `every` seconds apart (read aloud
+    asks before preparing each piece ahead, so it backs off while something else needs the PC)."""
+
+    def __init__(self, every: float = 0.5) -> None:
+        self.every = every
+        self.lock = threading.Lock()
+        self.last: tuple[float, int, int] | None = None   # (time, idle, total)
+        self.value = 0.0
+
+    def busy_share(self) -> float:
+        with self.lock:
+            now = time.monotonic()
+            if self.last is not None and now - self.last[0] < self.every:
+                return self.value
+            idle, kernel, user = _FILETIME(), _FILETIME(), _FILETIME()
+            if not kernel32.GetSystemTimes(ctypes.byref(idle), ctypes.byref(kernel), ctypes.byref(user)):
+                return self.value
+            i, total = _ft(idle), _ft(kernel) + _ft(user)   # kernel time includes idle time
+            if self.last is not None and total > self.last[2]:
+                self.value = 1.0 - (i - self.last[1]) / (total - self.last[2])
+            self.last = (now, i, total)
+            return self.value
+
+    def busy(self, threshold: float = 0.85) -> bool:
+        return self.busy_share() >= threshold

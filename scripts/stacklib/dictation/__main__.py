@@ -128,7 +128,7 @@ def cmd_speak(a, profile: dict) -> int:
     file, and say how long each piece took. One usage record, client Stack scripts."""
     from . import speak, tts
     from .player import Player
-    from .reader import PARAGRAPH_GAP_S, SENTENCE_GAP_S, silence
+    from .reader import silence
 
     def note(msg: str) -> None:
         print(msg, file=sys.stderr, flush=True)
@@ -161,11 +161,13 @@ def cmd_speak(a, profile: dict) -> int:
     note(f"voice {voice.label}" + (f" ({why})" if why else ""))
     t0 = time.monotonic()
     pcm, audio_s, run_s, load_s, tokens = bytearray(), 0.0, 0.0, 0.0, 0
+    run = 0
     for i, piece in enumerate(speak.pieces(clean)):
         audio = speech.synth(piece.text, voice, cfg.speed, cfg)
         note(f"  piece {i + 1}: {audio.seconds:5.2f} s of speech in {audio.run_s:.2f} s"
              f"{f' (+{audio.load_s:.1f} s loading)' if audio.load_s else ''}: {piece.text[:70]}")
-        pcm += audio.pcm + silence(PARAGRAPH_GAP_S if piece.paragraph_end else SENTENCE_GAP_S)
+        pause, run = speak.pause_after(piece, cfg, run)
+        pcm += audio.pcm + silence(pause)
         audio_s, run_s, load_s, tokens = audio_s + audio.seconds, run_s + audio.run_s, load_s + audio.load_s, tokens + audio.tokens
     speech.record(voice, cfg, audio_s=audio_s, run_s=run_s, load_s=load_s, tokens=tokens,
                   wall_s=time.monotonic() - t0, stopped=False, client="Stack scripts")

@@ -263,7 +263,9 @@ class App:
                              voices=self.speech.voices, synth=self.speech.synth, ready=self.speech.ready,
                              player=playback.make, esc=self._read_esc, busy_elsewhere=self._dictating,
                              record=self.speech.record, logline=log, elevated=winsys.self_elevated(),
-                             hotkey_text=self.read_hotkey_text, missing=self.speech.missing)
+                             hotkey_text=self.read_hotkey_text, missing=self.speech.missing, warm=self.speech.warm,
+                             workers=self.speech.workers, lookahead_s=self.speech.lookahead_s,
+                             pc_busy=winsys.CpuLoad().busy)
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -1088,6 +1090,11 @@ class App:
 
     def read_enabled(self) -> bool:
         return self.scfg.enabled
+
+    def read_warm(self) -> None:
+        """The pointer rests on the speaker button: load Kokoro in the background, so a click reads at once."""
+        if self.scfg.enabled and not self.reader.busy:
+            self._run_off_ui(self.speech.warm, self.scfg)
 
     def read_voice_id(self) -> str:
         return self.scfg.voice

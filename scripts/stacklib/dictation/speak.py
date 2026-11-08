@@ -57,6 +57,7 @@ LANGUAGE_NAMES = {
 }
 SPEEDS = ("0.75", "0.9", "1.0", "1.1", "1.25", "1.5", "1.75", "2.0")
 KOKORO_CHOICES = ("fp32", "int8", "off")
+DEVICES = ("auto", "gpu", "cpu")   # where Kokoro runs: auto = the GPU when its CUDA libraries are installed
 
 
 @dataclass(frozen=True)
@@ -121,7 +122,13 @@ class Config:
     button: bool = True
     esc_stops: bool = True
     kokoro: str = "fp32"          # fp32 | int8 | off (Windows voices only)
+    device: str = "auto"          # auto | gpu | cpu
     max_chars: int = 20000
+    pause_sentence_ms: int = 300  # silence after a sentence (the voices' own silence is trimmed first)
+    pause_item_ms: int = 600      # after a list item, a heading or a table row
+    pause_paragraph_ms: int = 1000
+    break_every: int = 5          # a longer break after this many sentences in a row (0 = never)
+    break_ms: int = 1500
     unload_after_min: float = 30.0
     voices: dict = field(default_factory=dict)   # language family -> voice id, for auto_language
 
@@ -154,11 +161,18 @@ class Config:
             cfg.speed = 1.0
         cfg.speed = min(max(cfg.speed, 0.5), 2.0)
         cfg.max_chars = min(max(cfg.max_chars, 200), 200000)
+        for name in ("pause_sentence_ms", "pause_item_ms", "pause_paragraph_ms", "break_ms"):
+            setattr(cfg, name, min(max(getattr(cfg, name), 0), 5000))
+        cfg.break_every = min(max(cfg.break_every, 0), 50)
         cfg.unload_after_min = min(max(cfg.unload_after_min, 0.0), 1440.0) if math.isfinite(cfg.unload_after_min) else 30.0
         cfg.kokoro = cfg.kokoro.lower()
         if cfg.kokoro not in KOKORO_CHOICES:
             warn(f"read_aloud.kokoro: {cfg.kokoro!r} is not one of {', '.join(KOKORO_CHOICES)}; using 'fp32'")
             cfg.kokoro = "fp32"
+        cfg.device = cfg.device.lower()
+        if cfg.device not in DEVICES:
+            warn(f"read_aloud.device: {cfg.device!r} is not one of {', '.join(DEVICES)}; using 'auto'")
+            cfg.device = "auto"
         if not cfg.voice:
             cfg.voice = cls.voice
         return cfg
@@ -284,6 +298,15 @@ def _host(m: re.Match) -> str:
     return host
 
 
+ITEM = "\u2022 "   # starts a speech-text line that was a list item, a heading or a table row
+_NUMBERED = re.compile(r"^\d{1,3}[.)]\s")
+
+
+def _is_item(s: str) -> bool:
+    return bool(_HEADING.match(s) or re.match(r"^(?:[-*+\u2022\u25aa\u25e6]\s+)", s) or _CHECKBOX.match(s)
+                or _NUMBERED.match(s) or (s.count("|") >= 2 and s.startswith("|")))
+
+
 def _line(s: str) -> str:
     s = _HEADING.sub("", s)
     s = _BULLET.sub("", s)
@@ -304,7 +327,8 @@ def _line(s: str) -> str:
 
 def speech_text(text: str) -> str:
     """Selected text as it should be read: markup off, one item or paragraph per line, every line ending in a
-    punctuation mark so the voice pauses between list items and headings, blank lines kept as paragraph breaks."""
+    punctuation mark, blank lines kept as paragraph breaks. Lines that were list items, headings or table rows start
+    with ITEM, so the reader pauses after them as after an item (read_aloud.pause_item_ms), not a paragraph."""
     t = (text or "").replace("\r\n", "\n").replace("\r", "\n").replace("\x0b", "\n").replace("\u2028", "\n")
     t = t.replace("\u2029", "\n\n").replace("\xa0", " ").replace("\u200b", "")
     lines: list[str] = []
@@ -316,12 +340,15 @@ def speech_text(text: str) -> str:
             continue
         if _PROPERTY.match(s) or _RULE.fullmatch(s) or _FENCE.match(s):
             continue
+        item = _is_item(s)
         s = _line(s)
+        if s.startswith(ITEM.strip()):
+            s, item = s[1:].strip(), True
         if not s or not any(ch.isalnum() for ch in s):
             continue
         if not _ENDS_SENTENCE.search(s):
             s += "."
-        lines.append(s)
+        lines.append(ITEM + s if item else s)
     while lines and not lines[-1]:
         lines.pop()
     return "\n".join(lines)
@@ -344,15 +371,20 @@ ABBREVIATIONS = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc",
                  "sgt", "capt", "lt", "col", "cmdr", "adm", "hon", "u.s", "u.k", "a.m", "p.m"}
 _END = re.compile(r"[.!?…]+[\"”’)\]]*(?=\s)|[。！？]+[」』”）]*")
 _CLAUSE = re.compile(r"(?<=[,;:—–])\s+|(?<=\))\s+")
-FIRST_CHARS = 180    # the first piece: short, so the voice starts quickly
-PIECE_CHARS = 320    # later pieces join sentences up to about this long (Kokoro reads up to 510 phonemes at once)
-HARD_CHARS = 420     # longer sentences are split at commas, then between words
+FIRST_CHARS = 120    # the first piece: one short sentence or clause, so the voice starts quickly
+HARD_CHARS = 260     # longer sentences are split at commas, then between words
+CLAUSE_PAUSE_MS = 120   # between the parts of a sentence split at a comma
+ENDS = ("clause", "sentence", "item", "paragraph")
 
 
 @dataclass(frozen=True)
 class Piece:
     text: str
-    paragraph_end: bool = False   # a longer pause follows
+    end: str = "sentence"   # what this piece ends: clause | sentence | item | paragraph (which pause follows)
+
+    @property
+    def paragraph_end(self) -> bool:
+        return self.end in ("item", "paragraph")
 
 
 def sentences(paragraph: str) -> list[str]:
@@ -365,6 +397,8 @@ def sentences(paragraph: str) -> list[str]:
             w = word.group(1).lower() if word else ""
             if w in ABBREVIATIONS or (len(w) == 1 and w.isalpha()):
                 continue
+            if w.isdigit() and len(w) <= 3 and paragraph[start:m.start()].strip() == w:
+                continue   # a list number ("1. Buy milk"), not a sentence
         piece = paragraph[start:m.end()].strip()
         if piece:
             out.append(piece)
@@ -401,32 +435,45 @@ def _split_long(sentence: str, limit: int) -> list[str]:
 
 
 def pieces(text: str) -> list[Piece]:
-    """Speech text (speech_text) in the pieces the voice reads one at a time: the first is one short sentence, later
-    ones join the sentences of a paragraph up to PIECE_CHARS; no piece crosses a paragraph or list item."""
+    """Speech text (speech_text) in the pieces the voice reads one at a time: a sentence each, so the pause after
+    every sentence is the one configured (read_aloud.pause_*), not the voice's own. The first piece is at most
+    FIRST_CHARS (its first clause when the sentence is longer), so the voice starts quickly; longer sentences are
+    split at commas. Each piece says what it ends: a clause, a sentence, a list item or a paragraph."""
     out: list[Piece] = []
-    for paragraph in (text or "").split("\n"):
-        paragraph = paragraph.strip()
-        if not paragraph:
+    for line in (text or "").split("\n"):
+        line = line.strip()
+        item = line.startswith(ITEM.strip())
+        line = line[1:].strip() if item else line
+        if not line:
             continue
-        units: list[str] = []
-        for s in sentences(paragraph):
-            units.extend(_split_long(s, FIRST_CHARS if not out and not units else HARD_CHARS))
-        current = ""
-        for u in units:
-            limit = FIRST_CHARS if not out else PIECE_CHARS
-            if current and len(current) + 1 + len(u) > limit:
-                out.append(Piece(current))
-                current = u
-            elif not out and current:          # the very first piece is a single sentence
-                out.append(Piece(current))
-                current = u
-            else:
-                current = f"{current} {u}".strip()
-        if current:
-            out.append(Piece(current))
-        if out:
-            out[-1] = Piece(out[-1].text, True)
+        said = sentences(line)
+        for k, sentence in enumerate(said):
+            parts = _split_long(sentence, FIRST_CHARS if not out else HARD_CHARS)
+            for j, part in enumerate(parts):
+                if j < len(parts) - 1:
+                    end = "clause"
+                elif k < len(said) - 1:
+                    end = "sentence"
+                else:
+                    end = "item" if item else "paragraph"
+                out.append(Piece(part, end))
     return out
+
+
+def pause_after(piece: Piece, cfg: Config, run: int) -> tuple[float, int]:
+    """(seconds of silence after `piece`, sentences in a row since the last long pause). Every break_every sentences
+    in a row within a paragraph the pause grows to break_ms, a moment to take in what was said; the end of a paragraph
+    or a list item starts the count again."""
+    if piece.end == "clause":
+        return CLAUSE_PAUSE_MS / 1000, run
+    ms = {"sentence": cfg.pause_sentence_ms, "item": cfg.pause_item_ms,
+          "paragraph": cfg.pause_paragraph_ms}.get(piece.end, cfg.pause_sentence_ms)
+    run += 1
+    if cfg.break_every and run >= cfg.break_every:
+        ms, run = max(ms, cfg.break_ms), 0
+    elif piece.end in ("paragraph", "item"):
+        run = 0   # a paragraph or list item ends with a rest of its own: the count is for sentences in a row
+    return ms / 1000, run
 
 
 # ---------------------------------------------------------------- language

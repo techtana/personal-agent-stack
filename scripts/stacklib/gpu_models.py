@@ -4,7 +4,7 @@ Whisper and ComfyUI's image models. Each comes from its own service, because no 
 - Ollama: GET /api/ps (exact sizes and the share on the GPU);
 - voice typing: GET /health on its control port (model, device, idle time). faster-whisper does not report its
   memory, so the size is the figure measured for that model (features.WHISPER, 1.2 GB for large-v3-turbo). The same
-  answer says when read aloud's Kokoro is loaded; it runs on the CPU, so its row says CPU and holds no GPU memory;
+  answer says when read aloud's Kokoro is loaded, on the GPU (1.0 GB measured) or the CPU (no GPU memory);
 - ComfyUI: GET /system_stats, whose torch_vram_total is the GPU memory ComfyUI's own torch holds (models plus cache).
 
 The recordings server for Claude Desktop runs its own Whisper inside Claude Desktop's process tree and has no port to
@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 GIB = 2**30
 COMFY_MIN_BYTES = 256 * 2**20   # below this ComfyUI holds only its CUDA context, not a model
+KOKORO_GPU = 1.0                # GB read aloud's Kokoro holds on the GPU (measured 2026-11-08 on an RTX 3060)
 
 
 def _unloads_ollama(expires_at: str | None, now: datetime) -> str:
@@ -69,8 +70,9 @@ def _kokoro_row(health: dict | None) -> dict | None:
     read = health.get("read_aloud") if isinstance(health, dict) else None
     if not isinstance(read, dict) or read.get("engine") != "ready":
         return None
-    return {"name": str(read.get("model") or "kokoro-82m"), "by": "Read aloud", "bytes": 0, "estimate": True,
-            "gpu": "CPU", "context": 0, "unloads": _unloads_after(read)}
+    on_gpu = read.get("device") == "cuda"
+    return {"name": str(read.get("model") or "kokoro-82m"), "by": "Read aloud", "bytes": int(KOKORO_GPU * GIB) if on_gpu else 0,
+            "estimate": True, "gpu": "100%" if on_gpu else "CPU", "context": 0, "unloads": _unloads_after(read)}
 
 
 def _comfy_row(stats: dict | None, label: str = "") -> dict | None:

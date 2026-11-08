@@ -45,6 +45,13 @@ READ_PACKAGES = (
     "espeakng-loader==0.2.4",   # espeak-ng 1.52 (DLL and data, GPL-3.0); loaded under Smart App Control 2026-11-08
     "comtypes==1.4.17",         # pure Python COM, for Windows' own voices (SAPI)
 )
+# Read aloud on the GPU (read_aloud.device gpu, or auto on a PC with an NVIDIA card): onnxruntime-gpu in place of
+# onnxruntime, built for CUDA 13, and cuDNN 9 for CUDA 13 without its dependencies (cuBLAS 13 and the CUDA runtime come
+# from Ollama's lib/ollama/cuda_v13). About 0.8 GB. Measured 2026-11-08: 12-20x real time on an RTX 3060, 1.0 GB VRAM.
+READ_GPU_PACKAGES = ("onnxruntime-gpu==1.31.1", "nvidia-cudnn-cu13==9.28.1.4")
+READ_GPU_CHECK = ("import onnxruntime, sys; from stacklib.dictation import gpu; "
+                  "ok = 'CUDAExecutionProvider' in onnxruntime.get_available_providers() and gpu.add_kokoro_cuda_dlls(); "
+                  "print('cuda' if ok else 'missing'); sys.exit(0 if ok else 3)")
 # Loads espeak-ng's DLL too: Smart App Control judges a DLL when it loads, not when the package installs.
 READ_CHECK = ("import ctypes, comtypes, espeakng_loader, onnxruntime, numpy; "
               "ctypes.cdll.LoadLibrary(espeakng_loader.get_library_path()); print('ok')")
@@ -266,7 +273,12 @@ def install(profile: dict, report=lambda *a: None, download_model: bool = True) 
         target.mkdir(parents=True, exist_ok=True)
         _run([uv, "venv", *(["--python", base] if base else []), target / ".venv"], env=env)
     report("installing faster-whisper and its libraries")
-    _run([uv, "pip", "install", "--python", python, *PACKAGES], env=env)
+    # Read aloud's GPU option replaced onnxruntime with onnxruntime-gpu (same module, CPU included): keep it.
+    packages = [READ_GPU_PACKAGES[0] if pkg.startswith("onnxruntime==") and read_aloud_gpu_installed(profile) else pkg
+                for pkg in PACKAGES]
+    _run([uv, "pip", "install", "--python", python, *packages], env=env)
+    if packages != list(PACKAGES):
+        _restore_gpu_runtime(profile, uv, python, env, report)   # faster-whisper pulled the CPU build back in
     check = subprocess.run([str(python), "-c", IMPORT_CHECK], capture_output=True, text=True, check=False)
     if check.returncode:
         tail = (check.stderr or "").strip().splitlines()[-1:] or ["no output"]
@@ -324,9 +336,71 @@ def read_aloud_installed(profile: dict) -> bool:
     return kokoro_cached(profile, ReadConfig.from_profile(profile).kokoro)
 
 
+def _cpu_runtime(site: Path) -> bool:
+    return any(site.glob("onnxruntime-*.dist-info"))
+
+
+def read_aloud_gpu_installed(profile: dict) -> bool:
+    """onnxruntime-gpu and cuDNN are in voice typing's environment (read aloud's GPU option), and the CPU build is not
+    there beside it: both install into the same onnxruntime folder, and whichever came last owns the files."""
+    site = _site_packages(profile)
+    return (any(site.glob("onnxruntime_gpu-*.dist-info")) and not _cpu_runtime(site)
+            and (site / "nvidia" / "cudnn" / "bin" / "cudnn64_9.dll").exists())
+
+
+def _restore_gpu_runtime(profile: dict, uv: str, python: Path, env: dict, report) -> None:
+    """Put onnxruntime-gpu's files back after something installed the CPU onnxruntime over them. faster-whisper
+    depends on `onnxruntime`, which onnxruntime-gpu does not satisfy, so every voice typing install pulls the CPU
+    build in again (seen on the reference machine, 2026-11-08: both installed, CUDA gone)."""
+    site = _site_packages(profile)
+    if not _cpu_runtime(site):
+        return
+    report("putting ONNX Runtime for CUDA back (the CPU build was installed over it)")
+    _run([uv, "pip", "uninstall", "--python", python, "onnxruntime"], env=env)
+    _run([uv, "pip", "install", "--python", python, "--reinstall", "--no-deps", READ_GPU_PACKAGES[0]], env=env)
+
+
+def wants_gpu(profile: dict) -> bool:
+    """read_aloud.device gpu, or auto on a PC with an NVIDIA card (nvidia-smi, or the GPU `stack.py doctor` saw)."""
+    from .speak import Config as ReadConfig
+
+    device = ReadConfig.from_profile(profile).device
+    if device != "auto":
+        return device == "gpu"
+    return bool(which("nvidia-smi")) or float((profile.get("detected") or {}).get("vram_mib") or 0) > 0
+
+
+def _install_gpu(profile: dict, uv: str, python: Path, env: dict, report) -> str:
+    """Swap onnxruntime for onnxruntime-gpu and add cuDNN 9, with voice typing stopped while its DLLs are replaced
+    (Windows keeps a loaded DLL locked), then start it again if it was running."""
+    from .. import services
+
+    was_up = bool(next((r for r in services.status(profile) if r["service"] == "dictation"), {}).get("healthy"))
+    if was_up:
+        report("stopping voice typing while its ONNX Runtime is replaced")
+        services.stop(profile, ["dictation"])
+    try:
+        report("installing ONNX Runtime for CUDA and cuDNN 9 (about 0.8 GB) for read aloud on the GPU")
+        site = _site_packages(profile)
+        if _cpu_runtime(site):
+            _run([uv, "pip", "uninstall", "--python", python, "onnxruntime"], env=env)
+        _run([uv, "pip", "install", "--python", python, "--reinstall", READ_GPU_PACKAGES[0]], env=env)
+        _run([uv, "pip", "install", "--python", python, "--no-deps", READ_GPU_PACKAGES[1]], env=env)
+    finally:
+        if was_up:
+            services.start(profile, ["dictation"])
+    check = subprocess.run([str(python), "-P", "-c", READ_GPU_CHECK], capture_output=True, text=True, check=False,
+                           env=app_env(profile, env))
+    if check.returncode:
+        return ("GPU libraries installed, but CUDA did not start here (Ollama's lib/ollama/cuda_v13 is needed); "
+                "Kokoro runs on the CPU")
+    return "Kokoro can run on the GPU (CUDA)"
+
+
 def install_read_aloud(profile: dict, report=lambda *a: None) -> str:
-    """Add read aloud to voice typing's environment: espeak-ng and comtypes, a check that espeak-ng's DLL loads, and
-    Kokoro's weights and voices in the Hugging Face cache (about 0.35 GB for fp32; nothing with read_aloud.kokoro off)."""
+    """Add read aloud to voice typing's environment: espeak-ng and comtypes, a check that espeak-ng's DLL loads, the
+    GPU libraries when wants_gpu() (about 0.8 GB), and Kokoro's weights and voices in the Hugging Face cache (about
+    0.35 GB for fp32; nothing with read_aloud.kokoro off)."""
     from .speak import Config as ReadConfig
 
     if not installed(profile):
@@ -347,6 +421,9 @@ def install_read_aloud(profile: dict, report=lambda *a: None) -> str:
         raise RuntimeError(f"read aloud's packages do not load ({tail[0]}).{hint}")
     notes = ["espeak-ng and comtypes installed"]
     variant = ReadConfig.from_profile(profile).kokoro
+    if variant == "fp32" and wants_gpu(profile):
+        notes.append("GPU libraries already installed" if read_aloud_gpu_installed(profile)
+                     else _install_gpu(profile, uv, python, env, report))
     if variant == "off":
         notes.append("Kokoro is off (read_aloud.kokoro): Windows voices only")
     elif kokoro_cached(profile, variant):

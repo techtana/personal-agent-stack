@@ -543,8 +543,16 @@ class TrayApp:
         threading.Thread(target=run, daemon=True).start()
 
     # ---------- tray menu ----------
+    def _kokoro_in_app(self, svc: str) -> bool:
+        """The Kokoro row shows read aloud (Kokoro inside voice typing) while the standalone Kokoro service is off."""
+        return svc == "kokoro" and svc not in self.managed
+
     def _status_text(self, svc: str):
         def text(_item) -> str:
+            if self._kokoro_in_app(svc):
+                state = features.read_aloud_row(self.profile, self.dictation_health,
+                                                self.feature_status.get("read_aloud"))[1]
+                return f"{LABELS[svc]} (read aloud): {state.lower()}"
             row, pending = self.rows.get(svc), self.pending.get(svc)
             if pending:
                 mark = "starting..." if pending[0] == "start" else "stopping..."
@@ -850,7 +858,11 @@ class TrayApp:
             names = ttk.Frame(card, style="Card.TFrame")
             names.grid(row=i, column=1, sticky="w")
             ttk.Label(names, text=LABELS[svc], style="Card.TLabel", font=(FONT, 10, "bold")).pack(anchor="w")
-            ttk.Label(names, text=f"{ROLES[svc]}  ·  port {self.profile['ports'][svc]}", style="Card.Muted.TLabel").pack(anchor="w")
+            if self._kokoro_in_app(svc):   # read aloud runs Kokoro inside voice typing: no port of its own
+                role = features.read_aloud_row(self.profile, None)[2]
+            else:
+                role = f"{ROLES[svc]}  ·  port {self.profile['ports'][svc]}"
+            ttk.Label(names, text=role, style="Card.Muted.TLabel").pack(anchor="w")
             state = ttk.Label(card, text="", style="Card.Sub.TLabel", width=-18)  # at least 18 characters, grows to fit
             state.grid(row=i, column=2, sticky="w", padx=8)
             buttons = ttk.Frame(card, style="Card.TFrame")
@@ -865,11 +877,13 @@ class TrayApp:
                 self.refine_btn = ttk.Button(buttons, text="Hide pencil", width=11,
                                              command=lambda: self.set_refine_button(not self.refine_button))
                 self.refine_btn.pack(side="left", padx=2)
+            if svc == "kokoro":
+                # Read aloud's speaker button lives with its voice, on the Kokoro row.
                 self.read_btn = ttk.Button(buttons, text="Hide speaker", width=12,
                                            command=lambda: self.set_read_button(not self.read_button))
                 self.read_btn.pack(side="left", padx=2)
             toggle = ttk.Button(buttons, text="Stop", width=7, command=lambda s=svc: self.toggle(s))
-            if svc != "ollama":
+            if svc != "ollama" and not self._kokoro_in_app(svc):   # read aloud starts and stops with voice typing
                 toggle.pack(side="left", padx=2)
             self.row_widgets[svc] = (dot, state, toggle)
             reason = ttk.Label(card, text="", style="Bad.TLabel", wraplength=560, justify="left")
@@ -988,6 +1002,12 @@ class TrayApp:
         t = self.t
         up = 0
         for svc, (dot, state, toggle) in self.row_widgets.items():
+            if self._kokoro_in_app(svc):
+                level, text, _role = features.read_aloud_row(self.profile, self.dictation_health,
+                                                             self.feature_status.get("read_aloud"))
+                dot.configure(fg=t[{"off": "muted"}.get(level, level)])
+                state.configure(text=text, style="Warn.TLabel" if level in ("warn", "bad") else "Card.Sub.TLabel")
+                continue
             row = self.rows.get(svc, {})
             healthy = bool(row.get("healthy"))
             enabled = svc == "ollama" or svc in self.managed
