@@ -212,6 +212,16 @@ class Installer:
         except Exception:  # noqa: BLE001 - the list is optional; Ollama may be off and its folder unreadable
             unused = []
         self.model_vars = {m.name: (tk.BooleanVar(value=False), m) for m in unused}
+        # More read aloud voices (Piper): ticked when the profile names them or they are downloaded already.
+        from stacklib import dictation
+        from stacklib.dictation import speak
+
+        try:
+            have = set(dictation.installed_packs(self.profile))
+        except Exception:  # noqa: BLE001 - optional: the boxes start unticked
+            have = set()
+        named = set((self.profile.get("read_aloud") or {}).get("packs") or [])
+        self.pack_vars = {k: tk.BooleanVar(value=k in have or k in named) for k in speak.PIPER_VOICES}
         self.option_vars = {k: tk.StringVar(value=v) for k, v in d["options"].items()}   # (section, key) -> value
         self.store = tk.StringVar(value=d["model_store"])
         self.tools = tk.StringVar(value=d["tool_dir"])
@@ -225,6 +235,22 @@ class Installer:
         for v in (self.store, self.tools, self.media_root):
             v.trace_add("write", lambda *_: self.validate())
         self._check_checkout()
+
+    def packs(self) -> list[str]:
+        """The read aloud voices ticked (config/installer.yaml voice_packs keys)."""
+        return [k for k, v in getattr(self, "pack_vars", {}).items() if v.get()]
+
+    def packs_changed(self):
+        """A voice needs read aloud, and read aloud voice typing: ticking one ticks them; the estimates follow."""
+        if self.packs():
+            for fid in ("read_aloud", *features.BY_ID["read_aloud"].requires):
+                if fid in self.feature_vars and not features.locked(fid, self.d["features"]):
+                    self.feature_vars[fid].set(True)
+                    if fid in self.remove_vars:
+                        self.remove_vars[fid].set(False)
+            self._mark_removals()
+        self.option_changed()
+        self.show_detail("read_aloud")
 
     def chosen(self) -> set[str]:
         return {fid for fid, v in self.feature_vars.items() if v.get()} - self.to_remove()
@@ -246,6 +272,7 @@ class Installer:
         """A model or setting changed: estimate again with it, as if it were in the profile already."""
         d = self.d
         planned = features.with_options(self.profile, self.options())
+        planned["read_aloud"] = {**(planned.get("read_aloud") or {}), "packs": self.packs()}
         d["estimates"] = features.estimates(planned, d["hardware"])
         d["models"] = features.models_to_pull(planned)
         d["models_gb"] = d["estimates"]["models"].disk_gb
@@ -371,6 +398,29 @@ class Installer:
                     combo.pack(side="left", padx=(0, 14))
                     self.option_boxes[(opt.section, opt.key)] = combo
                     self.option_owner[str(combo)] = feat.id
+            if feat.id == "read_aloud" and self.pack_vars:   # more languages: Piper voices, three to a line
+                from stacklib.dictation import speak
+
+                r += 1
+                grid = ttk.Frame(table, style="Card.TFrame")
+                grid.grid(row=r, column=0, columnspan=3 + len(COLUMNS), sticky="w", padx=(28, 0), pady=(0, 2))
+                ttk.Label(grid, text="More voices:", style="Card.Sub.TLabel").grid(row=0, column=0, sticky="nw",
+                                                                                   padx=(0, 6))
+                for i, (key, var) in enumerate(self.pack_vars.items()):
+                    meta = speak.PIPER_VOICES[key]
+                    who = " and ".join(str(x[0]) for x in (meta.get("speakers") or {}).values())
+                    lang = speak.language_label(str(meta.get("language") or ""))
+                    star = "*" if meta.get("lessac_base") else ""
+                    box = ttk.Checkbutton(grid, text=f"{lang}: {who} ({meta.get('size_mb')} MB){star}", variable=var,
+                                          command=self.packs_changed)
+                    box.grid(row=i // 3, column=1 + i % 3, sticky="w", padx=(0, 14))
+                    box.bind("<FocusIn>", lambda _e: self.show_detail("read_aloud"), add="+")
+                r += 1
+                ttk.Label(table, style="Card.Muted.TLabel", wraplength=WRAP - 60, justify="left",
+                          text="* Piper voices fine-tuned from a voice whose training data is licensed for research "
+                               "only; their own recordings are open (CC0, CC BY or CC BY-SA). They run on this PC's "
+                               "CPU in read aloud's own environment.").grid(
+                    row=r, column=0, columnspan=3 + len(COLUMNS), sticky="w", padx=(28, 0), pady=(0, 4))
             if feat.id == "models" and self.model_vars:   # downloaded models nothing uses: delete them?
                 r += 1
                 line = ttk.Frame(table, style="Card.TFrame")
@@ -720,7 +770,8 @@ class Installer:
             for path in (store, tools):
                 Path(path).mkdir(parents=True, exist_ok=True)
             install.save_paths(self.profile, store)
-            install.save_features(self.profile, chosen, media_root, self.d["features"], self.options(), remove=gone)
+            install.save_features(self.profile, chosen, media_root, self.d["features"], self.options(), remove=gone,
+                                  packs=self.packs())
             plan = install.Plan(
                 model_store=store,
                 tool_dir="" if self.d["tool_dir"] and Path(tools) == Path(self.d["tool_dir"]) else tools,

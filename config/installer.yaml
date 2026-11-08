@@ -158,6 +158,73 @@ kokoro:
   gpu_libraries_gb: 0.8       # measured 2026-11-08: onnxruntime-gpu 0.23 GB and cuDNN 0.58 GB
   gpu_vram_gb: 1.0            # measured: Kokoro fp32 on an RTX 3060
 
+# ---------------------------------------------------------------- read aloud: more languages (Piper voices)
+
+# Extra read aloud voices for languages Kokoro does not speak (German, Russian, Vietnamese) or speaks with few voices
+# (Italian, Spanish, Portuguese, French). Piper (VITS) voices from rhasspy/piper-voices (repo MIT), run on the ONNX
+# Runtime and espeak-ng read aloud already has: nothing new is installed, each voice is one .onnx file and its
+# .onnx.json. Chosen in the installer (Read aloud > More voices) or with Download on the tray's Features card; they go
+# to <media.root>\voices (or .run\voices), not the Hugging Face cache, so each one can be removed on its own.
+#
+# lessac_base: fine-tuned from Piper's U.S. English "lessac" voice, whose training data (Blizzard 2013) is licensed
+# for research only. The voice's own recordings are open (data_licence). Offered, and marked as such, at the owner's
+# choice (2026-11-08). Left out: Arabic (ar_JO-kareem) and Indonesian (id_ID-news_tts), whose own recordings carry no
+# clear licence; and every Piper voice trained on non-commercial data (ja, zh, ko, th, hi and others).
+voice_packs:
+  repo: rhasspy/piper-voices
+  revision: e7229f7d33a10e145e109b886d661984201ac3c4   # 2026-11-02; a new revision is a new download to check
+  url: https://huggingface.co/{repo}/resolve/{revision}/{path}
+  voices:   # key: language (BCP-47, lower case), name, speakers (id -> name, gender), path in the repo, size
+    de_DE-thorsten-high:
+      language: de-de
+      path: de/de_DE/thorsten/high
+      size_mb: 114
+      speakers: {0: [Thorsten, male]}
+      data_licence: CC0-1.0
+      lessac_base: true
+    ru_RU-dmitri-medium:
+      language: ru-ru
+      path: ru/ru_RU/dmitri/medium
+      size_mb: 63
+      speakers: {0: [Dmitri, male]}
+      data_licence: CC0-1.0
+      lessac_base: true
+    vi_VN-vais1000-medium:
+      language: vi-vn
+      path: vi/vi_VN/vais1000/medium
+      size_mb: 63
+      speakers: {0: [VAIS-1000, ""]}
+      data_licence: CC-BY-4.0
+      lessac_base: true
+    it_IT-paola-medium:
+      language: it-it
+      path: it/it_IT/paola/medium
+      size_mb: 64
+      speakers: {0: [Paola, female]}
+      data_licence: CC0-1.0 (OHF voice-datasets)
+      lessac_base: true
+    es_AR-daniela-high:
+      language: es-ar
+      path: es/es_AR/daniela/high
+      size_mb: 114
+      speakers: {0: [Daniela, female]}
+      data_licence: CC-BY-SA-4.0
+      lessac_base: true
+    pt_PT-tugão-medium:
+      language: pt-pt
+      path: pt/pt_PT/tugão/medium
+      size_mb: 63
+      speakers: {0: [Tugão, male]}
+      data_licence: CC0-1.0
+      lessac_base: true
+    fr_FR-upmc-medium:
+      language: fr-fr
+      path: fr/fr_FR/upmc/medium
+      size_mb: 77
+      speakers: {0: [Jessica, female], 1: [Pierre, male]}
+      data_licence: CC-BY-SA-4.0
+      lessac_base: true
+
 # ---------------------------------------------------------------- OpenClaw
 
 openclaw:

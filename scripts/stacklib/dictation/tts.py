@@ -1,6 +1,7 @@
-"""The voices behind read aloud: Kokoro-82M through ONNX Runtime on the GPU (CUDA) or the CPU, and Windows' own voices
-through SAPI. Runs in the voice typing app's environment (numpy, onnxruntime or onnxruntime-gpu, espeakng-loader,
-comtypes); speak.py holds the parts the project's tests cover without it.
+"""The voices behind read aloud: Kokoro-82M through ONNX Runtime on the GPU (CUDA) or the CPU, Piper voices for more
+languages through the same ONNX Runtime on the CPU, and Windows' own voices through SAPI. Runs in the voice typing app's
+environment (numpy, onnxruntime or onnxruntime-gpu, espeakng-loader, comtypes); speak.py holds the parts the project's
+tests cover without it.
 
 Measured on the reference machine (2026-11-08):
   - CPU (Ryzen 5 5500, 6 of 12 threads): Kokoro loads in 1.2 s and speaks about 3.3x faster than real time with one
@@ -17,6 +18,7 @@ from __future__ import annotations
 import gc
 import json
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -67,6 +69,30 @@ def trim(pcm: bytes, rate: int = SAMPLE_RATE) -> bytes:
 
 def _pcm16(audio: np.ndarray) -> bytes:
     return (np.clip(audio, -1.0, 1.0) * 32767.0).astype("<i2").tobytes()
+
+
+_ESPEAK = None
+_ESPEAK_LOCK = threading.Lock()
+
+
+def shared_espeak():
+    """One espeak-ng for every voice that needs phonemes (it keeps global state; its calls hold one lock)."""
+    global _ESPEAK
+    with _ESPEAK_LOCK:
+        if _ESPEAK is None:
+            from .espeak import Espeak
+
+            _ESPEAK = Espeak()
+        return _ESPEAK
+
+
+def resample(audio: np.ndarray, src: int, dst: int = SAMPLE_RATE) -> np.ndarray:
+    """Linear resampling to the player's rate (Piper speaks at 22.05 kHz, the player plays 24 kHz): plain
+    interpolation, inaudible for speech at this ratio."""
+    if src == dst or not len(audio):
+        return audio.astype(np.float32)
+    n = int(round(len(audio) * dst / src))
+    return np.interp(np.arange(n) * (src / dst), np.arange(len(audio)), audio).astype(np.float32)
 
 
 # ---------------------------------------------------------------- Kokoro
@@ -165,9 +191,8 @@ class Kokoro:
             note = ""
             try:
                 from . import gpu
-                from .espeak import Espeak
 
-                self.espeak = self.espeak or Espeak()
+                self.espeak = self.espeak or shared_espeak()
                 tokenizer = json.loads(kokoro_file("tokenizer.json", download=False).read_text(encoding="utf-8"))
                 self.vocab = dict(tokenizer["model"]["vocab"])
                 path = str(kokoro_file(speak.KOKORO_FILES[variant], download=False))
@@ -277,6 +302,98 @@ class Kokoro:
         return Audio(_pcm16(audio), len(audio) / SAMPLE_RATE, tokens, run_s, load_s)
 
 
+# ---------------------------------------------------------------- Piper voices
+
+piper_ids = speak.piper_ids
+
+
+class Piper:
+    """Piper (VITS) voices from config/installer.yaml voice_packs, downloaded into read_aloud.packs_dir: espeak-ng IPA
+    (the voice's own espeak voice, punctuation put back as Piper was trained), then ONNX Runtime on the CPU. Each voice
+    loads on first use (60-115 MB, well under a second) and is freed with Kokoro after read_aloud.unload_after_min
+    idle minutes."""
+
+    CPU_THREADS = Kokoro.CPU_THREADS
+
+    def __init__(self, log=print) -> None:
+        self.log = log
+        self.lock = threading.RLock()
+        self.loaded: dict[str, tuple[object, dict]] = {}   # voice file -> (session, its .onnx.json)
+        self.last_used = time.monotonic()
+        self.running = 0
+
+    def load(self, key: str, packs_dir: str) -> tuple[object, dict, float]:
+        with self.lock:
+            if key in self.loaded:
+                session, config = self.loaded[key]
+                return session, config, 0.0
+            if not speak.pack_installed(packs_dir, key):
+                raise SpeechError(f"the voice {key} is not downloaded; Download it on the tray's Features card")
+            t0 = time.monotonic()
+            import onnxruntime as ort
+
+            model, conf = (Path(packs_dir) / key / name for name in speak.pack_files(key))
+            config = json.loads(conf.read_text(encoding="utf-8"))
+            so = ort.SessionOptions()
+            so.log_severity_level = 3
+            so.inter_op_num_threads = 1
+            so.intra_op_num_threads = self.CPU_THREADS
+            so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+            try:
+                session = ort.InferenceSession(str(model), so, providers=["CPUExecutionProvider"])
+            except Exception as e:  # noqa: BLE001 - shown in the bubble
+                raise SpeechError(f"the voice {key} could not load: {_short(e)}") from e
+            self.loaded[key] = (session, config)
+            took = time.monotonic() - t0
+            self.log(f"[read] Piper voice {key} ready in {took:.1f} s")
+            return session, config, took
+
+    def phonemes(self, text: str, voice: Voice, config: dict) -> str:
+        """espeak-ng IPA in the voice's espeak language, with the punctuation Piper reads pauses and questions from."""
+        espeak = shared_espeak()
+        language = str((config.get("espeak") or {}).get("voice") or speak.family(voice.language))
+        parts = [piece if punct else espeak.phonemes(piece, language)
+                 for punct, piece in speak.split_punctuation(speak.for_phonemes(text, voice.language))]
+        ps = re.sub(r"\([a-z-]{2,10}\)", "", "".join(parts))   # language-switch marks such as (en)
+        return ps.replace("«", "").replace("»", "")
+
+    def synth(self, text: str, voice: Voice, speed: float, packs_dir: str) -> Audio:
+        key, speaker = speak.piper_key(voice.id)
+        session, config, load_s = self.load(key, packs_dir)
+        with self.lock:
+            self.running += 1
+        try:
+            t0 = time.monotonic()
+            self.last_used = t0
+            ids = piper_ids(self.phonemes(text, voice, config), config.get("phoneme_id_map") or {})
+            inf = config.get("inference") or {}
+            feeds = {"input": np.array([ids], dtype=np.int64), "input_lengths": np.array([len(ids)], dtype=np.int64),
+                     "scales": np.array([float(inf.get("noise_scale", 0.667)),
+                                         float(inf.get("length_scale", 1.0)) / max(speed, 0.1),
+                                         float(inf.get("noise_w", 0.8))], dtype=np.float32)}
+            if int(config.get("num_speakers") or 1) > 1:
+                feeds["sid"] = np.array([speaker], dtype=np.int64)
+            try:
+                wav = np.asarray(session.run(None, feeds)[0], dtype=np.float32).reshape(-1)
+            except Exception as e:  # noqa: BLE001 - shown in the bubble
+                raise SpeechError(f"the voice {voice.name} failed: {_short(e)}") from e
+            audio = resample(wav, int((config.get("audio") or {}).get("sample_rate") or 22050))
+            self.last_used = time.monotonic()
+            run_s = self.last_used - t0
+        finally:
+            with self.lock:
+                self.running -= 1
+        return Audio(_pcm16(audio), len(audio) / SAMPLE_RATE, len(ids), run_s, load_s)
+
+    def unload_if_idle(self, minutes: float) -> None:
+        with self.lock:
+            if minutes and self.loaded and not self.running and time.monotonic() - self.last_used > minutes * 60:
+                names = ", ".join(self.loaded)
+                self.loaded.clear()
+                self.log(f"[read] Piper voices unloaded (idle): {names}")
+        gc.collect()
+
+
 # ---------------------------------------------------------------- Windows voices
 
 class WindowsVoices:
@@ -329,6 +446,8 @@ class Speech:
     def __init__(self, log=print) -> None:
         self.log = log
         self.kokoro = Kokoro(log)
+        self.piper = Piper(log)
+        self._piper_voices: tuple[float, str, list[Voice]] = (-1e9, "", [])
         self.windows = WindowsVoices()
         self._win_voices: tuple[float, list[Voice]] = (-1e9, [])
         self._cached: dict[str, tuple[float, bool]] = {}   # Kokoro variant -> (checked at, files on disk)
@@ -373,12 +492,19 @@ class Speech:
         return ""
 
     def voices(self, cfg: speak.Config) -> list[Voice]:
-        """Kokoro's voices (when installed, downloaded and not turned off or broken), then this PC's Windows voices
-        (re-read from the registry once a minute, so a newly added voice shows up; they need comtypes)."""
+        """Kokoro's voices (when installed, downloaded and not turned off or broken), the Piper voices downloaded to
+        read_aloud.packs_dir, then this PC's Windows voices (both lists re-read once a minute, so a voice added since
+        shows up; Windows voices need comtypes)."""
         out: list[Voice] = []
         kokoro = cfg.kokoro != "off" and self.kokoro_installed() and self.kokoro.state != "failed"
         if kokoro and self.kokoro_downloaded(cfg.kokoro):
             out += speak.kokoro_voices()
+        if self.kokoro_installed():   # Piper needs the same espeak-ng and ONNX Runtime
+            at, where, cached = self._piper_voices
+            if time.monotonic() - at > 60 or where != cfg.packs_dir:
+                cached = speak.installed_piper_voices(cfg.packs_dir)
+                self._piper_voices = (time.monotonic(), cfg.packs_dir, cached)
+            out += cached
         if not self._has("comtypes"):
             return out
         at, cached = self._win_voices
@@ -407,7 +533,8 @@ class Speech:
 
     def workers(self, voice: Voice) -> int:
         """Pieces made at once: two on the CPU, which share Kokoro's threads (about 30% more speech per second, and no
-        more processors than one run uses); one on the GPU (fast enough) and for Windows voices (instant)."""
+        more processors than one run uses); one on the GPU (fast enough), for Piper (fast on the CPU) and for Windows
+        voices (instant)."""
         return 2 if voice.engine == "kokoro" and self.kokoro.device != "cuda" else 1
 
     def lookahead_s(self, voice: Voice) -> float:
@@ -420,6 +547,8 @@ class Speech:
             if cfg.kokoro == "off":
                 raise SpeechError("Kokoro is off (read_aloud.kokoro)")
             audio = self.kokoro.synth(text, voice, speed, cfg.kokoro, cfg.device)
+        elif voice.engine == "piper":
+            audio = self.piper.synth(text, voice, speed, cfg.packs_dir)
         else:
             audio = self.windows.synth(text, voice, speed)
         audio.pcm = trim(audio.pcm)
@@ -429,6 +558,8 @@ class Speech:
     def model_name(self, voice: Voice, cfg: speak.Config) -> str:
         if voice.engine == "kokoro":
             return "kokoro-82m" + ("" if cfg.kokoro == "fp32" else f"-{cfg.kokoro}")
+        if voice.engine == "piper":
+            return f"piper {speak.piper_key(voice.id)[0]}"
         return f"windows {voice.name}"
 
     def record(self, voice: Voice, cfg: speak.Config, *, audio_s: float, run_s: float, load_s: float, tokens: int,
@@ -447,12 +578,13 @@ class Speech:
 
     def unload_if_idle(self, minutes: float) -> None:
         self.kokoro.unload_if_idle(minutes)
+        self.piper.unload_if_idle(minutes)
 
     def health(self) -> dict:
         k = self.kokoro
         return {"engine": k.state, "model": f"kokoro-82m {k.variant}".strip() if k.variant else "",
                 "device": k.device or "", "note": k.note, "idle_s": round(time.monotonic() - k.last_used),
-                "gpu_installed": k.gpu_available()}
+                "gpu_installed": k.gpu_available(), "piper": sorted(self.piper.loaded)}
 
 
 def download(profile: dict, report=lambda *a: None) -> str:

@@ -426,7 +426,62 @@ def install_read_aloud(profile: dict, report=lambda *a: None) -> str:
         report(f"downloading Kokoro-82M ({variant}) and its voices into {hf_home(profile) or 'the Hugging Face cache'}")
         _run([python, "-P", "-m", "stacklib.dictation", "speak", "--download"], env=app_env(profile, env))
         notes.append(f"downloaded Kokoro {variant} and its voices")
+    chosen = ReadConfig.from_profile(profile).packs
+    if chosen:
+        notes.append(download_packs(profile, chosen, report))
     return "; ".join(notes)
+
+
+# ---------------------------------------------------------------- more voices (Piper, config/installer.yaml)
+
+def packs_dir(profile: dict) -> Path:
+    """Where Piper voices go (read_aloud.packs_dir, else <media.root>\\voices or <data_dir>\\voices)."""
+    from .speak import Config as ReadConfig
+
+    return Path(ReadConfig.from_profile(profile).packs_dir)
+
+
+def installed_packs(profile: dict) -> list[str]:
+    from .speak import PIPER_VOICES, pack_installed
+
+    folder = str(packs_dir(profile))
+    return [key for key in PIPER_VOICES if pack_installed(folder, key)]
+
+
+def pack_url(key: str, name: str) -> str:
+    """The file's address at the pinned revision of the voices' repository."""
+    from urllib.parse import quote
+
+    from .speak import PIPER_VOICES
+
+    packs = catalog.section("voice_packs")
+    path = quote(f"{PIPER_VOICES[key]['path']}/{name}")
+    return str(packs["url"]).format(repo=packs["repo"], revision=packs["revision"], path=path)
+
+
+def download_packs(profile: dict, keys, report=lambda *a: None) -> str:
+    """Download these Piper voices (model, config, model card) into packs_dir, each in a folder of its own, from the
+    pinned revision; a voice already there is skipped. Reading never downloads."""
+    from .. import media, paths
+    from .speak import PIPER_VOICES, pack_files, pack_installed
+
+    folder = packs_dir(profile)
+    if not str(folder) or str(folder) == ".":
+        raise RuntimeError("read aloud has no folder for more voices (set media.root, or read_aloud.packs_dir)")
+    if (profile.get("media") or {}).get("root"):
+        paths.require(profile, str(folder), "read aloud voices")   # D-M6: media files stay in allowed folders
+    done, have = [], []
+    keys = [k for k in PIPER_VOICES if k in set(keys)]
+    for i, key in enumerate(keys):
+        if pack_installed(str(folder), key):
+            have.append(key)
+            continue
+        report(f"downloading the voice {key} ({PIPER_VOICES[key].get('size_mb', '?')} MB, {i + 1} of {len(keys)})")
+        for name in (*pack_files(key), "MODEL_CARD"):
+            media.download(pack_url(key, name), folder / key / name, report)
+        done.append(key)
+    parts = ([f"downloaded {', '.join(done)}"] if done else []) + ([f"{', '.join(have)} already there"] if have else [])
+    return "voices: " + ("; ".join(parts) or "none chosen")
 
 
 def save_setting(profile: dict, key: str, value, section: str = "dictation") -> None:
