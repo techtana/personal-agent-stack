@@ -12,25 +12,28 @@ removals), so closing the window does not stop it, and opening the installer aga
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stacklib import IS_WINDOWS, REPO  # noqa: E402
-from stacklib import features, install, uninstall  # noqa: E402
+from stacklib import features, install, theme, uninstall  # noqa: E402
 from stacklib import profile as prof  # noqa: E402
 
 POLL_MS = 500
 WRAP = 840
-ERROR_FG = "#a4262c"    # 6.5:1 on the default #f0f0f0 window background
-MUTED_FG = "#4d4d4d"    # 7.6:1
-OK_FG = "#0e6b0e"       # 6.3:1
-WARN_FG = "#7a4f00"     # 6.2:1
-MARK = {"pending": ("○", MUTED_FG), "running": ("▶", "#005a9e"), "done": ("✓", OK_FG),
-        "skipped": ("–", MUTED_FG), "warning": ("!", WARN_FG), "failed": ("✗", ERROR_FG)}
-FINDING = {"ok": ("✓", OK_FG), "warn": ("!", WARN_FG), "bad": ("✗", ERROR_FG)}
+HALF = 430   # wrap width in each of the two cards under the features table
+GAP_S, GAP_M, GAP_L, GAP_XL = 8, 12, 16, 24   # the tray's spacing tokens
+FONT = theme.FONT
+# Marks and colours by palette key (stacklib/theme.py), so the light and dark themes both pass 4.5:1 on the card.
+MARK = {"pending": ("○", "muted"), "running": ("●", "accent"), "done": ("✓", "good"),
+        "skipped": ("–", "muted"), "warning": ("!", "warn"), "failed": ("✗", "bad")}
+FINDING = {"ok": ("✓", "good"), "warn": ("!", "warn"), "bad": ("✗", "bad")}
+WIZARD = ("Features", "Folders", "Install")   # the three pages, shown as steps at the top of each
 COLUMNS = (("disk", "Disk GB"), ("vram", "GPU memory GB"), ("gpu", "GPU work"), ("cpu", "CPU while busy"),
            ("ram", "RAM GB"))
 TOOL_NAMES = {"gateway": "LiteLLM", "chat": "Open WebUI", "tracing": "Phoenix"}
@@ -52,16 +55,19 @@ def open_path(path: Path) -> None:
 
 
 def status_text(feat: features.Feature, st: features.Status, is_locked: bool) -> tuple[str, str]:
-    """The Status column: words and colour."""
+    """The Status column: words and a palette key. Green means installed and working; amber and red say what to look
+    at; everything else (required, off, not installed) stays in the quiet ink2, so colour marks only state."""
     if feat.required:
-        return "Required", MUTED_FG
+        return "Required", "ink2"
     if st.unknown:
-        return st.state, WARN_FG
+        return st.state, "warn"
+    if st.level in ("warn", "bad"):
+        return st.state, st.level
     if is_locked:
-        return st.state, OK_FG
-    if st.installed or st.level in ("warn", "bad"):
-        return st.state, ERROR_FG if st.level == "bad" else WARN_FG if st.level == "warn" else MUTED_FG
-    return "Not installed", MUTED_FG
+        return st.state, "good"
+    if st.installed:
+        return st.state, "ink2"
+    return "Not installed", "ink2"
 
 
 class Installer:
@@ -69,6 +75,11 @@ class Installer:
         self.root, self.tk, self.ttk, self.filedialog = root, tk, ttk, filedialog
         root.title("Agent Stack setup")
         root.minsize(900, 600)
+        # The tray's look: page and card surfaces, filled buttons with an outline, one accent primary button per page,
+        # focus rings, and the system's light or dark theme (title bar included).
+        self.t = theme.apply(root)
+        root.configure(background=self.t["page"])
+        theme.dark_title_bar(root)
         try:  # the tray's icon on the window and taskbar (Pillow may be missing on a first run)
             from PIL import ImageTk
 
@@ -142,6 +153,44 @@ class Installer:
     @staticmethod
     def _alive(widget) -> bool:
         return widget is not None and bool(widget.winfo_exists())
+
+    def _card(self, parent, title: str | None = None, pady=(0, 10), **grid):
+        """A card as the tray draws them: a 1 px border around the card surface. Returns the frame to fill."""
+        outer = self.tk.Frame(parent, bg=self.t["border"], padx=1, pady=1)
+        outer.grid(sticky="nsew", pady=pady, **grid)
+        inner = self.ttk.Frame(outer, style="Card.TFrame", padding=(GAP_L, GAP_M))
+        inner.pack(fill="both", expand=True)
+        inner.columnconfigure(0, weight=1)
+        if title:
+            self.ttk.Label(inner, text=title, style="Card.Title.TLabel").grid(sticky="w", pady=(0, GAP_S // 2))
+        return inner
+
+    def _header(self, parent, step: int, title: str, sub: str = ""):
+        """Where the user is (the three steps, this one in the accent colour), the page's question, and what to do."""
+        ttk, t = self.ttk, self.t
+        strip = ttk.Frame(parent)
+        strip.grid(sticky="w", pady=(0, GAP_M))
+        for i, name in enumerate(WIZARD, start=1):
+            if i > 1:
+                ttk.Label(strip, text="›", foreground=t["muted"]).pack(side="left", padx=GAP_S)
+            here = i == step
+            ttk.Label(strip, text=f"{i}  {name}", foreground=t["accent"] if here else t["ink2"] if i < step else t["muted"],
+                      font=(FONT, 9, "bold" if here else "normal")).pack(side="left")
+        head = ttk.Label(parent, text=title, style="Head.TLabel")
+        head.grid(sticky="w")
+        sub_label = ttk.Label(parent, text=sub, style="HeadSub.TLabel", wraplength=WRAP, justify="left")
+        sub_label.grid(sticky="w", pady=(GAP_S // 2, GAP_M))
+        return head, sub_label
+
+    def _buttons(self, primary: tuple[str, object], back=None, cancel: str = "Cancel"):
+        """The footer: Back on the left; the page's one primary action (accent fill) and Cancel on the right."""
+        ttk = self.ttk
+        if back is not None:
+            ttk.Button(self.footer, text="Back", command=back).pack(side="left")
+        ttk.Button(self.footer, text=cancel, command=self.root.destroy).pack(side="right")
+        btn = ttk.Button(self.footer, text=primary[0], command=primary[1], style="Accent.TButton", default="active")
+        btn.pack(side="right", padx=(0, GAP_S))
+        return btn
 
     # ------------------------------------------------------------ the choices, kept across both pages
 
@@ -222,7 +271,7 @@ class Installer:
         self.root.after(POLL_MS, done)
 
     def _behind_label(self, parent):
-        self.behind = self.ttk.Label(parent, text="", foreground=WARN_FG, wraplength=WRAP)
+        self.behind = self.ttk.Label(parent, text="", foreground=self.t["warn"], wraplength=WRAP)
         self.behind.grid(sticky="w")
         self._show_behind()
 
@@ -239,28 +288,38 @@ class Installer:
             self._load()
         d = self.d
         f = self._page()
-        ttk.Label(f, text="Which features do you want?", font=("Segoe UI", 13, "bold")).grid(sticky="w")
-        ttk.Label(f, wraplength=WRAP, text="The required parts are always installed, and installed features stay "
-                  "unless you tick Remove. Tick the others you want; run the installer again later to add more. "
-                  "Settings in the tray turns features off without removing them.").grid(sticky="w", pady=(4, 2))
-        ttk.Label(f, wraplength=WRAP, foreground=MUTED_FG,
-                  text=f"This PC: {d['hardware'].describe()}. Each row is one feature on its own; the box at the "
-                       "bottom adds up your choice.").grid(sticky="w", pady=(0, 10))
+        t = self.t
+        self._header(f, 1, "Which features do you want?",
+                     "The required parts are always installed, and installed features stay unless you tick Remove. "
+                     "Tick the others you want; you can add or remove features later from the tray's Features card. "
+                     "Settings in the tray turns a feature off without removing it.")
         self._behind_label(f)
 
-        table = ttk.Frame(f)
-        table.grid(sticky="ew")
+        table = self._card(f)
+        ttk.Label(table, text=f"This PC: {d['hardware'].describe()}. Each row is what that feature costs on its own; "
+                  "Your choice adds up the ones you tick.", style="Card.Muted.TLabel", wraplength=WRAP - 40,
+                  justify="left").grid(row=1, column=0, columnspan=3 + len(COLUMNS), sticky="w", pady=(0, GAP_M))
         table.columnconfigure(0, weight=1)
+        # Room for the longest status up front, so ticking Remove ("Will be removed") does not squeeze the names.
+        from tkinter import font as tkfont   # tkinter is imported in main(), where a missing Tk is reported
+
+        font = tkfont.Font(root=self.root, family=FONT, size=10)
+        table.columnconfigure(1, minsize=14 + max(font.measure(x) for x in ("Will be removed", "Not installed")))
         for c, head in enumerate(("Feature", "Status", *(title for _key, title in COLUMNS), "Remove")):
-            ttk.Label(table, text=head, foreground=MUTED_FG, font=("Segoe UI", 9, "bold")).grid(
-                row=0, column=c, sticky="w" if c < 2 else "e", padx=(0 if c == 0 else 14, 0), pady=(0, 4))
+            ttk.Label(table, text=head, style="Card.Head.TLabel").grid(
+                row=2, column=c, sticky="w" if c < 2 else "e", padx=(0 if c == 0 else 14, 0), pady=(0, 4))
         self.status_labels = {}
         first = None
         self.feature_boxes, self.cell_labels, self.option_boxes, self.option_owner = {}, {}, {}, {}
-        r = 0
+        self.listed: list[str] = []
+        r = 2
+        span = 3 + len(COLUMNS)
         for feat in features.FEATURES:
             if not feat.offered and not features.present(feat.id, d["features"]):
                 continue   # no longer offered, and nothing of it on this PC: not listed at all
+            self.listed.append(feat.id)
+            r += 1   # a hairline between features, so each one's option line reads as part of it
+            self.tk.Frame(table, height=1, bg=t["grid"]).grid(row=r, column=0, columnspan=span, sticky="ew", pady=1)
             r += 1
             st, is_locked = d["features"][feat.id], features.locked(feat.id, d["features"])
             box = self.feature_boxes[feat.id] = ttk.Checkbutton(
@@ -271,14 +330,14 @@ class Installer:
             elif first is None:
                 first = feat.id
             box.grid(row=r, column=0, sticky="w", pady=2)
-            text, fg = status_text(feat, st, is_locked)
-            row = [box, ttk.Label(table, text=text, foreground=fg)]
+            text, key = status_text(feat, st, is_locked)
+            row = [box, ttk.Label(table, text=text, style="Card.TLabel", foreground=t[key])]
             row[1].grid(row=r, column=1, sticky="w", padx=(14, 0))
-            self.status_labels[feat.id] = (row[1], text, fg)
+            self.status_labels[feat.id] = (row[1], text, t[key])
             values = features.cells(d["estimates"][feat.id], d["hardware"])
             self.cell_labels[feat.id] = {}
             for c, (key, _title) in enumerate(COLUMNS, start=2):
-                row.append(ttk.Label(table, text=values[key]))
+                row.append(ttk.Label(table, text=values[key], style="Card.TLabel"))
                 row[-1].grid(row=r, column=c, sticky="e", padx=(14, 0))
                 self.cell_labels[feat.id][key] = row[-1]
             if feat.id in self.remove_vars:   # installed: a box to take it off again
@@ -292,14 +351,14 @@ class Installer:
             box.bind("<FocusIn>", lambda _e, fid=feat.id: self.show_detail(fid), add="+")
             if feat.id in features.OPTIONS:   # its models and first settings, on a line of their own
                 r += 1
-                line = ttk.Frame(table)
-                line.grid(row=r, column=0, columnspan=2 + len(COLUMNS), sticky="w", padx=(28, 0), pady=(0, 4))
+                line = ttk.Frame(table, style="Card.TFrame")
+                line.grid(row=r, column=0, columnspan=span - 1, sticky="w", padx=(28, 0), pady=(0, 4))
                 for opt, fn in features.OPTIONS[feat.id]:
                     choices = fn(self.profile)
                     names = dict(choices)
                     var = self.option_vars[(opt.section, opt.key)]
                     shown = self.tk.StringVar(value=names.get(var.get(), var.get()))
-                    ttk.Label(line, text=f"{opt.label}:", foreground=MUTED_FG).pack(side="left", padx=(0, 4))
+                    ttk.Label(line, text=f"{opt.label}:", style="Card.Sub.TLabel").pack(side="left", padx=(0, 4))
                     combo = ttk.Combobox(line, textvariable=shown, state="readonly", width=max(len(n) for n in names.values()) + 1,
                                          values=[n for _v, n in choices])
 
@@ -308,31 +367,55 @@ class Installer:
                         self.option_changed(event)
                     combo.bind("<<ComboboxSelected>>", picked)
                     combo.bind("<FocusIn>", lambda _e, fid=feat.id: self.show_detail(fid), add="+")
+                    combo.bind("<MouseWheel>", lambda e: (self._wheel(e), "break")[1])   # scroll the page, not the choice
                     combo.pack(side="left", padx=(0, 14))
                     self.option_boxes[(opt.section, opt.key)] = combo
                     self.option_owner[str(combo)] = feat.id
             if feat.id == "models" and self.model_vars:   # downloaded models nothing uses: delete them?
                 r += 1
-                line = ttk.Frame(table)
-                line.grid(row=r, column=0, columnspan=3 + len(COLUMNS), sticky="w", padx=(28, 0), pady=(0, 4))
-                ttk.Label(line, text="Not used by the stack, delete:", foreground=MUTED_FG).pack(side="left", padx=(0, 4))
+                line = ttk.Frame(table, style="Card.TFrame")
+                line.grid(row=r, column=0, columnspan=span, sticky="w", padx=(28, 0), pady=(0, 4))
+                ttk.Label(line, text="Not used by the stack, delete:", style="Card.Sub.TLabel").pack(side="left", padx=(0, 4))
                 for name, (var, m) in self.model_vars.items():
                     ttk.Checkbutton(line, text=f"{name} ({m.size_gb:.1f} GB)", variable=var,
                                     command=self.update_summary).pack(side="left", padx=(0, 14))
 
-        self.detail_box = ttk.LabelFrame(f, text="", padding=10)
-        self.detail_box.grid(sticky="ew", pady=(10, 0))
-        self.detail = ttk.Label(self.detail_box, text="", wraplength=WRAP - 30, justify="left")
-        self.detail.grid(sticky="w")
-        self.summary_box = ttk.LabelFrame(f, text="Your choice on this PC", padding=10)
-        self.summary_box.grid(sticky="ew", pady=(10, 0))
+        # What the row under the pointer (or with the keyboard focus) is and costs: its name, one line on what it
+        # does, then its state and its load one fact per line. Held at the tallest row's height, so the page does
+        # not jump while the pointer moves down the table.
+        # Side by side under the table, so both stay in view on a 1080-pixel screen: the row's detail on the left,
+        # the choice's total on the right.
+        below = ttk.Frame(f)
+        below.grid(sticky="ew")
+        below.columnconfigure((0, 1), weight=1, uniform="below")
+        self.detail_box = self._card(below, pady=(0, 0), row=0, column=0, padx=(0, 5))
+        self.detail_title = ttk.Label(self.detail_box, text="", style="Card.Title.TLabel")
+        self.detail_title.grid(row=0, column=0, sticky="w")
+        self.detail_lead = ttk.Label(self.detail_box, text="", style="Card.TLabel", wraplength=HALF, justify="left")
+        self.detail_lead.grid(row=1, column=0, sticky="w", pady=(4, 6))
+        self.detail = ttk.Label(self.detail_box, text="", style="Card.Sub.TLabel", wraplength=HALF, justify="left")
+        self.detail.grid(row=2, column=0, sticky="nw")
+        self.summary_card = self._card(below, "Your choice on this PC", pady=(0, 0), row=0, column=1, padx=(5, 0))
+        self.summary_box = ttk.Frame(self.summary_card, style="Card.TFrame")
+        self.summary_box.grid(sticky="ew")
         self.summary_box.columnconfigure(1, weight=1)
-        ttk.Button(self.footer, text="Cancel", command=self.root.destroy).pack(side="right")
-        ttk.Button(self.footer, text="Next", command=self.show_folders, default="active").pack(side="right", padx=(0, 8))
+        self._buttons(("Next", self.show_folders))
         self.root.bind("<Return>", lambda e: self.show_folders())
         self.root.bind("<Escape>", lambda e: self.root.destroy())
+        self._hold_detail_height()
         self.show_detail(first or features.FEATURES[0].id)
         self.update_summary()
+
+    def _hold_detail_height(self):
+        """Give the detail text the height of the longest feature's, measured once per page."""
+        lead = body = 0
+        for fid in self.listed:
+            self.show_detail(fid)
+            self.detail_box.update_idletasks()
+            lead = max(lead, self.detail_lead.winfo_reqheight())
+            body = max(body, self.detail.winfo_reqheight())
+        self.detail_box.rowconfigure(1, minsize=lead + 10)   # + its pady
+        self.detail_box.rowconfigure(2, minsize=body)
 
     def feature_ticked(self, fid: str):
         """Keep features with what they run inside: ticking read aloud ticks voice typing, and unticking voice typing
@@ -401,7 +484,7 @@ class Installer:
             if not self._alive(label):
                 continue
             if fid in gone:
-                label.configure(text="Will be removed", foreground=ERROR_FG)
+                label.configure(text="Will be removed", foreground=self.t["bad"])
                 if fid in self.feature_vars:
                     self.feature_vars[fid].set(False)
             else:
@@ -414,7 +497,7 @@ class Installer:
             return
         feat, d = features.BY_ID[fid], self.d
         st = d["features"][fid]
-        lines = [feat.summary]
+        lines = []
         if feat.required:
             lines.append("Required: the other features use it." + (f" {st.detail}" if st.level != "ok" else ""))
         elif st.unknown:
@@ -428,12 +511,13 @@ class Installer:
             lines.append(f"{st.state}. {st.detail} {TICK_TO.get(fid, 'Tick it to turn it back on.')}")
         elif st.level in ("warn", "bad"):
             lines.append(f"{st.state}. {st.detail}")
-        lines.append(features.detail_text(d["estimates"][fid]))
+        # One fact per line (GPU, CPU, Memory, When, Disk) instead of one paragraph.
+        lines.append(re.sub(r" (?=(?:GPU|CPU|Memory|When|Disk): )", "\n", features.detail_text(d["estimates"][fid])))
         if fid in self.to_remove():
             r = self.removals.get(fid)
-            lines = [feat.summary, "Ticked for removal. " + (r.text().replace("\n  •  ", " • ").replace("\n", " ")
-                                                                if r else "Measuring what it deletes...")]
-        self.detail_box.configure(text=feat.title)
+            lines = ["Ticked for removal.", r.text() if r else "Measuring what it deletes..."]
+        self.detail_title.configure(text=feat.title)
+        self.detail_lead.configure(text=feat.summary)
         self.detail.configure(text=uninstall.short_text("\n".join(lines)))
 
     def update_summary(self):
@@ -460,13 +544,14 @@ class Installer:
             gb = sum(self.model_vars[n][1].size_gb for n in models)
             findings.insert(0, features.Finding("warn", f"Deletes {', '.join(models)}: frees about {gb:.1f} GB. You can "
                                                         "download a model again later."))
+        t = self.t
         for i, finding in enumerate(findings):
-            sym, fg = FINDING.get(finding.level, FINDING["ok"])
-            ttk.Label(self.summary_box, text=sym, foreground=fg, width=2, font=("Segoe UI", 11)).grid(
+            sym, key = FINDING.get(finding.level, FINDING["ok"])
+            ttk.Label(self.summary_box, text=sym, style="Card.TLabel", foreground=t[key], width=2, font=(FONT, 11)).grid(
                 row=i, column=0, sticky="nw")
-            text = ttk.Label(self.summary_box, text=finding.text, wraplength=WRAP - 60, justify="left")
+            text = ttk.Label(self.summary_box, text=finding.text, style="Card.TLabel", wraplength=HALF - 24, justify="left")
             if finding.level != "ok":
-                text.configure(foreground=fg)
+                text.configure(foreground=t[key])
             text.grid(row=i, column=1, sticky="w", pady=1)
 
     # ------------------------------------------------------------ page 2: folders and options
@@ -475,9 +560,9 @@ class Installer:
         ttk, d = self.ttk, self.d
         chosen = self.chosen()
         f = self._page()
-        ttk.Label(f, text="Where should Agent Stack put its files?", font=("Segoe UI", 13, "bold")).grid(sticky="w")
-        ttk.Label(f, wraplength=WRAP, text="Choose the folders, then Install. Setup runs in the background: you can "
-                  "close this window while it works and open the installer again to check on it.").grid(sticky="w", pady=(4, 12))
+        self._header(f, 2, "Where should Agent Stack put its files?",
+                     "Choose the folders, then Install. Setup runs in the background; you can close this window while "
+                     "it works.")
         self._behind_label(f)
         self.store_msg = self._folder(f, "Models (Ollama)", "Downloaded models live here. Needs the most space; "
                                       "a fast internal drive loads models quicker than a USB one.", self.store, d["model_note"])
@@ -486,15 +571,13 @@ class Installer:
                                       "Each tool gets its own Python environment here. Keep the path short.", self.tools)
         self.media_msg = None
         if install.needs_media(chosen):
-            what = "ComfyUI with the image model"
             installed = d["features"]["images"].installed
             self.media_msg = self._folder(f, "Media (ComfyUI and its models)",
-                                          f"{what[0].upper()}{what[1:]} goes here. Agent sessions and media tools may use "
-                                          "only this folder.", self.media_root,
+                                          "ComfyUI with the image model goes here. Agent sessions and media tools may "
+                                          "use only this folder.", self.media_root,
                                           "Installed already: setup checks and updates it." if installed else "")
 
-        opts = ttk.LabelFrame(f, text="Options", padding=10)
-        opts.grid(sticky="ew", pady=(4, 0))
+        opts = self._card(f, "Options")
         ttk.Checkbutton(opts, variable=self.pull, command=self.validate,
                         text=f"Download models now: {', '.join(d['models'])} (about {d['models_gb']:.1f} GB)").grid(sticky="w")
         self.move_box = None
@@ -503,39 +586,61 @@ class Installer:
                                             text=f"Move the {d['move_gb']:.1f} GB of models already in {d['move_from']}")
             self.move_box.grid(sticky="w")
         if d["ollama_missing"]:
-            ttk.Checkbutton(opts, variable=self.get_ollama, text="Install Ollama with winget (it is not installed; "
+            ttk.Checkbutton(opts, variable=self.get_ollama, command=self.validate, text="Install Ollama with winget (it is not installed; "
                             "accepts the Ollama package agreement)").grid(sticky="w")
         ttk.Checkbutton(opts, variable=self.disks, text="Check how fast each drive is and warn about slow ones "
                         "(writes a 256 MB test file per drive)").grid(sticky="w")
         self.hf_box = ttk.Checkbutton(opts, variable=self.hf)
         self.hf_box.grid(sticky="w")
-        ttk.Checkbutton(opts, variable=self.start, text="Start the stack when setup finishes (tray app)").grid(sticky="w")
+        ttk.Checkbutton(opts, variable=self.start, command=self.validate, text="Start the stack when setup finishes (tray app)").grid(sticky="w")
 
-        self.error = ttk.Label(f, text="", foreground=ERROR_FG, wraplength=WRAP)
-        self.error.grid(sticky="w", pady=(8, 0))
-        ttk.Button(self.footer, text="Back", command=self.show_features).pack(side="left")
-        ttk.Button(self.footer, text="Cancel", command=self.root.destroy).pack(side="right")
+        # What pressing the button will do, in one place, before anything starts.
+        plan = self._card(f, "What happens next", pady=(0, 0))
+        self.plan_label = ttk.Label(plan, text="", style="Card.TLabel", wraplength=WRAP - 40, justify="left")
+        self.plan_label.grid(sticky="w")
+        self.error = ttk.Label(f, text="", foreground=self.t["bad"], wraplength=WRAP)
+        self.error.grid(sticky="w", pady=(GAP_S, 0))
         changes = bool(self.to_remove() or self.models_to_delete())
-        self.install_btn = ttk.Button(self.footer, text="Apply changes" if changes else "Install", command=self.on_install,
-                                      default="active")
-        self.install_btn.pack(side="right", padx=(0, 8))
+        self.install_btn = self._buttons(("Apply changes" if changes else "Install", self.on_install), back=self.show_features)
         self.root.bind("<Return>", lambda e: self.on_install())
         self.root.bind("<Escape>", lambda e: self.root.destroy())
         self.validate()
 
+    def plan_text(self) -> str:
+        """One line per thing Install does, from the choice on page 1 and the options on page 2."""
+        d, chosen, gone = self.d, self.chosen(), self.to_remove()
+        new = [x.short for x in features.FEATURES if x.id in chosen and not d["features"][x.id].installed]
+        lines = []
+        if gone:
+            lines.append("Removes " + ", ".join(x.short for x in features.FEATURES if x.id in gone)
+                         + " (what you made with them stays).")
+        if self.models_to_delete():
+            lines.append("Deletes the models " + ", ".join(self.models_to_delete()) + ".")
+        if d["ollama_missing"] and self.get_ollama.get():
+            lines.append("Installs Ollama with winget.")
+        lines.append(f"Installs {', '.join(new)}." if new else "Checks the installed features and repairs what is missing.")
+        if self._moving():
+            lines.append(f"Moves the models in {d['move_from']} to the models folder.")
+        if self.pull.get() and d["models"]:
+            lines.append(f"Downloads what is missing of {', '.join(d['models'])} (up to {d['models_gb']:.1f} GB).")
+        lines.append("Starts the stack and the tray when it finishes." if self.start.get()
+                     else "Leaves the stack stopped: start it from Agent Stack in the Start menu.")
+        return "\n".join(f"•  {line}" for line in lines)
+
     def _folder(self, parent, title, hint, var, note=""):
         ttk = self.ttk
-        box = ttk.LabelFrame(parent, text=title, padding=10)
-        box.grid(sticky="ew", pady=(0, 10))
-        box.columnconfigure(0, weight=1)
-        ttk.Label(box, text=hint, foreground=MUTED_FG, wraplength=WRAP - 40).grid(row=0, column=0, columnspan=2, sticky="w")
+        box = self._card(parent, title)
+        ttk.Label(box, text=hint, style="Card.Sub.TLabel", wraplength=WRAP - 40, justify="left").grid(
+            row=1, column=0, columnspan=2, sticky="w")
         entry = ttk.Entry(box, textvariable=var)
-        entry.grid(row=1, column=0, sticky="ew", pady=(6, 0))
-        ttk.Button(box, text="Browse...", command=lambda: self.browse(var, title)).grid(row=1, column=1, padx=(8, 0), pady=(6, 0))
-        msg = ttk.Label(box, text="", wraplength=WRAP - 40)
-        msg.grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        entry.grid(row=2, column=0, sticky="ew", pady=(GAP_S, 0))
+        ttk.Button(box, text="Browse...", command=lambda: self.browse(var, title)).grid(row=2, column=1, padx=(GAP_S, 0),
+                                                                                          pady=(GAP_S, 0))
+        msg = ttk.Label(box, text="", style="Card.TLabel", wraplength=WRAP - 40, justify="left")
+        msg.grid(row=3, column=0, columnspan=2, sticky="w", pady=(GAP_S // 2, 0))
         if note:
-            ttk.Label(box, text=note, foreground=MUTED_FG, wraplength=WRAP - 40).grid(row=3, column=0, columnspan=2, sticky="w", pady=(2, 0))
+            ttk.Label(box, text=note, style="Card.Muted.TLabel", wraplength=WRAP - 40, justify="left").grid(
+                row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
         return msg
 
     def browse(self, var, title):
@@ -581,9 +686,12 @@ class Installer:
         ok = True
         for var, label, need in checks:
             chk = install.check_dir(var.get(), need, models=var is self.store)
-            label.configure(text=chk.message, foreground=OK_FG if chk.ok else ERROR_FG)
+            # A mark as well as the colour, so the result does not rest on colour alone.
+            label.configure(text=f"{'✓' if chk.ok else '✗'}  {chk.message}", foreground=self.t["good" if chk.ok else "bad"])
             ok &= chk.ok
         self.install_btn.state(["!disabled"] if ok else ["disabled"])
+        if self._alive(getattr(self, "plan_label", None)):
+            self.plan_label.configure(text=self.plan_text() if ok else "Fix the folder marked ✗ above to continue.")
         return ok
 
     def on_install(self, confirmed: bool = False):
@@ -637,21 +745,26 @@ class Installer:
         self.show_progress()
 
     def confirm_removals(self, gone: list[str], models: list[str]):
-        """Ask before anything is deleted: what goes, how much, what stays. The safe button has the focus."""
+        """Ask before anything is deleted: what goes, how much, what stays. The safe button has the focus; the
+        destructive one is outlined in the danger colour, as in the tray."""
         tk, ttk = self.tk, self.ttk
         d = tk.Toplevel(self.root)
         d.title("Remove features?")
         d.transient(self.root)
         d.resizable(False, False)
-        f = ttk.Frame(d, padding=20)
+        d.configure(background=self.t["card"])
+        theme.dark_title_bar(d)
+        f = ttk.Frame(d, style="Card.TFrame", padding=GAP_XL)
         f.pack(fill="both", expand=True)
         names = [features.BY_ID[x].title for x in gone] + models
-        ttk.Label(f, text=f"Remove {', '.join(names)}?", font=("Segoe UI", 12, "bold"), wraplength=520).pack(anchor="w")
+        ttk.Label(f, text=f"Remove {', '.join(names)}?", style="Card.Title.TLabel", font=(FONT, 12, "bold"),
+                  wraplength=600).pack(anchor="w")
         parts = [self.removals[x].text() if x in self.removals else features.BY_ID[x].title for x in gone]
         if models:
             parts.append("Deletes the models " + ", ".join(models) + "; you can download them again later.")
-        ttk.Label(f, text="\n\n".join(parts), wraplength=520, justify="left").pack(anchor="w", pady=(8, 16))
-        buttons = ttk.Frame(f)
+        ttk.Label(f, text=uninstall.short_text("\n\n".join(parts)), style="Card.TLabel", wraplength=600,
+                  justify="left").pack(anchor="w", pady=(GAP_S, GAP_L))
+        buttons = ttk.Frame(f, style="Card.TFrame")
         buttons.pack(fill="x")
 
         def close():
@@ -664,7 +777,7 @@ class Installer:
 
         back = ttk.Button(buttons, text="Go back", command=close)
         back.pack(side="right")
-        ttk.Button(buttons, text="Remove and apply", command=go).pack(side="right", padx=(0, 8))
+        ttk.Button(buttons, text="Remove and apply", style="Danger.TButton", command=go).pack(side="right", padx=(0, GAP_S))
         d.bind("<Escape>", lambda _e: close())
         d.bind("<Return>", lambda e: e.widget.invoke() if hasattr(e.widget, "invoke") else close())
         d.protocol("WM_DELETE_WINDOW", close)
@@ -676,80 +789,109 @@ class Installer:
     # ------------------------------------------------------------ page 3: progress
 
     def show_progress(self):
-        tk, ttk = self.tk, self.ttk
+        tk, ttk, t = self.tk, self.ttk, self.t
         f = self._page(scroll=False)   # the log box takes the spare height instead
-        self.heading = ttk.Label(f, text=install.summary({"status": "running"}), font=("Segoe UI", 13, "bold"))
-        self.heading.grid(sticky="w")
-        self.subheading = ttk.Label(f, wraplength=WRAP, foreground=MUTED_FG,
-                                    text="You can close this window; setup keeps running. Open the installer again to see where it is.")
-        self.subheading.grid(sticky="w", pady=(4, 10))
-        steps = ttk.Frame(f)
+        self.heading, self.subheading = self._header(
+            f, 3, install.summary({"status": "running"}),
+            "You can close this window; setup keeps running. Open the installer again to see where it is.")
+        card = self._card(f)
+        steps = ttk.Frame(card, style="Card.TFrame")
         steps.grid(sticky="ew")
         steps.columnconfigure(2, weight=1)
         self.step_rows = {}
+        self.step_started: dict[str, float] = {}   # when this window first saw each step running (for its elapsed time)
         # The steps this run has (removals first, or the few the tray asked for); all of STEPS before the state exists.
         step_list = [(s["id"], s["title"], None) for s in install.read_state().get("steps") or []] or install.STEPS
         for i, (sid, title, _) in enumerate(step_list):
-            mark = ttk.Label(steps, text=MARK["pending"][0], foreground=MARK["pending"][1], width=2, font=("Segoe UI", 11))
+            sym, key = MARK["pending"]
+            mark = ttk.Label(steps, text=sym, style="Card.TLabel", foreground=t[key], width=2, font=(FONT, 11))
             mark.grid(row=i, column=0, sticky="nw")
-            ttk.Label(steps, text=title).grid(row=i, column=1, sticky="nw", padx=(0, 12))
-            detail = ttk.Label(steps, text="", foreground=MUTED_FG, wraplength=480)
-            detail.grid(row=i, column=2, sticky="nw")
-            self.step_rows[sid] = (mark, detail)
-        self.bar = ttk.Progressbar(f, mode="determinate", maximum=1.0)
-        self.bar.grid(sticky="ew", pady=(10, 6))
+            name = ttk.Label(steps, text=title, style="Card.TLabel")
+            name.grid(row=i, column=1, sticky="nw", padx=(0, GAP_M), pady=1)
+            detail = ttk.Label(steps, text="", style="Card.Sub.TLabel", wraplength=480, justify="left")
+            detail.grid(row=i, column=2, sticky="nw", pady=1)
+            self.step_rows[sid] = (mark, detail, name)
+        # One bar for the whole run (finished steps plus the running step's share), and a line that names the step,
+        # its percentage when it reports one, else how long it has been running, so a long step still shows life.
+        self.bar = ttk.Progressbar(card, mode="determinate", maximum=1.0)
+        self.bar.grid(sticky="ew", pady=(GAP_M, GAP_S // 2))
+        self.bar_text = ttk.Label(card, text="", style="Card.Muted.TLabel")
+        self.bar_text.grid(sticky="w")
         f.rowconfigure(4, weight=1)
-        logbox = ttk.Frame(f)
-        logbox.grid(row=4, sticky="nsew")
+        logcard = self._card(f, pady=(0, 0))
+        logcard.master.grid_configure(row=4, sticky="nsew")
+        logcard.rowconfigure(1, weight=1)
+        head = ttk.Frame(logcard, style="Card.TFrame")
+        head.grid(row=0, sticky="ew", pady=(0, GAP_S))
+        ttk.Label(head, text="Log", style="Card.Title.TLabel").pack(side="left")
+        ttk.Button(head, text="Open log file", command=lambda: open_path(install.LOG_FILE)).pack(side="right")
+        logbox = ttk.Frame(logcard, style="Card.TFrame")
+        logbox.grid(row=1, sticky="nsew")
         logbox.columnconfigure(0, weight=1)
         logbox.rowconfigure(0, weight=1)
         self.log = tk.Text(logbox, height=10, wrap="none", font=("Consolas", 9), state="disabled", relief="flat",
-                           background="#ffffff", foreground="#1a1a1a", borderwidth=1, highlightthickness=1)
+                           background=t["page"], foreground=t["ink"], borderwidth=0, highlightthickness=1,
+                           highlightbackground=t["border"], highlightcolor=t["accent"], padx=6, pady=4)
         self.log.grid(row=0, column=0, sticky="nsew")
         sb = ttk.Scrollbar(logbox, command=self.log.yview)
         sb.grid(row=0, column=1, sticky="ns")
-        self.log.configure(yscrollcommand=sb.set)
-        buttons = ttk.Frame(f)
-        buttons.grid(row=5, sticky="ew", pady=(12, 0))
-        ttk.Button(buttons, text="Open log", command=lambda: open_path(install.LOG_FILE)).pack(side="left")
-        ttk.Button(buttons, text="Close", command=self.root.destroy).pack(side="right")
-        self.retry_btn = ttk.Button(buttons, text="Change choices and run again",
+        def yset(first, last):   # the scrollbar only while the log is longer than the box
+            if float(first) <= 0 and float(last) >= 1:
+                sb.grid_remove()
+            else:
+                sb.grid()
+            sb.set(first, last)
+        self.log.configure(yscrollcommand=yset)
+        self.footer = ttk.Frame(f)
+        self.footer.grid(row=5, sticky="ew", pady=(GAP_M, 0))
+        self.close_btn = ttk.Button(self.footer, text="Close", command=self.root.destroy)
+        self.close_btn.pack(side="right")
+        self.retry_btn = ttk.Button(self.footer, text="Change choices and run again",
                                     command=lambda: self.show_features(reload=True))
+        self.open_btn = None
         self.root.bind("<Escape>", lambda e: self.root.destroy())
+        self.root.unbind("<Return>")
         self._log_size = -1
         self.poll()
 
     def poll(self):
         if self.body is None or not self.body.winfo_exists() or not self.step_rows:
             return
+        t = self.t
         state = install.read_state()
         status = state.get("status", "running")
         self.heading.configure(text=install.summary(state) if state else "Starting setup...")
-        running = None
-        for s in state.get("steps", []):
-            mark, detail = self.step_rows.get(s["id"], (None, None))
+        running, steps = None, state.get("steps", [])
+        for s in steps:
+            mark, detail, name = self.step_rows.get(s["id"], (None, None, None))
             if mark is None:
                 continue
-            sym, fg = MARK.get(s["status"], MARK["pending"])
-            mark.configure(text=sym, foreground=fg)
+            sym, key = MARK.get(s["status"], MARK["pending"])
+            mark.configure(text=sym, foreground=t[key])
+            name.configure(style="Card.Name.TLabel" if s["status"] == "running" else "Card.TLabel")
             word = {"skipped": "Skipped: ", "warning": "Warning: ", "failed": "Failed: "}.get(s["status"], "")
             detail.configure(text=word + s["detail"] if s["detail"] else word.rstrip(": "),
-                             foreground={"failed": ERROR_FG, "warning": WARN_FG}.get(s["status"], MUTED_FG))
+                             foreground=t[{"failed": "bad", "warning": "warn"}.get(s["status"], "ink2")])
             if s["status"] == "running":
                 running = s
-        if running and running.get("fraction") is not None:
-            if str(self.bar.cget("mode")) != "determinate":
-                self.bar.stop()
-                self.bar.configure(mode="determinate")
-            self.bar["value"] = running["fraction"]
-        elif running:
-            if str(self.bar.cget("mode")) != "indeterminate":
-                self.bar.configure(mode="indeterminate")
-                self.bar.start(15)
+                self.step_started.setdefault(s["id"], time.monotonic())
+        finished = sum(s["status"] in ("done", "skipped", "warning", "failed") for s in steps)
+        total = len(steps) or len(self.step_rows)
+        self.bar["value"] = 1.0 if status in ("done", "warnings") else (
+            finished + ((running or {}).get("fraction") or 0.0)) / max(total, 1)
+        if running:
+            n = [s["id"] for s in steps].index(running["id"]) + 1
+            if running.get("fraction") is not None:
+                how = f"{running['fraction'] * 100:.0f}%"
+            else:
+                secs = int(time.monotonic() - self.step_started[running["id"]])
+                how = f"working, {secs // 60} min {secs % 60:02d} s" if secs >= 60 else f"working, {secs} s"
+            self.bar_text.configure(text=f"Step {n} of {total}: {running['title']}  ·  {how}")
+        elif status == "running" or not state:
+            self.bar_text.configure(text="Starting...")
         else:
-            self.bar.stop()
-            self.bar.configure(mode="determinate")
-            self.bar["value"] = 1.0 if status in ("done", "warnings") else self.bar["value"]
+            problems = sum(s["status"] == "failed" for s in steps)
+            self.bar_text.configure(text=f"{finished} of {total} steps ran" + (f", {problems} failed" if problems else ""))
         self._tail_log()
         if status in ("running",) or not state:
             self.root.after(POLL_MS, self.poll)
@@ -760,8 +902,34 @@ class Installer:
                 "failed": "The failed steps say what went wrong; the log has the details. Fix it, then run setup again.",
                 "interrupted": "Run setup again to finish; steps that already ran are quick the second time.",
             }.get(status, ""))
-            if status in ("failed", "interrupted", "done", "warnings"):
-                self.retry_btn.pack(side="right", padx=(0, 8))
+            self._finished_buttons(status)
+
+    def _finished_buttons(self, status: str):
+        """After the run: one primary action. Open the chat when setup worked and Open WebUI is on; run again when it
+        did not. Close stays a plain button."""
+        if self.retry_btn.winfo_manager():
+            return
+        url = self._chat_url() if status in ("done", "warnings") else ""
+        retry_first = status in ("failed", "interrupted")
+        self.retry_btn.configure(style="Accent.TButton" if retry_first else "TButton")
+        self.retry_btn.pack(side="right", padx=(0, GAP_S))
+        if url:
+            import webbrowser
+
+            self.open_btn = self.ttk.Button(self.footer, text="Open chat", style="Accent.TButton",
+                                            command=lambda: webbrowser.open(url))
+            self.open_btn.pack(side="right", padx=(0, GAP_S))
+            self.open_btn.focus_set()
+        elif retry_first:
+            self.retry_btn.focus_set()
+
+    @staticmethod
+    def _chat_url() -> str:
+        try:
+            p = prof.resolve_profile()
+        except (OSError, ValueError):
+            return ""
+        return f"http://127.0.0.1:{p['ports']['open_webui']}" if p["services"].get("open_webui") == "native" else ""
 
     @staticmethod
     def _next_step() -> str:

@@ -365,6 +365,30 @@ class InstallerWindow(Temp):
         options = self.calls["save_features"].call_args.args[4]
         self.assertEqual(options[("models", "primary")], "qwen3.6:35b-a3b-coding")
 
+    def test_the_folders_page_says_what_install_will_do(self):
+        self.app.show_folders()
+        text = self.app.plan_label.cget("text")
+        self.assertIn(f"Installs {features.BY_ID['images'].short}", text)
+        self.assertIn("Starts the stack", text)
+        self.app.start.set(False)
+        self.app.validate()
+        self.assertIn("Leaves the stack stopped", self.app.plan_label.cget("text"))
+        self.assertEqual(str(self.app.install_btn.cget("style")), "Accent.TButton")   # the page's one primary action
+
+    def test_progress_bar_covers_the_whole_run(self):
+        steps = [{"id": f"s{i}", "title": f"Step {i}", "status": st, "detail": "", "fraction": fr}
+                 for i, (st, fr) in enumerate((("done", None), ("running", 0.5), ("pending", None), ("pending", None)))]
+        install.read_state.return_value = {"status": "running", "steps": steps}
+        self.app.show_progress()
+        self.assertAlmostEqual(float(self.app.bar["value"]), 1.5 / 4)
+        self.assertIn("Step 2 of 4: Step 1", self.app.bar_text.cget("text"))
+        self.assertIn("50%", self.app.bar_text.cget("text"))
+        steps[1].update(status="failed", fraction=None)
+        install.read_state.return_value = {"status": "failed", "steps": steps}
+        self.app.poll()
+        self.assertTrue(self.app.retry_btn.winfo_manager())
+        self.assertEqual(str(self.app.retry_btn.cget("style")), "Accent.TButton")   # run again is the next step
+
     def test_install_writes_the_choice_and_starts_the_plan(self):
         self.app.show_folders()
         self.assertTrue(self.app.validate())

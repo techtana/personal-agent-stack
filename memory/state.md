@@ -688,6 +688,18 @@ once across a session restart.
      merging, with Claude Desktop closed. Open question for the owner: the Claude Code tooling around the repository
      (profile B, .claude/agents, the security audit skill) is not part of the installed app and was left as it is.
    - After merging: rerun install.cmd from the main checkout (it updates the app), then restart the tray.
+   - Installer window in the tray's look (same day, branch claude/installer-ui-ux-improvements-5bb01f, on top of this
+     work): the palette, system light/dark theme and ttk styles moved from tray.py to stacklib/theme.py, which both
+     windows apply (new there: TEntry, Good/Card.Head labels, greyed disabled checkboxes). The installer names its
+     three steps at the top (Features, Folders, Install), draws cards, has one accent primary button per page and the
+     danger outline on Remove and apply. Page 1: hairlines between features, the status column coloured only for
+     state (green working, amber/red to look at), the detail card held at its tallest height (no jump while the
+     pointer moves) and set beside Your choice, its load one fact per line. Page 2: folder checks marked ✓/✗ as well
+     as coloured, and a **What happens next** card. Progress: one bar for the whole run, a line with the step, its
+     percentage or elapsed time, a themed log card, and after the run **Open chat** (Open WebUI on) or **Change
+     choices and run again** as the primary button. Verified: unit tests (2 new); renders of every page, the remove
+     confirmation, and a running and a failed progress page, in both themes, from the worktree with writes and setup
+     patched out. Not verified: the live installer, a 150% display, keyboard traversal by hand.
 
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:

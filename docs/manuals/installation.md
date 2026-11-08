@@ -78,8 +78,9 @@ databases are changed to point into the app folder. The repository keeps its own
 works. After that, the Start menu entry, the login shortcut, the tray and the services all run from the app folder.
 Nothing they do reads or writes the repository.
 
-The installer then opens from the app folder. It has two pages, in a window (or the same questions in the terminal when there is no display, or with
-`--no-gui`).
+The installer then opens from the app folder. It has three steps, named at the top of the window: **Features**,
+**Folders** and **Install** (the progress). It follows Windows' light or dark theme and looks like the tray. Without a
+display, or with `--no-gui`, it asks the same questions in the terminal.
 
 **Page 1: Which features do you want?** One row per feature. Two are required and always installed; the others are
 your choice:
@@ -98,7 +99,7 @@ your choice:
 Each row shows what that feature takes on this PC: **Disk GB**, **GPU memory GB** (held while loaded; a range such as
 `0.4 to 10.5` means idle and while working), **GPU work** (how long the GPU is busy, such as `~11 s per image`), **CPU
 while busy** (logical processors, such as `~1 of 12`) and **RAM GB**. Point at a row, or tab to its checkbox, and the
-box under the table explains it: when the memory is held, what keeps the GPU busy, and where each figure comes from.
+card under the table, on the left, explains it: when the memory is held, what keeps the GPU busy, and where each figure comes from.
 Figures marked *measured* come from the reference PC (an RTX 3060 12 GB, a Ryzen 5 5500, 32 GB of DDR4); the chat
 model's GPU memory is read from Ollama when the model is loaded; the rest are estimates and say so.
 
@@ -113,7 +114,7 @@ below follow each change:
 
 Only values you change are written, and only for features you install. Settings in the tray changes them later.
 
-The box **Your choice on this PC** adds up what you ticked and says what does not fit, for example:
+The card **Your choice on this PC**, beside it, adds up what you ticked and says what does not fit, for example:
 
 - how much setup downloads (installed features count nothing);
 - the GPU memory with everything loaded at once, against what the card has free after Windows;
@@ -122,7 +123,7 @@ The box **Your choice on this PC** adds up what you ticked and says what does no
 - the CPU, and a warning when there is no NVIDIA GPU or Smart App Control may block Phoenix.
 
 Features that are installed and turned on are ticked and cannot be unticked: they stay unless you tick their box in
-the **Remove** column, which marks the row `Will be removed` and lists what goes (with sizes) in the box below the
+the **Remove** column, which marks the row `Will be removed` and lists what goes (with sizes) in the card under the
 table. Removing voice typing removes read aloud too. Under **Local models**, *Not used by the stack, delete* lists
 downloaded models no setting names (on the reference PC, the 22.6 GB qwen3.6:35b-a3b-coding); tick one to delete it.
 With removals ticked, the second page's button reads **Apply changes** and asks first, naming what is deleted; your
@@ -155,6 +156,7 @@ can go on a second or USB drive that reads at 200 MB/s or more; the Python tools
 
 Under **Options** you can also choose to download the models now, check each drive's speed and put the Hugging Face
 cache next to the models (all on by default). When models already sit in another folder, it offers to move them.
+**What happens next** lists, before you press the button, what it will remove, install, download and start.
 
 Under each folder it shows the free space on that drive and what the chosen features need there; **Install** stays
 disabled until every folder is usable. **Back** returns to the features with your ticks kept. **Install** writes the
@@ -197,6 +199,8 @@ Setup does the following, in this order:
 
 The images step (ComfyUI) runs only when images are chosen, and OpenClaw's only when OpenClaw is.
 
+The bar under the steps covers the whole run, and the line under it names the running step with its percentage, or
+how long it has been working when the step cannot tell. When setup finishes with Open WebUI on, **Open chat** opens it.
 A failed step does not stop the others; the window marks it with a cross and Ollama's or uv's message, and
 **Change choices and run again** goes back to the features page. Steps that already ran are quick the second time.
 
