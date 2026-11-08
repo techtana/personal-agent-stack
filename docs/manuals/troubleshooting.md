@@ -57,6 +57,13 @@ Logs:
 | Refine: **Could not refine the text: the gateway is not reachable** | LiteLLM is down. | Start LiteLLM in the tray; nothing was replaced. |
 | Refine: **The selection includes a picture or a table** | Pasting plain text would delete them. | Select only the text around them. |
 | Refine: Ctrl+Alt+R no longer types (R) in Word | The refine hotkey has it while voice typing runs. | Pick another **Refine hotkey** in the tray's Settings tab. |
+| Logseq plugin: **Voice typing is not running** | The plugin hands the block to voice typing, which is stopped. | Start **Voice typing** on the tray's Overview tab; nothing was changed. |
+| Logseq plugin: **The refine key is missing or wrong**, or **Paste the refine key** | The plugin's **Refine key** setting is empty or does not match `REFINE_BEARER` in `.env`. | **Copy key** on the tray's Logseq refine plugin row, then paste it into the plugin's settings in Logseq. **Set up** makes the key first if `.env` has none. |
+| Logseq plugin: **Kept your text: the model changed Logseq markup** | The model changed, dropped or added a page link, tag, block reference, macro, code or URL. | Try again or another style; the suggestion is in **Refine history**. |
+| Logseq plugin: **The block changed while the model worked** | You edited the block before the suggestion came back. | Your edit stays. Refine again, or copy the suggestion from **Refine history**. |
+| Logseq plugin: **Something else answers on the voice typing port** | The plugin's **Voice typing port** does not match `ports.dictation`. | Set it to the port in `machines/<HOST>.yaml` (8790 by default). |
+| Logseq plugin: a new default style is not in the menu | Menu labels are set when the plugin starts. | Turn the plugin off and on in Logseq's **Plugins**, or restart Logseq. **Refine with...** always lists every style. |
+| Logseq plugin row: **Set up failed: npm was not found** | Node.js is not installed. | `winget install OpenJS.NodeJS.LTS`, then **Set up** again. |
 | `no machine profile at ...` | This computer has no `machines/<HOST>.yaml`. | Run `uv run scripts/stack.py doctor --write-profile`. |
 | `<svc>: something already answers on its port; not starting a second copy` | Another copy or another program is using the port. | Use the copy that is already running, or stop the other program. |
 | `WARN <svc>: pid N now belongs to another process ...; leaving it alone` | A pid file is out of date (Windows reuses pids). | Nothing to do. The stack does not stop the other process. Start the service again if you need it. |

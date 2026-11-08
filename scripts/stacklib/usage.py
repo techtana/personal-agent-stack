@@ -56,6 +56,7 @@ SOURCES: dict[str, Source] = {
 COMPONENTS: dict[str, str] = {
     "voice-typing": "Voice typing",
     "refine": "Refine selection",   # the voice typing app's refine button (stacklib/dictation/refine.py)
+    "logseq-refine": "Refine in Logseq",  # the Logseq plugin, through voice typing (stacklib/dictation/pluginapi.py)
     "orchestrator": "Orchestrator",
     "retro": "Retrospective",
     "smoke": "Stack scripts",
@@ -75,7 +76,8 @@ SERVICE_MODELS: dict[str, str | None] = {
     "kokoro": "text to speech, in UNCOUNTED until it records its calls",
     "dictation": "Whisper calls (source voice-typing): its own, and Open WebUI's microphone through "
                  "/v1/audio/transcriptions (client Open WebUI); the text clean-up through the gateway "
-                 "(agent-stack-voice-typing); refining selected text through the gateway (agent-stack-refine)",
+                 "(agent-stack-voice-typing); refining selected text through the gateway (agent-stack-refine), and "
+                 "Logseq blocks for the Logseq plugin (agent-stack-logseq-refine)",
 }
 
 

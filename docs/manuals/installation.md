@@ -87,7 +87,8 @@ Setup does the following, in this order:
 
 1. Installs uv if it is missing (`Installing uv (astral.sh)...`).
 2. Detects your hardware and writes `machines/<HOST>.yaml`. `<HOST>` is your computer name.
-3. Creates `.env` with new random values for `LITELLM_MASTER_KEY`, `ORCHESTRATOR_BEARER` and `WEBUI_SECRET_KEY`.
+3. Creates `.env` with new random values for `LITELLM_MASTER_KEY`, `ORCHESTRATOR_BEARER`, `WEBUI_SECRET_KEY`,
+   `DICTATION_BEARER` (Open WebUI's microphone) and `REFINE_BEARER` (the Logseq refine plugin); keys already set stay.
    It also adds an empty `ANTHROPIC_API_KEY`. It never overwrites values that are already there.
    Then **Check drive speed** measures every local drive and warns about slow ones; a warning shows as an amber **!**
    and does not stop setup ([choosing-drives.md](choosing-drives.md#check-a-drives-speed)).
@@ -105,6 +106,10 @@ Setup does the following, in this order:
 11. **Install voice typing (Whisper)**: only when voice typing is turned on (`services.dictation: native`); it builds
     its environment under the media folder and fetches the Whisper model. Turn it on with
     `uv run scripts/stack.py dictate install` ([details](user-guide.md#voice-typing)).
+
+Not part of setup: the Logseq refine plugin. Build it with **Set up** on the tray's Logseq refine plugin row (or
+`uv run scripts/stack.py logseq-plugin`), then load it in Logseq
+([details](user-guide.md#refine-a-logseq-block-from-its-right-click-menu)).
 
 A failed step does not stop the others; the window marks it with a cross and Ollama's or uv's message, and
 **Change folders and run again** goes back to the questions. Steps that already ran are quick the second time.

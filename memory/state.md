@@ -1,6 +1,6 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-07 night (refine selected text in every app; open item 27). Before that, 2026-11-07 night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25late evening (uv tools start through their own Python; pid files carry start times). Earlier the
+Updated: 2026-11-08 early morning (Logseq refine plugin; open item 28). Before that, 2026-11-07 night (refine selected text in every app; open item 27). Before that, 2026-11-07 night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
 Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; design in docs/ORCHESTRATOR-DESIGN.md.
@@ -395,6 +395,43 @@ once across a session restart.
    owner's tray had stopped all its services at about 23:07, from outside this session; they were left stopped. Not
    verified: Logseq and Notion themselves, the look of the bar and the History window, the tray's new settings group
    live. The live app runs the new code only after the tray restarts from the main checkout.
+28. Logseq refine plugin (2026-11-08, branch claude/sleepy-perlman-c4c162, on top of the refine branch / PR #44).
+   - What it is: `integrations/logseq-refine`, Logseq 2.x (database graphs). A block's right-click menu offers Refine
+     with <default style>, Refine with... (a picker), and Put back the original; there is also a slash command. It
+     reaches voice typing's new routes `/plugin/styles|refine|revert|commit` (scripts/stacklib/dictation/pluginapi.py)
+     with `REFINE_BEARER`, through `logseq.Request`, which Logseq's main process sends with no Origin header. Same
+     styles, model and refine log as the pencil. Log first, then write.
+   - Setup: the tray row "Logseq refine plugin" (Set up / Copy key) and `stack.py logseq-plugin`. Building needs
+     Node.js; `dist/` is not committed. Design: docs/design/plans/2026-11-08-logseq-refine-plugin.md.
+   - Verified:
+     - 48 Python tests in tests/test_pluginapi.py, one more in tests/test_refine.py, and 12 Node tests; the full suite
+       gave 417 passed and 10 skipped;
+     - `e2e/run.mjs` in a throwaway Logseq 2.0.2 copy (e2e/sandbox.mjs, its own home under .run/logseq-test, window
+       off-screen): 29 checks with a fake model;
+     - the real qwen3.5:9b through a private gateway on port 4010: 2.4 s, refs intact, revert restored it;
+     - the real voice typing app from this branch under a throwaway profile (port 8791): health, styles, Origin 403,
+       wrong key 401;
+     - the tray row rendered hidden.
+   - A security review found three medium issues, all fixed: other Logseq plugins can read the key, so plugin entries
+     never reach the pencil's Revert; limits on runs, waiting suggestions and reverts; no write while the block is being
+     typed in. The lows were fixed except port squatting, which is accepted as for the transcription endpoint. It also
+     noted that the control server's actions need no key (code from the refine and voice typing branches; a
+     follow-up).
+   - Side effects that night:
+     - The first sandbox try read the owner's `~/.logseq` (Electron loads app.asar before an `app` folder). It wrote
+       nothing there; the sandbox now refuses to start that way.
+     - The throwaway-profile app sent one refine to the owner's live gateway on port 4000, which had come up
+       meanwhile. It is in the main checkout's traces/litellm/2026-11-08.jsonl as agent-stack-logseq-refine.
+     - That app downloaded Whisper large-v3-turbo (1.6 GB) into `D:\huggingface`, which this branch's machine file
+       still names. The owner's live setup now uses `C:\huggingface` and `C:\media\dictation`; the machine file in
+       git was not changed. Ask the owner before deleting the download.
+   - Not verified:
+     - the owner's own Logseq: Developer mode, Load unpacked plugin and the settings gear by hand;
+     - the picker's look;
+     - Logseq's Ctrl+Z after a plugin refine;
+     - a complete refine through the real app.
+   - After merging both PRs: restart the tray from the main checkout (new routes, tray row); then Set up on the row,
+     and load the folder in Logseq.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

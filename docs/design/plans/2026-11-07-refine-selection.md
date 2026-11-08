@@ -65,6 +65,8 @@ branch's config and a second copy of the app on port 8791 with test hotkeys; qwe
 ## Follow-ups worth considering
 
 - A Logseq plugin with a "Refine" item in the block context menu (`logseq.Editor.registerBlockContextMenuItem`), which
-  would also refine whole blocks without selecting their text.
+  would also refine whole blocks without selecting their text. Outcome 2026-11-08: built as
+  `integrations/logseq-refine` on voice typing's new `/plugin/` routes, same styles and log; see
+  [Refine a Logseq block from its right-click menu](2026-11-08-logseq-refine-plugin.md).
 - A "show me first" option: the suggestion in the bubble with Replace and Keep buttons.
 - Streaming the reply into the bubble for long selections.
