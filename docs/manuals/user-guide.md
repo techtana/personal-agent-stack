@@ -280,9 +280,9 @@ built-in text, so later improvements to it still reach you. If you edit the file
 `uv run scripts/stack.py dictate reload` so the running app reads it. `stack.py dictate transcribe` (**Try it on a
 recording** above) uses the saved prompt too, so you can compare instructions on the same recording.
 
-On SEKAIHOME, adding `- Use American spelling and write every number as digits.` to the built-in text took effect in
-6 of 6 tries on the 9B, and the other rules still held (the self-correction "blue, no wait, green" became "green" every
-time).
+On the reference machine, adding `- Use American spelling and write every number as digits.` to the built-in text
+took effect in 6 of 6 tries on the 9B, and the other rules still held (the self-correction "blue, no wait, green"
+became "green" every time).
 
 ## Working with the departments
 
