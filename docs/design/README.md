@@ -11,6 +11,7 @@ today's code; it gets a dated "Outcome" note instead.
 
 | Date | Plan | Status |
 |---|---|---|
+| 2026-11-08 | [Read selected text aloud in every app](plans/2026-11-08-read-aloud.md) | built on branch `claude/read-aloud-highlighted-text-57ce4d`; tested with a test copy of the app and WAV output, not yet installed in the owner's voice typing app or heard through the speakers |
 | 2026-11-08 | [Voice typing that learns the owner's voice](plans/2026-11-08-dictation-learning.md) | proposed; nothing built; P1-P2 need no owner decision, P3-P5 wait on L1-L4 |
 | 2026-11-07 | [Voice typing in every app](plans/2026-11-07-voice-typing.md) | built on branch `claude/whisper-speech-to-text-extension-99ad1f`; tested with recorded speech, not yet with a live microphone |
 | 2026-11-07 | [Refine selected text in every app](plans/2026-11-07-refine-selection.md) | built on branch `claude/ai-text-refinement-contextmenu-70d19f`; tested in test windows, a throwaway Word document and Edge, not yet in Logseq or Notion |

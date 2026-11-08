@@ -153,6 +153,24 @@ refine:
                              #     my-voice: Rewrite in my voice. Short sentences, active verbs, no jargon.
                              #     email-reply: {name: Email reply, prompt: Turn my notes into a short polite email.}
 
+read_aloud:
+  # Read selected text aloud in any app (an optional part of the voice typing app; docs/manuals/user-guide.md "Read
+  # aloud"). Select text, then click the speaker button next to the mic or press the hotkey: the selection is copied
+  # (your clipboard is put back), cleaned for listening and spoken on this PC, sentence by sentence. Nothing is saved.
+  enabled: false             # the installer's Read aloud feature (or `stack.py read-aloud install`) turns it on
+  hotkey: ctrl+alt+s         # read the selection; pressed while it reads, it stops ('' = none; Word uses it to split
+                             # the window, JetBrains IDEs for Settings)
+  voice: af_heart            # a Kokoro voice (af_heart, am_michael, bf_emma, ff_siwis, ...) or windows:<name> for a
+                             # Windows voice (`stack.py read-aloud voices` lists them)
+  speed: 1.0                 # 0.5 to 2.0
+  auto_language: true        # text clearly in another language gets a voice for that language when there is one
+  voices: {}                 # language -> voice for auto_language, e.g. {fr: ff_siwis, de: 'windows:Microsoft Katja'}
+  button: true               # show the speaker button next to the mic (the hotkey works either way)
+  esc_stops: true            # Esc stops a reading (Esc is taken from other apps only while it reads)
+  kokoro: fp32               # Kokoro-82M weights: fp32 (326 MB) | int8 (92 MB, as fast on this CPU) | off (Windows voices)
+  max_chars: 20000           # longest selection read in one go; longer ones are cut at a sentence
+  unload_after_min: 30       # free Kokoro's memory after this many idle minutes (0 = never)
+
 agent_access:
   # Folders agent sessions and media tools may use (decision D-M6). Empty means "ask the owner": every media path
   # is refused until the machine file lists it.

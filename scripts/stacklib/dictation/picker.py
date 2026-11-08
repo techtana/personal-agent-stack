@@ -1,6 +1,7 @@
-"""A small searchable list for picking one of many values (Whisper's 100 languages), shared by the mic button's menu
-and the tray's Settings tab. Type to filter by substring (names, other names and codes); Up and Down move; Enter or a
-click chooses; Esc, or clicking elsewhere, closes. It takes the keyboard focus while open, unlike the mic button.
+"""A small searchable list for picking one of many values (Whisper's 100 languages, the read aloud voices), shared by
+the buttons' menus and the tray's Settings tab. Type to filter by substring (names, other names and codes); Up and
+Down move; Enter or a click chooses; Esc, or clicking elsewhere, closes. It takes the keyboard focus while open, unlike
+the buttons.
 """
 from __future__ import annotations
 
@@ -22,13 +23,15 @@ class Picker:
     def __init__(self, master: tk.Misc, items: list[tuple[str, str]], current: str,
                  on_choose: Callable[[str], None], search: Callable[[str, list], list], *, title: str = "Language",
                  anchor: tuple[int, int, int, int] | None = None, above: bool = False, palette: dict | None = None,
-                 rows: int = 12, placeholder: str = "Search by name or code") -> None:
+                 rows: int = 12, placeholder: str = "Search by name or code",
+                 empty: str = "No language matches. Esc closes.", show_code: bool = True) -> None:
         old = Picker._open.pop(id(master), None)
         if old:
             old.close()
         Picker._open[id(master)] = self
         self.master, self.items, self.current = master, items, current
         self.on_choose, self.search = on_choose, search
+        self.empty, self.show_code = empty, show_code
         self.shown: list[tuple[str, str]] = []
         self.closed = False
         p = {**DARK, **(palette or {})}
@@ -87,9 +90,9 @@ class Picker:
         self.shown = self.search(text, self.items)
         self.list.delete(0, "end")
         for code, name in self.shown:
-            self.list.insert("end", name if code == "auto" else f"{name}  ({code})")
+            self.list.insert("end", name if code == "auto" or not self.show_code else f"{name}  ({code})")
         if not self.shown:
-            self.status.configure(text="No language matches. Esc closes.")
+            self.status.configure(text=self.empty)
             return
         n = len(self.shown)
         self.status.configure(text=f"{n} of {len(self.items)}" if text else "Type to search. Enter chooses, Esc closes.")

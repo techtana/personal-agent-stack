@@ -5,6 +5,8 @@ to text for Open WebUI's microphone.
     POST /toggle|start|stop|cancel|show|hide|quit
     POST /refine|revert          refine the selection of the window in front (or put its original back), as the hotkey
     POST /show_refine|hide_refine
+    POST /read|read_stop|read_pause  read the selection of the window in front aloud (again: stop), stop, pause or resume
+    POST /show_read|hide_read
     POST /reload                    re-read the settings that apply without a restart (the cleanup prompt)
     POST /v1/audio/transcriptions   OpenAI-compatible, with a bearer key (transcriptions.py)
 
@@ -28,7 +30,7 @@ from typing import Callable, Mapping
 from . import transcriptions
 
 ACTIONS = ("toggle", "start", "stop", "cancel", "show", "hide", "quit", "refine", "revert", "show_refine",
-           "hide_refine", "reload")
+           "hide_refine", "reload", "read", "read_stop", "read_pause", "show_read", "hide_read")
 LINGER_BYTES = 2 * transcriptions.MAX_BODY_BYTES  # what a refused upload may still send before the socket closes
 LINGER_S = 10.0
 

@@ -23,6 +23,9 @@ CHOICES = ["ctrl+alt+d", "ctrl+alt+h", "alt+`", "win+alt+h", "ctrl+alt+space", "
 REFINE_CHOICES = ["ctrl+alt+r", "ctrl+alt+e", "ctrl+alt+g", "ctrl+alt+q", "scrolllock", "pause"]
 # For the hotkey that opens the style menu at the caret: the refine key plus Shift, so the two are easy to remember.
 MENU_CHOICES = ["ctrl+alt+shift+r", "ctrl+alt+m", "ctrl+alt+w", "alt+shift+r", "ctrl+alt+."]
+# For read aloud ("speak"); all were free on the reference machine (RegisterHotKey probe, 2026-11-08). Ctrl+Alt+S splits
+# the window in Word and opens Settings in JetBrains IDEs, Ctrl+Alt+L reformats code there.
+READ_CHOICES = ["ctrl+alt+s", "ctrl+alt+y", "ctrl+alt+k", "ctrl+alt+l", "win+alt+s", "pause", "scrolllock"]
 
 
 def is_off(text: str) -> bool:

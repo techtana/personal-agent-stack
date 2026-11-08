@@ -2,7 +2,9 @@
 
 A floating mic button and a global hotkey record the microphone; Whisper (faster-whisper) transcribes on this machine;
 in polish mode the gateway's local model removes fillers and false starts before the text goes into the window that
-had focus. Audio stays in memory, and the cleanup uses a private gateway alias, so nothing leaves the machine.
+had focus. Audio stays in memory, and the cleanup uses a private gateway alias, so nothing leaves the machine. The same
+app refines selected text (refine.py) and, when read aloud is installed and on (read_aloud.enabled), reads it aloud
+with Kokoro or a Windows voice (speak.py, tts.py).
 
 This module runs in the project environment (stack.py, the tray): settings, the service command and the installer.
 The app itself (audio, VAD, Whisper, the button) runs in its own environment, built by install() under media.root,
@@ -37,6 +39,15 @@ PACKAGES = (
 )
 IMPORT_CHECK = ("import ctranslate2, onnxruntime, av, numpy, tokenizers, faster_whisper, yaml, tkinter; "
                 "print(ctranslate2.__version__, ctranslate2.get_cuda_device_count())")
+# Read aloud, an optional feature installed into the same environment (install_read_aloud). Kokoro runs on the
+# onnxruntime and numpy above; these two add espeak-ng's phonemes and Windows' own voices.
+READ_PACKAGES = (
+    "espeakng-loader==0.2.4",   # espeak-ng 1.52 (DLL and data, GPL-3.0); loaded under Smart App Control 2026-11-08
+    "comtypes==1.4.17",         # pure Python COM, for Windows' own voices (SAPI)
+)
+# Loads espeak-ng's DLL too: Smart App Control judges a DLL when it loads, not when the package installs.
+READ_CHECK = ("import ctypes, comtypes, espeakng_loader, onnxruntime, numpy; "
+              "ctypes.cdll.LoadLibrary(espeakng_loader.get_library_path()); print('ok')")
 
 
 @dataclass
@@ -281,9 +292,73 @@ def install(profile: dict, report=lambda *a: None, download_model: bool = True) 
     return "; ".join(notes)
 
 
+# ---------------------------------------------------------------- read aloud (optional, in the same environment)
+
+def _site_packages(profile: dict) -> Path:
+    venv = env_dir(profile) / ".venv"
+    return venv / "Lib" / "site-packages" if IS_WINDOWS else next(iter(sorted(venv.glob("lib/python*/site-packages"))), venv)
+
+
+def kokoro_cached(profile: dict, variant: str = "fp32") -> bool:
+    """Kokoro's weights, tokenizer and default voice are in the Hugging Face cache (the pinned revision)."""
+    from .speak import KOKORO_FILES, KOKORO_REPO, KOKORO_REVISION
+
+    if variant not in KOKORO_FILES:
+        return True   # off: Windows voices only, nothing to download
+    home = Path(hf_home(profile) or Path.home() / ".cache" / "huggingface")
+    snap = home / "hub" / f"models--{KOKORO_REPO.replace('/', '--')}" / "snapshots" / KOKORO_REVISION
+    return all((snap / name).exists() for name in (KOKORO_FILES[variant], "tokenizer.json", "voices/af_heart.bin"))
+
+
+def read_aloud_installed(profile: dict) -> bool:
+    """Read aloud's packages are in voice typing's environment, and Kokoro's files are downloaded unless
+    read_aloud.kokoro is off."""
+    from .speak import Config as ReadConfig
+
+    site = _site_packages(profile)
+    packages = all((site / pkg / "__init__.py").exists() for pkg in ("espeakng_loader", "comtypes"))
+    if not installed(profile) or not packages:
+        return False
+    return kokoro_cached(profile, ReadConfig.from_profile(profile).kokoro)
+
+
+def install_read_aloud(profile: dict, report=lambda *a: None) -> str:
+    """Add read aloud to voice typing's environment: espeak-ng and comtypes, a check that espeak-ng's DLL loads, and
+    Kokoro's weights and voices in the Hugging Face cache (about 0.35 GB for fp32; nothing with read_aloud.kokoro off)."""
+    from .speak import Config as ReadConfig
+
+    if not installed(profile):
+        raise RuntimeError("voice typing is not installed; read aloud runs in its app (`stack.py dictate install`)")
+    uv = which("uv") or "uv"
+    env = {**os.environ, "UV_LINK_MODE": "hardlink"}
+    m = profile.get("media") or {}
+    if m.get("uv_cache"):
+        env["UV_CACHE_DIR"] = m["uv_cache"]
+    python = env_python(profile)
+    report("installing espeak-ng and comtypes for read aloud")
+    _run([uv, "pip", "install", "--python", python, *READ_PACKAGES], env=env)
+    check = subprocess.run([str(python), "-c", READ_CHECK], capture_output=True, text=True, check=False)
+    if check.returncode:
+        tail = (check.stderr or "").strip().splitlines()[-1:] or ["no output"]
+        refused = "Application Control" in tail[0] or "4551" in tail[0]
+        hint = " Smart App Control refused a DLL; see CodeIntegrity event 3033 for the file." if refused else ""
+        raise RuntimeError(f"read aloud's packages do not load ({tail[0]}).{hint}")
+    notes = ["espeak-ng and comtypes installed"]
+    variant = ReadConfig.from_profile(profile).kokoro
+    if variant == "off":
+        notes.append("Kokoro is off (read_aloud.kokoro): Windows voices only")
+    elif kokoro_cached(profile, variant):
+        notes.append(f"Kokoro {variant} already downloaded")
+    else:
+        report(f"downloading Kokoro-82M ({variant}) and its voices into {hf_home(profile) or 'the Hugging Face cache'}")
+        _run([python, "-P", "-m", "stacklib.dictation", "speak", "--download"], env=app_env(profile, env))
+        notes.append(f"downloaded Kokoro {variant} and its voices")
+    return "; ".join(notes)
+
+
 def save_setting(profile: dict, key: str, value, section: str = "dictation") -> None:
-    """Write <section>.<key> (dictation or refine) into machines/<HOST>.yaml, keeping the owner's comments, so a
-    choice made in a button's menu survives a restart and shows in the tray's Settings tab."""
+    """Write <section>.<key> (dictation, refine or read_aloud) into machines/<HOST>.yaml, keeping the owner's comments,
+    so a choice made in a button's menu survives a restart and shows in the tray's Settings tab."""
     import yaml
 
     from .. import profile as prof

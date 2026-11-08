@@ -3,7 +3,8 @@ Whisper and ComfyUI's image models. Each comes from its own service, because no 
 
 - Ollama: GET /api/ps (exact sizes and the share on the GPU);
 - voice typing: GET /health on its control port (model, device, idle time). faster-whisper does not report its
-  memory, so the size is the figure measured for that model (features.WHISPER, 1.2 GB for large-v3-turbo);
+  memory, so the size is the figure measured for that model (features.WHISPER, 1.2 GB for large-v3-turbo). The same
+  answer says when read aloud's Kokoro is loaded; it runs on the CPU, so its row says CPU and holds no GPU memory;
 - ComfyUI: GET /system_stats, whose torch_vram_total is the GPU memory ComfyUI's own torch holds (models plus cache).
 
 The recordings server for Claude Desktop runs its own Whisper inside Claude Desktop's process tree and has no port to
@@ -28,6 +29,17 @@ def _unloads_ollama(expires_at: str | None, now: datetime) -> str:
     return "never" if left > 86400 * 365 else (f"in {int(left // 60)} min" if left > 0 else "soon")
 
 
+def _unloads_after(health: dict) -> str:
+    """When a model the voice typing app holds is freed: its unload_after_min against its idle seconds."""
+    after, idle = health.get("unload_after_min"), health.get("idle_s")
+    if not isinstance(after, (int, float)) or not isinstance(idle, (int, float)):
+        return "-"
+    if after <= 0:
+        return "never"
+    left = after * 60 - idle
+    return f"in {int(left // 60)} min" if left > 60 else "soon"
+
+
 def _ollama_rows(rows: list[dict], now: datetime) -> list[dict]:
     out = []
     for m in rows or []:
@@ -48,16 +60,17 @@ def _whisper_row(health: dict | None) -> dict | None:
     model = str(health.get("model") or "")
     on_gpu = health.get("device") == "cuda"
     gb = WHISPER.get(model, WHISPER["large-v3-turbo"])[1] if on_gpu else 0.0
-    unloads = "-"
-    after, idle = health.get("unload_after_min"), health.get("idle_s")
-    if isinstance(after, (int, float)) and isinstance(idle, (int, float)):
-        if after <= 0:
-            unloads = "never"
-        else:
-            left = after * 60 - idle
-            unloads = f"in {int(left // 60)} min" if left > 60 else "soon"
     return {"name": f"whisper {model}" if model else "whisper", "by": "Voice typing", "bytes": int(gb * GIB),
-            "estimate": True, "gpu": "100%" if on_gpu else "CPU", "context": 0, "unloads": unloads}
+            "estimate": True, "gpu": "100%" if on_gpu else "CPU", "context": 0, "unloads": _unloads_after(health)}
+
+
+def _kokoro_row(health: dict | None) -> dict | None:
+    """Read aloud's Kokoro while it is loaded (in system memory: it runs on the CPU)."""
+    read = health.get("read_aloud") if isinstance(health, dict) else None
+    if not isinstance(read, dict) or read.get("engine") != "ready":
+        return None
+    return {"name": str(read.get("model") or "kokoro-82m"), "by": "Read aloud", "bytes": 0, "estimate": True,
+            "gpu": "CPU", "context": 0, "unloads": _unloads_after(read)}
 
 
 def _comfy_row(stats: dict | None, label: str = "") -> dict | None:
@@ -80,7 +93,7 @@ def rows(ollama_ps: list[dict], dictation_health: dict | None = None, comfy_stat
     bytes is a measured figure for the model rather than read now), gpu ("100%", "62%", "CPU"), context (tokens, 0 for
     none) and unloads ("in 12 min", "never", "on Chat", "-")."""
     out = _ollama_rows(ollama_ps, now or datetime.now(timezone.utc))
-    for extra in (_whisper_row(dictation_health), _comfy_row(comfy_stats, comfy_label)):
+    for extra in (_whisper_row(dictation_health), _kokoro_row(dictation_health), _comfy_row(comfy_stats, comfy_label)):
         if extra:
             out.append(extra)
     return out

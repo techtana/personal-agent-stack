@@ -237,8 +237,9 @@ class Installer:
         for feat in features.FEATURES:
             r += 1
             st, is_locked = d["features"][feat.id], features.locked(feat.id, d["features"])
-            box = self.feature_boxes[feat.id] = ttk.Checkbutton(table, text=feat.title, command=self.update_summary,
-                                                                 variable=self.feature_vars[feat.id])
+            box = self.feature_boxes[feat.id] = ttk.Checkbutton(
+                table, text=feat.title, command=lambda fid=feat.id: self.feature_ticked(fid),
+                variable=self.feature_vars[feat.id])
             if is_locked:
                 box.state(["disabled"])   # required, or installed and on: Settings in the tray turns it off
             elif first is None:
@@ -290,6 +291,19 @@ class Installer:
         self.root.bind("<Return>", lambda e: self.show_folders())
         self.root.bind("<Escape>", lambda e: self.root.destroy())
         self.show_detail(first or features.FEATURES[0].id)
+        self.update_summary()
+
+    def feature_ticked(self, fid: str):
+        """Keep features with what they run inside: ticking read aloud ticks voice typing, and unticking voice typing
+        unticks read aloud (a locked feature stays as it is)."""
+        v = self.feature_vars
+        if v[fid].get():
+            for need in features.BY_ID[fid].requires:
+                v[need].set(True)
+        else:
+            for dep in features.dependents(fid):
+                if not features.locked(dep, self.d["features"]):
+                    v[dep].set(False)
         self.update_summary()
 
     def show_detail(self, fid: str):

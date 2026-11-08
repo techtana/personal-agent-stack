@@ -229,6 +229,7 @@ class TrayApp:
         self.openclaw_result = ""  # why the last Use gateway click failed, shown until the next click
         self.dictation_button: bool | None = None  # floating mic button visible? None while voice typing is down
         self.refine_button: bool | None = None     # the refine (pencil) button next to it, the same way
+        self.read_button: bool | None = None       # and the read aloud (speaker) button
         self.usage_data: dict | None = None
         self.usage_notes: list[str] = []  # model use the Usage tab cannot count, while it can happen
         self.usage_notes_at = -1e9  # monotonic time of the last check
@@ -304,7 +305,7 @@ class TrayApp:
     def _check_dictation(self) -> None:
         """Whether voice typing's floating button is showing, from its own control endpoint."""
         if not self.rows.get("dictation", {}).get("healthy"):
-            self.dictation_button = self.refine_button = None
+            self.dictation_button = self.refine_button = self.read_button = None
             self.dictation_health = None
             return
         from stacklib.dictation import control
@@ -313,10 +314,12 @@ class TrayApp:
             health = control.call(int(self.profile["ports"]["dictation"]), "health", 1.5)
             self.dictation_health = health if isinstance(health, dict) else None
             self.dictation_button = bool(health.get("button", True))
-            refine = health.get("refine")
+            refine, read = health.get("refine"), health.get("read_aloud")
             self.refine_button = bool(refine.get("button", True)) if isinstance(refine, dict) else None
+            on = isinstance(read, dict) and read.get("enabled", True)   # off: no speaker button to show or hide
+            self.read_button = bool(read.get("button", True)) if on else None
         except (OSError, ValueError, AttributeError):
-            self.dictation_button = self.refine_button = None
+            self.dictation_button = self.refine_button = self.read_button = None
             self.dictation_health = None
 
     def _check_gpu_models(self) -> None:
@@ -580,6 +583,9 @@ class TrayApp:
             pystray.MenuItem("Refine button (pencil)", lambda *_: self.set_refine_button(not self.refine_button),
                              checked=lambda _item: bool(self.refine_button),
                              visible=lambda _item: self.refine_button is not None),
+            pystray.MenuItem("Read aloud button (speaker)", lambda *_: self.set_read_button(not self.read_button),
+                             checked=lambda _item: bool(self.read_button),
+                             visible=lambda _item: self.read_button is not None),
             pystray.MenuItem("GPU for chat (free ComfyUI's memory)", lambda *_: self.set_gpu_mode("chat")),
             pystray.MenuItem("GPU for media (unload Ollama's models)", lambda *_: self.set_gpu_mode("media")),
             pystray.Menu.SEPARATOR,
@@ -602,6 +608,11 @@ class TrayApp:
         """The same for the refine (pencil) button next to the mic (refine.button)."""
         self.refine_button = visible
         self._overlay_button("show_refine" if visible else "hide_refine", "refine")
+
+    def set_read_button(self, visible: bool) -> None:
+        """The same for the read aloud (speaker) button (read_aloud.button)."""
+        self.read_button = visible
+        self._overlay_button("show_read" if visible else "hide_read", "read aloud")
 
     def _overlay_button(self, action: str, name: str) -> None:
         from stacklib.dictation import control
@@ -854,6 +865,9 @@ class TrayApp:
                 self.refine_btn = ttk.Button(buttons, text="Hide pencil", width=11,
                                              command=lambda: self.set_refine_button(not self.refine_button))
                 self.refine_btn.pack(side="left", padx=2)
+                self.read_btn = ttk.Button(buttons, text="Hide speaker", width=12,
+                                           command=lambda: self.set_read_button(not self.read_button))
+                self.read_btn.pack(side="left", padx=2)
             toggle = ttk.Button(buttons, text="Stop", width=7, command=lambda s=svc: self.toggle(s))
             if svc != "ollama":
                 toggle.pack(side="left", padx=2)
@@ -1021,7 +1035,8 @@ class TrayApp:
                 reason.grid_remove()
                 show.grid_remove()
         for attr, shown, name in (("dictation_btn", self.dictation_button, "mic"),
-                                  ("refine_btn", self.refine_button, "pencil")):
+                                  ("refine_btn", self.refine_button, "pencil"),
+                                  ("read_btn", self.read_button, "speaker")):
             btn = getattr(self, attr, None)
             if btn is None:
                 continue
@@ -1472,7 +1487,8 @@ class TrayApp:
         self.form = form
 
         groups = [("Models", "models"), ("Tracing and services", ("observability", "services")),
-                  ("Voice typing", "dictation"), ("Refine selected text", "refine"), ("Ollama runtime", "ollama_env")]
+                  ("Voice typing", "dictation"), ("Refine selected text", "refine"), ("Read aloud", "read_aloud"),
+                  ("Ollama runtime", "ollama_env")]
         self.setting_vars: dict[str, tk.Variable | TextVar] = {}
         self.model_boxes: list[ttk.Combobox] = []
         self.changed_marks: dict[str, ttk.Label] = {}
@@ -1620,7 +1636,8 @@ class TrayApp:
         part["note"].configure(text=f"Your own {' and '.join(own)} is in use." if own else "")
 
     def _pick_setting(self, s, var: tk.StringVar, button: ttk.Button) -> None:
-        """Open the type-to-search picker under a "search" setting's button (voice typing's 100 languages)."""
+        """Open the type-to-search picker under a "search" setting's button (voice typing's 100 languages, the read
+        aloud voices)."""
         from stacklib.dictation import models
         from stacklib.dictation.picker import Picker
 
@@ -1635,7 +1652,8 @@ class TrayApp:
             button.focus_set()
 
         Picker(self.window, [(c, s.labels.get(c, c)) for c in s.choices], var.get(), choose, models.search,
-               title=s.label, anchor=anchor, palette=palette)
+               title=s.label, anchor=anchor, palette=palette, show_code=s.show_code,
+               empty=f"No {s.label.lower()} matches. Esc closes.")
 
     def _load_settings(self) -> None:
         self.profile = prof.resolve_profile(self.profile["name"])

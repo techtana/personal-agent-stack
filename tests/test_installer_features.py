@@ -378,6 +378,18 @@ class InstallerWindow(Temp):
         self.assertIn("voice typing 1.2", self.summary())
         self.assertNotIn("An image", self.summary())
 
+    def test_read_aloud_comes_with_voice_typing(self):
+        """Read aloud runs in the voice typing app: ticking it ticks voice typing, unticking voice typing unticks it."""
+        v = self.app.feature_vars
+        self.assertFalse(self.app.feature_boxes["read_aloud"].instate(["disabled"]))
+        self.assertFalse(v["read_aloud"].get())
+        v["read_aloud"].set(True)
+        self.app.feature_ticked("read_aloud")
+        self.assertTrue(v["voice_typing"].get())
+        v["voice_typing"].set(False)
+        self.app.feature_ticked("voice_typing")
+        self.assertFalse(v["read_aloud"].get())
+
     def test_the_detail_box_explains_a_row(self):
         self.app.show_detail("openclaw")
         text = self.app.detail.cget("text")

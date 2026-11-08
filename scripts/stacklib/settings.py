@@ -17,9 +17,12 @@ from .yamledit import dump_scalar as _dump_scalar, set_key  # noqa: F401 - set_k
 
 CTX_CHOICES = ["8192", "16384", "32768", "65536"]
 from .dictation.cleanup import DEFAULT_PROMPT as CLEANUP_PROMPT  # noqa: E402
-from .dictation.hotkey import CHOICES as HOTKEY_CHOICES, MENU_CHOICES, REFINE_CHOICES  # noqa: E402
+from .dictation.hotkey import CHOICES as HOTKEY_CHOICES, MENU_CHOICES, READ_CHOICES, REFINE_CHOICES  # noqa: E402
 from .dictation.models import CHOICES as MODEL_CHOICES, LANGUAGES  # noqa: E402
 from .dictation.refine import BUILTIN as REFINE_STYLES  # noqa: E402
+from .dictation.speak import KOKORO_CHOICES, SPEEDS, voice_choices  # noqa: E402
+
+VOICES = voice_choices()   # Kokoro's voices and this PC's Windows voices (from the registry)
 
 
 @dataclass
@@ -39,6 +42,7 @@ class Setting:
     # "text" settings: the built-in value. The box shows it while the file holds ''; a box holding it (or nothing)
     # saves '', so the built-in text stays in the code and later improvements to it still apply.
     default: str = ""
+    show_code: bool = True  # "search" settings: the picker shows each value's code beside its name (languages)
 
 
 SETTINGS = [
@@ -112,6 +116,30 @@ SETTINGS = [
             "entries are deleted.", "refine", ["5", "15", "30", "60", "240", "1440"]),
     Setting("refine", "button", "Show the refine button", "bool",
             "The pencil button next to the mic; the hotkey works without it.", "dictation"),
+    Setting("read_aloud", "enabled", "Read aloud", "bool",
+            "A speaker button and a hotkey that read the selected text in any app aloud, on this PC. Part of the voice "
+            "typing app; needs the installer's Read aloud feature (or `stack.py read-aloud install`) once.",
+            "dictation"),
+    Setting("read_aloud", "hotkey", "Read aloud hotkey", "choice",
+            "Reads the selected text in any app aloud; press it again (or Esc) to stop.", "dictation", READ_CHOICES),
+    Setting("read_aloud", "voice", "Voice", "search",
+            "Kokoro's voices are natural and run on the CPU (about 3x faster than real time); Windows voices are "
+            "instant and flatter. Type to search; the speaker button's menu has the same list.", "read_aloud",
+            [vid for vid, _ in VOICES], labels=dict(VOICES), show_code=False),
+    Setting("read_aloud", "speed", "Speed", "choice", "How fast the voice reads; 1.0 is its normal pace.",
+            "read_aloud", list(SPEEDS)),
+    Setting("read_aloud", "auto_language", "Voice per language", "bool",
+            "Text clearly written in another language is read by a voice for that language, when one is available.",
+            "read_aloud"),
+    Setting("read_aloud", "button", "Show the read aloud button", "bool",
+            "The speaker button next to the mic; the hotkey works without it.", "dictation"),
+    Setting("read_aloud", "esc_stops", "Esc stops reading", "bool",
+            "While it reads, Esc stops it, and other apps do not get Esc until it finishes.", "read_aloud",
+            advanced=True),
+    Setting("read_aloud", "kokoro", "Kokoro weights", "choice",
+            "fp32: the full model (326 MB). int8: smaller (92 MB) and as fast on this kind of CPU. off: Windows voices "
+            "only. A change downloads the new weights at the next reading.", "read_aloud", list(KOKORO_CHOICES),
+            advanced=True),
     Setting("ollama_env", "OLLAMA_KEEP_ALIVE", "Keep models loaded for", "choice",
             "How long an idle chat model stays in memory, gateway requests included; -1 holds its VRAM until Ollama stops.", "ollama", ["5m", "30m", "1h", "4h", "-1"]),
     Setting("ollama_env", "OLLAMA_KV_CACHE_TYPE", "KV cache precision", "choice",
@@ -131,6 +159,7 @@ EFFECT_TEXT = {
     "ollama": "update Ollama's environment and restart Ollama (interrupts running requests)",
     "dictation": "restart voice typing",
     "refine": "nothing to restart (voice typing reads it at the next refine)",
+    "read_aloud": "nothing to restart (voice typing reads it at the next reading)",
 }
 
 
@@ -169,6 +198,7 @@ def current_values(profile: dict) -> dict[str, object]:
         "ollama_env": profile["ollama_env"],
         "dictation": profile.get("dictation") or {},
         "refine": profile.get("refine") or {},
+        "read_aloud": profile.get("read_aloud") or {},
     }
     out: dict[str, object] = {}
     for s in SETTINGS:
@@ -207,6 +237,8 @@ def _to_file_value(s: Setting, ui_value: object) -> object:
         return float(ui_value)
     if s.section == "refine" and s.key == "keep_minutes":
         return int(float(ui_value))
+    if s.section == "read_aloud" and s.key == "speed":
+        return float(ui_value)
     return str(ui_value)
 
 
@@ -243,7 +275,8 @@ def save(profile: dict, edits: dict[str, object]) -> list[Setting]:
 
 # The running voice typing app takes these without a restart: a button shown or hidden, or the cleanup prompt.
 LIVE_BUTTONS = {"dictation.button": ("dictation", "show", "hide", "Voice typing button"),
-                "refine.button": ("refine", "show_refine", "hide_refine", "Refine button")}
+                "refine.button": ("refine", "show_refine", "hide_refine", "Refine button"),
+                "read_aloud.button": ("read_aloud", "show_read", "hide_read", "Read aloud button")}
 LIVE_DICTATION_IDS = {*LIVE_BUTTONS, "dictation.cleanup_prompt"}
 
 
@@ -257,6 +290,8 @@ def _update_dictation(profile: dict, ids: set[str], log) -> bool:
     try:
         for sid in sorted(ids & set(LIVE_BUTTONS)):
             section, show, hide, name = LIVE_BUTTONS[sid]
+            if section == "read_aloud" and not (profile.get("read_aloud") or {}).get("enabled"):
+                continue   # read aloud is off: no button to show; the setting applies when it is turned on
             visible = bool((profile.get(section) or {}).get("button"))
             if not control.call(port, show if visible else hide).get("ok"):
                 return False

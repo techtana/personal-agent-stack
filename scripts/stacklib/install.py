@@ -228,7 +228,8 @@ def defaults(profile: dict) -> dict:
 
 
 def chosen_with_required(chosen) -> set[str]:
-    return set(chosen) | {f.id for f in features.FEATURES if f.required}
+    """The choice plus the required features and the ones a chosen feature runs inside (read aloud: voice typing)."""
+    return features.with_requirements(set(chosen) | {f.id for f in features.FEATURES if f.required})
 
 
 def tools_need_gb(chosen, est: dict, status: dict, moving: bool = False) -> float:
@@ -243,7 +244,7 @@ def media_need_gb(chosen, est: dict, status: dict, moved: bool = False) -> float
     """Space the media folder needs: ComfyUI and Whisper for recordings, plus voice typing's environment, which goes
     there when the profile has a media folder. Shared downloads (the Whisper model) count once. `moved`: the folder
     differs from the profile's media.root, so what is installed in the old one is installed again."""
-    ids = [f for f in ("images", "recordings", "voice_typing") if f in set(chosen)]
+    ids = [f for f in ("images", "recordings", "voice_typing", "read_aloud") if f in set(chosen)]
     installed = set() if moved else {f for f in ids if status[f].installed}
     return features.download_gb(ids, est, installed, full=moved) or 0.1
 
@@ -411,12 +412,12 @@ def save_features(profile: dict, chosen, media_root: str = "", status: dict | No
     path = prof.machine_file(profile["name"])
     text = original = path.read_text(encoding="utf-8")
     want: dict[tuple[str, str], object] = {}
-    current = {"services": profile.get("services") or {}, "observability": profile.get("observability") or {}}
     for fid, (section, key, on, off) in FEATURE_SWITCHES.items():
         if fid in status and status[fid].unknown:
             continue
         value = on if fid in chosen else off
-        if current[section].get(key) != value:
+        have = profile.get(section)   # a profile without the section at all (read_aloud before it existed): off
+        if (have or {}).get(key, off if have is None else None) != value:
             text = set_key(text, section, key, value)
             want[(section, key)] = value
     if media_root and needs_media(chosen) and (profile.get("media") or {}).get("root") != media_root:
@@ -717,6 +718,18 @@ def step_dictation(plan: Plan, profile: dict, report) -> str:
     return dictation.install(profile, report)
 
 
+def step_read_aloud(plan: Plan, profile: dict, report) -> str:
+    """Read aloud in voice typing's environment, only where it is turned on (read_aloud.enabled): espeak-ng, comtypes
+    and Kokoro's voices. Without it voice typing runs as before, with no speaker button."""
+    if not (profile.get("read_aloud") or {}).get("enabled"):
+        raise Skip("not chosen; tick Read aloud in the installer, or run `uv run scripts/stack.py read-aloud install`")
+    if profile["services"].get("dictation") != "native":
+        raise Skip("read aloud runs in the voice typing app, which is off; tick Voice typing too")
+    from . import dictation
+
+    return dictation.install_read_aloud(profile, report)
+
+
 def step_recordings(plan: Plan, profile: dict, report) -> str:
     """Whisper for recordings, registered as an MCP server in Claude Desktop (as `stack.py whisper install` does).
 
@@ -942,6 +955,7 @@ STEPS = (
     ("huggingface", "Set up the Hugging Face cache", step_huggingface),
     ("media", "Install ComfyUI and the image model", step_media),
     ("dictation", "Install voice typing (Whisper)", step_dictation),
+    ("read_aloud", "Install read aloud (Kokoro voices)", step_read_aloud),
     ("recordings", "Install recordings for Claude Desktop (Whisper)", step_recordings),
     ("openclaw", "Install OpenClaw", step_openclaw),
     ("links", "Point Claude Desktop and start-up entries at this app", step_links),

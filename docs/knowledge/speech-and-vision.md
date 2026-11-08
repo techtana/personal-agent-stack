@@ -45,6 +45,14 @@ blended (`af_sky+af_bella`).
 Open WebUI's TTS setting points at that endpoint: engine `openai`, base URL `http://127.0.0.1:8880/v1`, model
 `kokoro`, a default voice.
 
+Reading selected text aloud in any app (the voice typing app's speaker button, 2026-11-08) does not use that server.
+It runs the same Kokoro-82M weights as ONNX on the CPU inside the voice typing app, with espeak-ng turning text into
+phonemes, as the kokoro-onnx project does: no PyTorch, about three times faster than real time on a 6-core Ryzen.
+Kokoro reads IPA phonemes, not letters, and takes pauses and question intonation from the punctuation between them,
+so the punctuation is cut out before espeak-ng (which drops it) and put back afterwards. Windows' own SAPI and
+OneCore voices are the instant, flatter alternative for languages Kokoro lacks. See
+[the plan](../design/plans/2026-11-08-read-aloud.md).
+
 ### The OpenAI audio endpoints, and why the gateway can carry them
 
 Both jobs have standard HTTP shapes: `POST /v1/audio/transcriptions` (send audio, get text) and
