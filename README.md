@@ -53,8 +53,10 @@ Docker is optional (`infrastructure/docker-compose.yml`); the reference machine 
 ## Quick start
 
 ```powershell
-# Windows: double-click install.cmd (or run .\scripts\setup.ps1). A window asks where the models and the
-# Python tools go, then setup runs in the background: .env secrets, Ollama env, uv tools, configs, model downloads.
+# Windows: double-click install.cmd (or run .\scripts\setup.ps1). It installs the app into its own folder
+# (%LOCALAPPDATA%\Programs\AgentStack; its logs, settings and data stay there, not in this repository), then a
+# window asks where the models and the Python tools go, and setup runs in the background: .env secrets, Ollama env,
+# uv tools, configs, model downloads. Run install.cmd again after a pull to update the app.
 uv run scripts/stack.py up   # start phoenix, litellm, orchestrator, open_webui
 uv run scripts/stack.py smoke
 ```

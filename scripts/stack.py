@@ -7,7 +7,11 @@ Commands
   build         regenerate .claude/agents, .opencode/agents, config/openwebui, evals, infrastructure/litellm/config.yaml,
                 winget/configuration*.winget
   install       installer window: asks where models and Python tools go, then runs setup in the background
-                (--no-gui asks in the terminal; --status shows the background run's progress)
+                (--no-gui asks in the terminal; --status shows the background run's progress). From a source
+                checkout it first installs the app into its own folder (see deploy) and runs there; --here sets
+                up inside the checkout instead (development)
+  deploy        copy this checkout into the app folder (%LOCALAPPDATA%/Programs/AgentStack or AGENT_STACK_HOME) with
+                its own .venv, .env, profile, logs and data; --launch opens the app's installer
   setup         profile + .env secrets + Ollama env + uv tools + build + settings.local.json (+ pull core models unless --no-pull)
   disks         measure each drive's read/write speed and say which drive should hold models, tools and caches
   pull          pull the profile's models (--all includes the reviewer)
@@ -87,6 +91,9 @@ def cmd_build(a):
 def cmd_setup(a):
     from stacklib import install
 
+    _route_to_app(a, ["setup", *(["--no-pull"] if a.no_pull else []), *(["--no-restart"] if a.no_restart else []),
+                      *(["--refresh"] if a.refresh else [])])
+
     path = prof.write_profile(refresh=a.refresh)
     info(f"profile: {path.relative_to(REPO)}")
     p = prof.resolve_profile()
@@ -102,11 +109,57 @@ def cmd_setup(a):
     info("setup complete. Next: `uv run scripts/stack.py up` then `uv run scripts/stack.py smoke`.")
 
 
+def _route_to_app(a, args: list[str]) -> bool:
+    """From a source checkout, install or update the app in its own folder, then run `args` there; True when it
+    did. The app keeps its own environment, settings, logs and data, so after this nothing it runs touches the
+    checkout. `--here` keeps the old behaviour (everything inside this checkout), for working on the stack itself."""
+    from stacklib import deploy
+
+    if getattr(a, "here", False) or deploy.is_app():
+        return False
+    app = cmd_deploy(a)
+    raise SystemExit(deploy.run_in_app(app, args))
+
+
+def cmd_deploy(a):
+    """Copy this checkout into the app folder (or update it there), with its own .venv and the checkout's data."""
+    from stacklib import deploy, install
+
+    if deploy.is_app():
+        die("this folder is the installed app; run install.cmd (or `stack.py deploy`) from the source checkout to update it")
+    behind = install.checkout_behind()
+    if behind:
+        warn(behind)
+        if not getattr(a, "yes", False) and sys.stdin and sys.stdin.isatty():
+            if not input("Install this older version anyway? [y/N]: ").strip().lower().startswith("y"):
+                raise SystemExit(1)
+    target = Path(a.to).expanduser() if getattr(a, "to", None) else deploy.default_app_dir()
+    info(f"installing the app into {target} (its own environment, settings, logs and data; the source folder is "
+         "not used after this)")
+    try:
+        app = deploy.deploy(REPO, target, behind=behind)
+    except (ValueError, RuntimeError) as e:
+        die(str(e))
+    info(f"app ready in {app}")
+    if getattr(a, "launch", False):
+        deploy.run_in_app(app, ["scripts/installer.py"], detached=True, env={"AGENT_STACK_HIDE_CONSOLE": "1"})
+        info("the installer window opens from the app folder")
+    return app
+
+
 def cmd_install(a):
     from stacklib import install
 
     if a.worker:
         raise SystemExit(0 if install.run_worker(Path(a.worker)) else 1)
+    if a.status and not a.here:
+        from stacklib import deploy
+
+        app = deploy.installed_app() if not deploy.is_app() else None
+        if app:
+            raise SystemExit(deploy.run_in_app(app, ["install", "--status"]))
+    if not a.status:
+        _route_to_app(a, ["install", *(["--no-gui"] if a.no_gui else [])])
     if a.status:
         state = install.read_state()
         info(install.summary(state))
@@ -136,7 +189,10 @@ def install_in_terminal():
         behind = install.checkout_behind()
         if behind:
             warn(behind)
-            if not input("Install this older version anyway? [y/N]: ").strip().lower().startswith("y"):
+            from stacklib import deploy
+
+            # In the app the owner already answered when the source was copied (cmd_deploy).
+            if not deploy.is_app() and not input("Install this older version anyway? [y/N]: ").strip().lower().startswith("y"):
                 return
         if d["model_note"]:
             warn(d["model_note"])
@@ -356,8 +412,16 @@ def cmd_usage(a):
 
 
 def cmd_tray(a):
-    from stacklib import startup
+    from stacklib import deploy, startup
 
+    app = None if a.here or deploy.is_app() else deploy.installed_app()
+    if app:
+        # The installed app owns the tray, the Start menu entry and the services; a second tray from this checkout
+        # would fight it for the ports and point the shortcuts back here.
+        flags = [f"--{k.replace('_', '-')}" for k in ("foreground", "status", "stop", "show", "install_startup", "remove_startup")
+                 if getattr(a, k)]
+        info(f"tray: using the installed app in {app} (--here runs this checkout's own tray)")
+        raise SystemExit(deploy.run_in_app(app, ["tray", *flags]))
     if a.install_startup:
         info(f"tray: start at login enabled ({startup.install()})")
     if a.remove_startup:
@@ -518,10 +582,21 @@ def main(argv=None):
     s = sub.add_parser("doctor"); s.add_argument("--write-profile", action="store_true"); s.add_argument("--refresh", action="store_true"); s.set_defaults(f=cmd_doctor)
     s = sub.add_parser("profile"); s.add_argument("--machine"); s.set_defaults(f=cmd_profile)
     s = sub.add_parser("build"); s.add_argument("--machine"); s.set_defaults(f=cmd_build)
-    s = sub.add_parser("setup"); s.add_argument("--no-pull", action="store_true"); s.add_argument("--no-restart", action="store_true"); s.add_argument("--refresh", action="store_true"); s.set_defaults(f=cmd_setup)
+    s = sub.add_parser("setup"); s.add_argument("--no-pull", action="store_true"); s.add_argument("--no-restart", action="store_true"); s.add_argument("--refresh", action="store_true")
+    s.add_argument("--here", action="store_true", help="set up inside this checkout instead of the app folder (development)")
+    s.add_argument("--yes", action="store_true"); s.add_argument("--to"); s.set_defaults(f=cmd_setup)
     s = sub.add_parser("install", help="ask where models and tools go, then run setup in the background")
     s.add_argument("--no-gui", action="store_true"); s.add_argument("--status", action="store_true")
-    s.add_argument("--worker", help=argparse.SUPPRESS); s.set_defaults(f=cmd_install)
+    s.add_argument("--worker", help=argparse.SUPPRESS)
+    s.add_argument("--here", action="store_true", help="set up inside this checkout instead of the app folder (development)")
+    s.add_argument("--yes", action="store_true", help="install even when the checkout is behind origin")
+    s.add_argument("--to", help="app folder (default: %%LOCALAPPDATA%%/Programs/AgentStack, or AGENT_STACK_HOME)")
+    s.set_defaults(f=cmd_install)
+    s = sub.add_parser("deploy", help="install or update the app in its own folder from this checkout (install.cmd runs this)")
+    s.add_argument("--to", help="app folder (default: %%LOCALAPPDATA%%/Programs/AgentStack, or AGENT_STACK_HOME)")
+    s.add_argument("--launch", action="store_true", help="open the app's installer window afterwards")
+    s.add_argument("--yes", action="store_true", help="install even when the checkout is behind origin")
+    s.set_defaults(f=cmd_deploy)
     s = sub.add_parser("disks", help="measure drive speeds and suggest where models, tools and caches go")
     s.add_argument("drives", nargs="*", help="drive roots such as C:\\ D:\\ (default: every local drive)"); s.set_defaults(f=cmd_disks)
     s = sub.add_parser("openclaw", help="make the gateway OpenClaw's only model endpoint (onboards it if needed)")
@@ -559,7 +634,9 @@ def main(argv=None):
     s = sub.add_parser("tray", help="background tray app that runs the services and shows their status")
     s.add_argument("--foreground", action="store_true"); s.add_argument("--status", action="store_true"); s.add_argument("--stop", action="store_true")
     s.add_argument("--show", action="store_true", help="open the tray window (also when the tray is already running)")
-    s.add_argument("--install-startup", action="store_true"); s.add_argument("--remove-startup", action="store_true"); s.set_defaults(f=cmd_tray)
+    s.add_argument("--install-startup", action="store_true"); s.add_argument("--remove-startup", action="store_true")
+    s.add_argument("--here", action="store_true", help="run this checkout's own tray even when the app is installed (development)")
+    s.set_defaults(f=cmd_tray)
     a = ap.parse_args(argv)
     a.f(a)
 

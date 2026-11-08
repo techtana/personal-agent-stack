@@ -1,6 +1,6 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-08 (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+Updated: 2026-11-08 (the installer makes an app apart from the repository; open item 30). Before that, the same day (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
@@ -435,6 +435,35 @@ once across a session restart.
    Not verified: the live tray and services as PAS processes, branded copies running on a machine without SAC, Linux
    (unchanged). After merging: restart the tray through `stack.py tray` (rewrites the shortcuts), rerun
    `stack.py whisper install` and `stack.py tasks install` if used, so their saved commands name the PAS copies.
+30. Installed app apart from the repository (2026-11-08, branch claude/installation-app-independence-db332c).
+   Before this, every path came from the folder the code ran from, so the installed stack's tray log, pid files,
+   `.run` data, traces, `.env`, profile, generated configs, the Start menu and login shortcuts and Claude Desktop's
+   recordings entry (its AGENT_STACK_USAGE_DIR) all lived in or pointed at the checkout. Open WebUI's database also
+   stores each upload's absolute path (`file.path`).
+   - `install.cmd` (and `stack.py install|setup` from a checkout) now runs `stack.py deploy` first
+     (stacklib/deploy.py). It copies the git-tracked files without tests/ into `%LOCALAPPDATA%\Programs\AgentStack`
+     (AGENT_STACK_HOME or `--to` override it) and builds the app's own signed `.venv`. It brings `.env`, the profile,
+     `.run` (without pids, logs, install), traces and orchestrator/data over once, only where the app has none
+     yet, and rewrites the source paths in the copied SQLite databases. Then the installer opens from the app.
+   - Before copying, deploy stops the checkout's tray and services and an earlier install's. A reinstall overwrites
+     the code and removes the files the source dropped (`.agent-stack-files.json`). It keeps the app's data and
+     `memory/`.
+   - Marker `.agent-stack-app.json`: it also records the "checkout is behind origin" warning for the app's installer.
+   - New setup step **Point Claude Desktop and start-up entries at this app**: it re-registers local-whisper when
+     its entry differs, rewrites the Linux autostart file, and warns about scheduled tasks registered from another
+     folder.
+   - `stack.py tray`, `start.cmd` and `stop.cmd` in a checkout hand over to the installed app; `--here` keeps the
+     old in-checkout behaviour for development.
+   Verified:
+   - unit tests;
+   - a copy of this worktree into a temp folder: `make_venv` built a signed `.venv` there, the copy reported
+     itself as the app, `stack.py tray --status` in the worktree handed over to it, then the temp folder was
+     deleted.
+   Not run: install.cmd end to end on this machine, because it would stop the live tray and copy the main
+   checkout's data.
+   After merging, run install.cmd from the main checkout once. Then check that the Start menu entry and the login
+   shortcut start `%LOCALAPPDATA%\Programs\AgentStack`, and that Open WebUI shows the old chats and images. Then
+   restart Claude Desktop (recordings). Delete the checkout's `.run`, `traces` and `.env` when the app works.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render
