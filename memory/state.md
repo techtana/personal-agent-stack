@@ -550,6 +550,18 @@ once across a session restart.
    After merging, run install.cmd from the main checkout once. Then check that the Start menu entry and the login
    shortcut start `%LOCALAPPDATA%\Programs\AgentStack`, and that Open WebUI shows the old chats and images. Then
    restart Claude Desktop (recordings). Delete the checkout's `.run`, `traces` and `.env` when the app works.
+33. Models folder vs the Ollama app's Model location (2026-11-08, branch claude/voice-typing-manual-command-3e6665).
+   After install.cmd the tray showed "Models missing" although `ollama list` had all three models: the new profile
+   named ~\.ollama\models, but the Ollama app's own Settings > Model location (`%LOCALAPPDATA%\Ollama\db.sqlite`) is
+   D:\ollama\models, which wins over OLLAMA_MODELS, so the pulls went to D:. Now:
+   - the Features card asks the running Ollama (/api/tags, cached 5 s) and falls back to manifests in the folder
+     Ollama really reads; a profile that differs from the app's setting shows as a warning on the row;
+   - the installer offers the app's folder first (with a note), refuses another models folder while the app setting
+     differs, and `stack.py setup` adopts it and writes it into the profile;
+   - the move step does not move models where Ollama would not read them, and the env step warns.
+   Verified: unit tests (tests/test_ollama_location.py and the full suite); on this PC, read-only, the status reads
+   Installed with the override note and the installer's default is D:\ollama\models. Not run: the installer itself.
+   This PC's profile still says ~\.ollama\models: rerun install.cmd (it now offers D:) or set the folder in Settings.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

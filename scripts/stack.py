@@ -91,7 +91,7 @@ def cmd_build(a):
 
 
 def cmd_setup(a):
-    from stacklib import install
+    from stacklib import features, install
 
     _route_to_app(a, ["setup", *(["--no-pull"] if a.no_pull else []), *(["--no-restart"] if a.no_restart else []),
                       *(["--refresh"] if a.refresh else [])])
@@ -100,6 +100,11 @@ def cmd_setup(a):
     info(f"profile: {path.relative_to(REPO)}")
     p = prof.resolve_profile()
     store = p["ollama_env"].get("OLLAMA_MODELS") or p["model_store"] or str(Path.home() / ".ollama" / "models")
+    app_store = features.app_model_store()   # the Ollama app's Model location wins over OLLAMA_MODELS
+    if app_store and Path(app_store) != Path(store):
+        warn(f"the Ollama app's own Settings > Model location is {app_store}, so setup uses it instead of {store}")
+        store = app_store
+        install.save_paths(p, store)   # so the profile, OLLAMA_MODELS and the tray name the folder Ollama reads
     if not install.drive_present(store):
         die(f"the models folder {store} is on a drive that is not connected; run `uv run scripts/stack.py install` to choose another")
     behind = install.checkout_behind()
@@ -256,11 +261,11 @@ def install_in_terminal():
         if d["model_note"]:
             warn(d["model_note"])
 
-        def ask_dir(label, default, need):
+        def ask_dir(label, default, need, models=False):
             """need(answer): the GB that folder needs, which can depend on whether it is the current one."""
             while True:
                 ans = input(f"{label} [{default}]: ").strip().strip('"') or default
-                chk = install.check_dir(ans, need(ans))
+                chk = install.check_dir(ans, need(ans), models=models)
                 info(f"  {chk.message}")
                 if chk.ok:
                     return ans
@@ -271,7 +276,8 @@ def install_in_terminal():
 
         est, status = d["estimates"], d["features"]
         pull = ask_yes(f"Download models now ({', '.join(d['models'])}, about {d['models_gb']:.1f} GB)?")
-        store = ask_dir("Models folder", d["model_store"], lambda ans: install.store_need_gb(d, p, ans, pull))
+        store = ask_dir("Models folder", d["model_store"], lambda ans: install.store_need_gb(d, p, ans, pull),
+                        models=True)
         move = ""
         if d["move_from"] and Path(d["move_from"]) != Path(store):
             if ask_yes(f"Move the {d['move_gb']:.1f} GB of models already in {d['move_from']}?"):

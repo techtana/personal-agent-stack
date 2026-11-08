@@ -86,13 +86,18 @@ def drive_present(path: str) -> bool:
     return p.is_absolute() and Path(p.anchor).exists()
 
 
-def check_dir(path: str, need_gb: float) -> PathCheck:
-    """Can `path` be created and hold need_gb more? The message is shown under the folder field as is."""
+def check_dir(path: str, need_gb: float, models: bool = False) -> PathCheck:
+    """Can `path` be created and hold need_gb more? The message is shown under the folder field as is.
+    models: the folder is for Ollama's models, so it must match the Ollama app's own Model location when one is set."""
     if not path.strip():
         return PathCheck(False, "Choose a folder.")
     p = Path(path.strip()).expanduser()
     if not p.is_absolute():
         return PathCheck(False, "Use a full path, for example C:\\ollama\\models.")
+    if models:
+        note = features.store_override_note({}, str(p))
+        if note:
+            return PathCheck(False, note)
     if not Path(p.anchor).exists():
         return PathCheck(False, f"Drive {p.drive or p.anchor} is not connected.")
     if p.exists() and not p.is_dir():
@@ -182,6 +187,12 @@ def defaults(profile: dict) -> dict:
     configured = profile["ollama_env"].get("OLLAMA_MODELS") or profile["model_store"] or ""
     fallback = str(Path.home() / ".ollama" / "models")   # Ollama's own default
     note = ""
+    app = features.app_model_store()   # the Ollama app's Model location overrides OLLAMA_MODELS, so offer it
+    if app and drive_present(app):
+        if configured and Path(configured) != Path(app):
+            note = (f"machines/{profile['name']}.yaml had {configured}, but the Ollama app's own Settings > Model "
+                    f"location is {app}, and Ollama uses that one.")
+        configured = app
     if configured and drive_present(configured):
         store = configured
     else:
@@ -555,6 +566,9 @@ def step_models_move(plan: Plan, profile: dict, report) -> str:
         raise Skip("the models are already in that folder")
     if not has_models(src):
         raise Skip(f"no models found in {src}")
+    override = features.store_override_note(profile, dst)
+    if override:   # moved files would sit where Ollama never looks
+        raise Warn(f"not moved. {override}")
     report("stopping Ollama so its files can move")
     ollama.stop()
     moved = 0
@@ -576,6 +590,9 @@ def step_ollama_env(plan: Plan, profile: dict, report) -> str:
         ollama.restart(base)
     if not ollama.version(base):
         raise RuntimeError(f"Ollama does not answer at {base}; start it from the Start menu and run setup again")
+    override = features.store_override_note(profile, plan.model_store)
+    if override:   # the app starts its server with its own folder, whatever OLLAMA_MODELS says
+        raise Warn(f"OLLAMA_MODELS is {plan.model_store}, but Ollama will not use it. {override}")
     if changed and not plan.restart_ollama:
         return f"changed {', '.join(changed)}; restart Ollama for them to apply"
     return f"models folder {plan.model_store}" + (f"; changed {', '.join(changed)}" if changed else "")

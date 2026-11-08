@@ -29,6 +29,50 @@ def version(base: str) -> str | None:
         return None
 
 
+def app_settings_db() -> Path:
+    return Path(os.environ.get("LOCALAPPDATA", "")) / "Ollama" / "db.sqlite"
+
+
+def app_model_location(db: Path | None = None) -> str:
+    """The folder set in the Ollama app's own Settings > Model location (Windows), or "" when none is set or it cannot
+    be read. The app starts its server with that folder, so it wins over the OLLAMA_MODELS environment variable: setup
+    can write OLLAMA_MODELS and restart Ollama, and the models still go to this folder. Read-only; the table is the
+    app's, so a missing table or column means "not set"."""
+    if db is None:
+        if not IS_WINDOWS:
+            return ""
+        db = app_settings_db()
+    if not db.is_file():
+        return ""
+    import sqlite3
+
+    try:
+        con = sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True, timeout=2)
+        try:
+            row = con.execute("SELECT models FROM settings LIMIT 1").fetchone()
+        finally:
+            con.close()
+    except (sqlite3.Error, OSError, ValueError):
+        return ""
+    return str(row[0]).strip() if row and row[0] else ""
+
+
+def model_names(base: str, timeout: float = 3) -> set[str] | None:
+    """Models the running Ollama has (`/api/tags`), each with and without ":latest"; None when it does not answer."""
+    try:
+        models = api(base, "/api/tags", timeout=timeout).get("models", [])
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    names: set[str] = set()
+    for m in models:
+        n = m.get("name") or m.get("model") or ""
+        if n:
+            names.add(n)
+            if n.endswith(":latest"):
+                names.add(n[: -len(":latest")])
+    return names
+
+
 def set_user_env(env: dict[str, str]) -> list[str]:
     """Persist OLLAMA_* as user environment variables (Windows registry) and in this process.
     Returns the names whose persisted value changed."""
