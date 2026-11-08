@@ -1,7 +1,6 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-07 late evening (refine selected text in every app; open item 24). Before that, 2026-11-07 (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
-late evening (uv tools start through their own Python; pid files carry start times). Earlier the
+Updated: 2026-11-07 night (refine selected text in every app; open item 27). Before that, 2026-11-07 night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
 Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; design in docs/ORCHESTRATOR-DESIGN.md.
@@ -242,13 +241,148 @@ once across a session restart.
    pasting into a Tk test window (clipboard restored) and typing live phrases. Ctrl+Alt+Space is taken here (Claude
    desktop quick entry), hence Ctrl+Alt+D. Not verified: a live microphone and hand-pressed hotkey, the bubble's look
    (screen capture refused), pasting into Logseq/Word/Notion, languages other than English, the tray's new row and
-   settings in the live tray. 2026-11-08: the language choice covers all 100 Whisper codes through a type-to-search
+   settings in the live tray. Later on 2026-11-07: the language choice covers all 100 Whisper codes through a type-to-search
    picker (button menu and tray Settings); its filtering and keyboard choice were checked in an invisible window, its
    look and the tray button were not.
    Also verified: cancel, a second instance, hold-to-talk with injected Ctrl+Alt+D (live text typed at release). A
    code review's eight findings and its clipboard-owner risk were fixed (owner window per clipboard operation; restore
    after 1 s). At the end of the session the app was left running from the worktree (pid file in the worktree's .run).
-24. Refine selected text (2026-11-07, branch claude/ai-text-refinement-contextmenu-70d19f): a pencil button left of
+24. Claude security audit (2026-11-07, branch claude/awesome-jackson-45840e): skill `.claude/skills/claude-security-audit`
+   (`scripts/audit.py`, standard library; state and reports in `%LOCALAPPDATA%\claude-security-audit`, outside every
+   repository). Baseline run on this machine: 2 high, 6 medium, 7 low, 9 info.
+   - High: identity in two committed docs; Claude can read 5 credential files.
+   - Medium: secret-file patterns not denied everywhere; no CLAUDE_CODE_SUBPROCESS_ENV_SCRUB; Desktop transcripts kept
+     forever; CLI 2.1.302 and Desktop's Claude Code 2.1.317 behind 2.1.319, which fixes four permission problems; four
+     allow rules that admit any code (`Bash(uv run *)`, two `python -c ' *` rules, a PowerShell one-liner with a
+     wildcard) in `.claude/settings.local.json` of both the main checkout and the worktree.
+   - Low: LITELLM_MASTER_KEY and ORCHESTRATOR_BEARER in plain text in that git-ignored file.
+   - OSV: no advisory for the 7 packages checked.
+
+   Fixed that day by `scrub --apply`: the Windows user name in docs/plans/AGENT-FILE-ISOLATION.md and
+   docs/knowledge/agent-file-isolation.md, and an email and two home paths in old Claude memory notes. The owner's
+   short name was removed from one note by hand. Kept on purpose: the claude.ai-synced job-search skill.
+
+   Written the same day:
+   - The standing rule in `~/.claude/CLAUDE.md` (marker `claude-security-audit:identity-rule`), and AGENTS.md rule 10.
+   - The desktop scheduled task `claude-security-audit`: Mondays at about 09:43, saved in Auto mode. Its prompt stops
+     with "not on main yet" until this branch is merged.
+
+   Not changed (reported to the owner): settings; the computer name in 45 committed files (machine profiles are named
+   after it); 3 pushed commits with the account email.
+
+   Verified:
+   - 19 unit tests, 210 passed in total, run as `uv run --with pytest python -m pytest -q`, because Smart App Control
+     blocked the pytest.exe launcher.
+   - A leak check of every output file (no identifiers, no account UUIDs).
+   - A fresh-agent run of the skill. It found nine problems, all fixed: `scrub` and `collect` disagreed on which
+     repositories they cover, and changelog lines were cut without notice.
+
+   Not verified: a scheduled run end to end (it needs the merge), and the per-checkout fix advice on a repository
+   other than this one.
+25. Usage tab for every model (2026-11-07, branch claude/usage-all-models). The tab reads gateway traces plus one record
+   per model call made elsewhere (`traces/usage/<source>/<date>.jsonl`, stacklib/usage_log.py):
+   - voice typing's Whisper (live previews re-read the phrase so far: shown under the table, not in the totals);
+   - the recordings MCP server (client Claude Desktop);
+   - ComfyUI jobs, which the tray reads from ComfyUI's GET /history each poll while it runs (high-water mark in
+     `traces/usage/comfyui/state.json`; jobs finished just before a ComfyUI restart are lost);
+   - `stack.py bench` and the warm-up (source ollama).
+   Rows show tokens, audio (x realtime) or images by kind. Gateway traces now carry data_class and location, and outside
+   API rows end in "· API". Retro, the orchestrator and smoke send User-Agent agent-stack-<id>. Open WebUI's document
+   embeddings go through the gateway on fresh installs. `stack.py usage` prints the tab. AGENTS.md rule 11 and
+   tests/test_tray_coverage.py make new services, profile sections and model calls show up in the tray.
+   On this box (30 days of real traces): qwen3.5:9b 175 requests. Also claude-sonnet-5-5, 13 requests ($0.13, Open
+   WebUI), and claude-haiku-5-5, 2 requests (orchestrator), both from before the private-only build.
+   Not counted, and named in the tab:
+   - Open WebUI's own speech-to-text: its database has audio.stt.engine "", so the chat mic runs Whisper base inside
+     Open WebUI (open item 26 moves it to voice typing's Whisper once `media provision` runs);
+   - Open WebUI's document embeddings: its database still has rag.embedding_engine "ollama", until `media provision`;
+   - Kokoro, when it runs.
+   Claude Code profile A is outside the stack.
+   A code review's seven findings were fixed:
+   - ComfyUI collection is locked and de-duplicated by job id;
+   - an odd job cannot stop the tray's poll;
+   - records keep only an error's type, and paths are scrubbed;
+   - previews are kept out of the totals;
+   - a failed write is retried, and a lost state file does not duplicate jobs;
+   - RECORDING_OFF stops programs that were already running;
+   - no embedding rows are written without LITELLM_MASTER_KEY.
+   Verified:
+   - unit tests;
+   - a hidden render of the tab built from this worktree, with copies of the main checkout's gateway traces and
+     synthetic usage records (table, tiles, chart and notes read back through Tk; no screenshot);
+   - the engine tests in the dictation venv;
+   - Segment.tokens in both Whisper venvs;
+   - the coverage test failing on a probe file.
+   Not verified: a live ComfyUI job (its history was empty), live dictation or recording records, the tab's look, and
+   Open WebUI embeddings through the gateway on this install (not provisioned).
+   After merging:
+   - restart the tray from the main checkout;
+   - Stop and Start the Voice typing row;
+   - run `stack.py whisper install` and restart Claude Desktop (recordings);
+   - run `stack.py media provision` and restart Open WebUI (embeddings);
+   - restart the orchestrator (its name in the traces).
+26. Open WebUI's microphone on voice typing's Whisper (2026-11-07, branch claude/competent-mccarthy-a81053, PR #41).
+   - Endpoint: voice typing's control port (8790) also serves an OpenAI-compatible `POST /v1/audio/transcriptions`
+     (stacklib/dictation/transcriptions.py). It takes multipart `file`, `model` (ignored), `language`, `prompt` and
+     `response_format` json|text. The Origin and Host refusals stay. Bodies may be chunked, because Open WebUI's
+     aiohttp streams the file.
+   - The key is voice typing's own bearer, DICTATION_BEARER in .env, not the gateway's master key. While voice typing
+     is off, any local program could listen on 8790 and would learn only this key. The installer generates it;
+     `media provision` appends it to an existing .env and leaves the rest of the file as it is. The app reads it on
+     each request, so a key added later works without a restart.
+   - Limits: 25 MB per upload, 30 minutes of decoded audio, one request at a time (the next waits up to 2 minutes,
+     then gets 503 busy), and 2 minutes to send the body. A refusal is answered first; the server then reads what the
+     caller still sends, so the caller sees the answer instead of a reset.
+   - No language field means detect it, as OpenAI's API does, even when dictation.language names one. Open WebUI sends
+     its user's Speech-to-Text Language when one is set.
+   - It runs on voice typing's own Engine (one model, one decode at a time). Each call is recorded under source
+     voice-typing with the client named from its User-Agent (Open WebUI).
+   - Open WebUI points at it only while `services.dictation` is native. A fresh install gets the environment
+     (AUDIO_STT_ENGINE=openai, base URL `http://127.0.0.1:8790/v1`, key, model, request format multipart).
+     `stack.py media provision` writes the same five rows into an existing database, after a backup, in one
+     transaction. Open WebUI reads them on every request, so it needs no restart.
+   - The Usage tab's "own speech-to-text" note stays while audio.stt.engine is "" and goes once the engine points at
+     voice typing. A second note names an engine or URL outside the stack.
+   - This install (read-only check that night): audio.stt.engine "", audio.stt.openai.api_base_url
+     "https://api.openai.com/v1", no key, whisper_model "base". Changing the engine alone would have sent recordings
+     to OpenAI.
+   - No ffmpeg on PATH, so Open WebUI skips its pydub conversion and forwards the browser's recording unchanged. PyAV
+     17.0.0 in the dictation venv decodes webm/opus, ogg/opus, ogg/vorbis, wav, m4a/aac, mp4/aac, mp3 and flac. Broken
+     files get a 400; a truncated webm decodes as far as it goes.
+   A security review (subagent, read-only) found no critical or high issues. It found three medium ones, all fixed:
+   - uncapped decoding: a 494 KB FLAC of digital silence declares 45 minutes, and 25 MB of it would decode to about
+     9 GB of samples;
+   - a long job holding voice typing's model;
+   - the master key reused as the endpoint's key.
+   It also found three low ones and one info. Fixed: resets on refused uploads, folder paths in the 503 message, a
+   body that trickles in, and dictation's language forced onto Open WebUI recordings. Not done:
+   - SO_EXCLUSIVEADDRUSE on the port, because on Windows it can refuse a re-bind while the port's connections are in
+     TIME_WAIT, and the tray's health check leaves those every 10 s;
+   - a limit on concurrent connections. Local programs could already hold threads before this change.
+   Verified:
+   - unit tests (309 passed), and the decoder and engine tests in the dictation venv;
+   - a throwaway server on port 8797 with the real Engine (large-v3-turbo on cuda, loaded in 5.5 s). Requests were
+     sent the way Open WebUI 0.12.3's `_transcribe_openai` sends them, from its own Python 3.11 with aiohttp 3.14.3
+     (chunked). webm, ogg, mp4, m4a, mp3 and wav each returned the spoken sentence. Each took 0.3 s warm for 4.8 s of
+     eSpeak speech, and the first took 1.1 s;
+   - "English" as a language got a 400, and Open WebUI's retry without a language worked;
+   - a wrong key got a 401 in OpenAI's error shape;
+   - the server wrote six records with client Open WebUI and device cuda, to a temp folder;
+   - after the review fixes, the same check with the decoder written here passed again. A German eSpeak recording sent
+     without a language came back as German with dictation.language "en". `bomb.flac` (45 minutes of silence) got a
+     413 in 12 ms from its header. A 90 s webm muxed live, with no duration in its header (as MediaRecorder writes it),
+     got a 413 after 0.4 s with the cap lowered to 60 s;
+   - `stack.py media provision` with the real machine profile against a synthetic Open WebUI database in a temp folder:
+     16 rows written after one backup, and the note gone.
+   Not verified: Open WebUI itself calling it, a real browser recording, and the mic in the browser. The services were
+   down, and Open WebUI's live database was not changed: `media provision` needs the owner's OK.
+   After merging:
+   - run `uv run scripts/stack.py media provision` from the main checkout. It adds DICTATION_BEARER to .env, backs up
+     webui.db, and writes the rows;
+   - restart voice typing (Stop and Start its tray row) so it serves the endpoint.
+   If voice typing is later turned off, Open WebUI's mic shows a connection error until its engine is set back to
+   Whisper (Local) in Admin Settings > Audio. Neither the tray's Voice typing switch nor provisioning undoes the rows.
+27. Refine selected text (2026-11-07, branch claude/ai-text-refinement-contextmenu-70d19f): a pencil button left of
    the mic and Ctrl+Alt+R copy the selection of any app, have `local-primary` rewrite it in a style (7 built in, your
    own under `refine.prompts`), check the reply, copy again to confirm the same selection and paste over it. Every
    suggestion goes to `.run/dictation/refine-log.jsonl` (before, after, status); Revert and History are in the pencil's

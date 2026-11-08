@@ -351,6 +351,7 @@ def ensure_env_file() -> dict[str, str]:
         ("LITELLM_MASTER_KEY", lambda: "sk-" + secrets.token_hex(24)),
         ("ORCHESTRATOR_BEARER", lambda: secrets.token_urlsafe(32)),
         ("WEBUI_SECRET_KEY", lambda: secrets.token_hex(32)),
+        ("DICTATION_BEARER", lambda: secrets.token_urlsafe(32)),  # Open WebUI's microphone -> voice typing
     )
     for k, gen in generators:
         if not env.get(k):

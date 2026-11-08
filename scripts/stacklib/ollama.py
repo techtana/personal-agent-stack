@@ -1,4 +1,7 @@
-"""Ollama: environment variables, lifecycle, pulls, benchmark."""
+"""Ollama: environment variables, lifecycle, pulls, benchmark.
+
+bench() and warm() call Ollama directly, not through the gateway, so each call writes its own usage record (source
+ollama) for the tray's Usage tab. Pulls and unloads run no model and record nothing."""
 from __future__ import annotations
 
 import json
@@ -9,7 +12,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import IS_WINDOWS, info, warn, which
+from . import IS_WINDOWS, info, usage_log, warn, which
 
 
 def api(base: str, path: str, payload: dict | None = None, timeout: int = 600) -> dict:
@@ -143,7 +146,17 @@ def warm(base: str, model: str, num_ctx: int, options: dict | None = None, timeo
     num_ctx and options must match the gateway deployment, or that request reloads the runner. No keep_alive is sent:
     OLLAMA_KEEP_ALIVE decides how long the model stays, as it does for gateway requests."""
     t0 = time.time()
-    api(base, "/api/generate", {"model": model, "stream": False, "options": {"num_ctx": num_ctx, **(options or {})}}, timeout=timeout)
+    r: dict = {}
+    failed = ""
+    try:
+        r = api(base, "/api/generate", {"model": model, "stream": False, "options": {"num_ctx": num_ctx, **(options or {})}}, timeout=timeout)
+    except Exception as e:
+        failed = type(e).__name__
+        raise
+    finally:
+        usage_log.record("ollama", model, "load", client="Warm-up", status="failure" if failed else "success",
+                         error=failed, latency_ms=(time.time() - t0) * 1000,
+                         load_ms=(r.get("load_duration") or 0) / 1e6 or None, detail={"num_ctx": num_ctx})
     return time.time() - t0
 
 
@@ -203,6 +216,9 @@ def bench(base: str, model: str, num_ctx: int, num_predict: int = 256, runs: int
         wall = time.time() - t0
         ev, evd = r.get("eval_count", 0), r.get("eval_duration", 1)
         pe, ped = r.get("prompt_eval_count", 0), r.get("prompt_eval_duration", 1)
+        usage_log.record("ollama", model, "chat", client="Stack scripts", latency_ms=wall * 1000,
+                         load_ms=r.get("load_duration", 0) / 1e6, input_ms=ped / 1e6, run_ms=evd / 1e6,
+                         input_tokens=pe, output_tokens=ev, detail={"num_ctx": num_ctx, "purpose": "bench"})
         results.append(
             {
                 "run": i + 1,

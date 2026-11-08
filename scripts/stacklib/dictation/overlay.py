@@ -4,8 +4,8 @@ text. Neither window ever takes the focus, so the caret and the selection stay i
 Button states: idle (grey), listening (red, mic only, with a level bar), working (blue, with a spinner), done (green
 check), error (red "!"). The bubble above the buttons shows what is happening: the words as Whisper hears them, the
 text that was typed, or the refined text. Left click: start (dictate, or refine the selection). Drag either button:
-move both (the position is remembered). Right click: options. All Tk calls happen on the main thread; other threads
-hand work over with post().
+move both (the position is remembered). Right click: options (the menu closes half a second after the pointer leaves
+it and the buttons). All Tk calls happen on the main thread; other threads hand work over with post().
 """
 from __future__ import annotations
 
@@ -27,6 +27,8 @@ STATE_INK = {"idle": FG, "listening": "#ff9a8f", "working": "#8cc8ff", "done": "
 GLYPHS = {"mic": "", "pen": "", "check": "", "error": ""}
 FALLBACK_GLYPHS = {"mic": "●", "pen": "✎", "check": "✓", "error": "!"}
 BUTTONS = ("refine", "mic")   # left to right
+MENU_POLL_MS = 100    # how often the open right-click menu checks the pointer
+MENU_LEAVE_MS = 500   # the menu closes after the pointer has been off it (and off the buttons) this long
 
 
 class Overlay:
@@ -52,6 +54,7 @@ class Overlay:
         self.dragged = False
         self.bubble_owner = ""   # "hover" while the hover hint is up, else the state that opened it
         self.bubble_from = ""    # which button the bubble speaks for: mic | refine
+        self.menu_open: tk.Menu | None = None
 
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
@@ -381,10 +384,15 @@ class Overlay:
             self.hide_bubble()
 
     def _popup(self, m: tk.Menu, e) -> None:
+        """Show a right-click menu. It closes once the pointer has been off it and off the buttons for MENU_LEAVE_MS."""
+        self.menu_open = m
+        self.root.after(MENU_POLL_MS, self._watch_menu, m, 0)
         try:
-            m.tk_popup(e.x_root, e.y_root)
+            m.tk_popup(e.x_root, e.y_root)  # on Windows this blocks in the native menu loop; Tk timers still run
         finally:
             m.grab_release()
+            if IS_WINDOWS:
+                self.menu_open = None
 
     def _menu(self, e) -> None:
         self._close_hover()
@@ -462,6 +470,51 @@ class Overlay:
         self.hide_bubble()
         HistoryWindow(self.root, self.app)
 
+    def _menu_rects(self, m: tk.Menu) -> list[tuple[int, int, int, int]]:
+        """Where the pointer may be while the menu should stay open: the buttons and every open (sub)menu."""
+        rects = []
+        if self._shown():
+            x, y = self.root.winfo_rootx(), self.root.winfo_rooty()
+            rects.append((x, y, x + self._bar_width(), y + self.size))
+        if IS_WINDOWS:
+            from . import winsys
+
+            return rects + winsys.popup_menu_rects()
+        for w in [m, *(m.nametowidget(c) for c in m.winfo_children())]:
+            if w.winfo_ismapped():
+                x, y = w.winfo_rootx(), w.winfo_rooty()
+                rects.append((x, y, x + w.winfo_width(), y + w.winfo_height()))
+        return rects
+
+    def _watch_menu(self, m: tk.Menu, outside_ms: int) -> None:
+        """Close the right-click menu once the pointer has been off it (and off the buttons) for MENU_LEAVE_MS."""
+        if self.menu_open is not m:
+            return
+        try:
+            if not IS_WINDOWS and not m.winfo_ismapped():
+                self.menu_open = None
+                return
+            if IS_WINDOWS:
+                from . import winsys
+
+                point = winsys.cursor_pos()
+            else:
+                point = self.root.winfo_pointerxy()
+            rects = self._menu_rects(m)
+        except (tk.TclError, OSError):
+            return
+        outside_ms = 0 if pointer_inside(point, rects) else outside_ms + MENU_POLL_MS
+        if outside_ms >= MENU_LEAVE_MS:
+            self.menu_open = None
+            if IS_WINDOWS:
+                from . import winsys
+
+                winsys.end_menu()
+            else:
+                m.unpost()
+            return
+        self.root.after(MENU_POLL_MS, self._watch_menu, m, outside_ms)
+
     def pick_language(self) -> None:
         """The search picker above the buttons (or where they would be when hidden)."""
         from .picker import Picker
@@ -470,6 +523,13 @@ class Overlay:
         Picker(self.root, languages_for(self.app.cfg.model), self.app.cfg.language,
                lambda code: self.app.set_option("language", code), search, title="Dictation language",
                anchor=self.bar_box(), above=True)
+
+
+def pointer_inside(point: tuple[int, int], rects: list[tuple[int, int, int, int]], margin: int = 4) -> bool:
+    """True if the point is within any (left, top, right, bottom) rectangle, grown by a few pixels so the gap
+    between a menu and its submenu, or the button's edge, does not count as leaving."""
+    x, y = point
+    return any(l - margin <= x < r + margin and t - margin <= y < b + margin for l, t, r, b in rects)
 
 
 def _tail(text: str, limit: int) -> str:

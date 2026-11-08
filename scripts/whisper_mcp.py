@@ -13,6 +13,9 @@ config, so it does not depend on a git checkout. Settings come from environment 
   WHISPER_CPU_MODEL    model when CUDA is unavailable (default small, int8)
   WHISPER_IDLE_UNLOAD  seconds before the model leaves VRAM (default 600)
   HF_HOME              Hugging Face cache for the model download
+  AGENT_STACK_USAGE_DIR  the stack checkout's traces/usage folder: one usage record per transcription for the tray's
+                       Usage tab (model, audio length, times, tokens; never paths or text). Unset or "off": none.
+  AGENT_STACK_CLIENT   the client those records name (Claude Desktop)
 """
 from __future__ import annotations
 
@@ -23,6 +26,7 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 # ctranslate2 loads cuBLAS 12 and cuDNN 9 with LoadLibrary, which searches PATH; the nvidia-* wheels put them here.
@@ -44,6 +48,43 @@ CPU_MODEL = os.environ.get("WHISPER_CPU_MODEL", "small")
 IDLE_UNLOAD = float(os.environ.get("WHISPER_IDLE_UNLOAD", "600"))
 WAIT_MAX = float(os.environ.get("WHISPER_WAIT", "50"))      # seconds a tool call blocks before handing back a job id (client tool calls time out)
 PAGE = 40_000       # characters of transcript per reply
+USAGE_DIR = os.environ.get("AGENT_STACK_USAGE_DIR", "")
+USAGE_CLIENT = os.environ.get("AGENT_STACK_CLIENT") or "MCP client"
+
+
+# ---------------------------------------------------------------- usage records (the tray's Usage tab)
+
+def record_usage(model: str, device: str, audio_s: float, latency_s: float, load_s: float, run_s: float, tokens: int,
+                 language: str, failed: str = "") -> None:
+    """One line per transcription in stacklib/usage_log.py's format, which this copy cannot import (it runs outside
+    the repository under `python -I`). Never raises: a usage record must not fail a transcription."""
+    if USAGE_DIR.strip().lower() in ("", "off", "0", "false", "no"):
+        return
+    try:
+        root = Path(USAGE_DIR)
+        if not root.parent.is_dir():  # the checkout moved: do not create folders somewhere else
+            return
+        if (root / "RECORDING_OFF").exists():  # usage traces were turned off after this server started
+            return
+        now = datetime.now(timezone.utc)
+        rec = {"ts": now.isoformat(timespec="seconds"), "source": "recordings", "client": USAGE_CLIENT,
+               "model": model, "kind": "transcription", "location": "local",
+               "status": "failure" if failed else "success", "latency_ms": round(latency_s * 1000, 3),
+               "run_ms": round(run_s * 1000, 3), "input_tokens": 0, "output_tokens": int(tokens),
+               "audio_s": round(float(audio_s), 3), "images": 0, "cost": 0.0}
+        if load_s:
+            rec["load_ms"] = round(load_s * 1000, 3)
+        detail = {k: v for k, v in (("device", device), ("language", language)) if v}
+        if detail:
+            rec["detail"] = detail
+        if failed:
+            rec["error"] = failed[:200]
+        folder = root / "recordings"
+        folder.mkdir(parents=True, exist_ok=True)
+        with open(folder / f"{now.astimezone().date().isoformat()}.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception as e:  # noqa: BLE001
+        print(f"[whisper] usage record failed: {e}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------- path guard (decision D-M6)
@@ -77,6 +118,8 @@ class Engine:
     def __init__(self) -> None:
         self.model = None
         self.desc = ""
+        self.name = ""                   # model name and device of the loaded model, for usage records
+        self.device = ""
         self.lock = threading.Lock()     # one transcription at a time; the GPU is shared with Ollama and ComfyUI
         self.last_used = time.time()
         threading.Thread(target=self._reaper, daemon=True).start()
@@ -91,10 +134,12 @@ class Engine:
                 raise RuntimeError("no CUDA device")
             self.model = WhisperModel(GPU_MODEL, device="cuda", compute_type=GPU_COMPUTE)
             self.desc = f"{GPU_MODEL} (cuda, {GPU_COMPUTE})"
+            self.name, self.device = GPU_MODEL, "cuda"
         except Exception as e:  # noqa: BLE001 - any CUDA/DLL failure falls back to the CPU
             print(f"[whisper] GPU load failed ({e}); using {CPU_MODEL} on the CPU", file=sys.stderr)
             self.model = WhisperModel(CPU_MODEL, device="cpu", compute_type="int8")
             self.desc = f"{CPU_MODEL} (cpu, int8)"
+            self.name, self.device = CPU_MODEL, "cpu"
         return self.model
 
     def _reaper(self) -> None:
@@ -109,20 +154,34 @@ class Engine:
 
     def transcribe(self, path: str, language: str | None, prompt: str | None, job: dict) -> dict:
         with self.lock:
-            model = self._load()
-            job["model"] = self.desc
-            t0 = time.time()
-            segments, info = model.transcribe(path, language=language or None, initial_prompt=prompt or None,
-                                              vad_filter=True, beam_size=5)
-            job["duration_s"] = round(info.duration, 1)
-            out = []
-            for s in segments:
-                out.append({"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()})
-                job["progress"] = round(min(1.0, s.end / info.duration), 3) if info.duration else None
-            self.last_used = time.time()
-            return {"language": info.language, "language_probability": round(info.language_probability, 3),
-                    "duration_s": round(info.duration, 1), "elapsed_s": round(time.time() - t0, 1),
-                    "model": self.desc, "segments": out}
+            start = time.time()
+            loaded = self.model is not None
+            info, tokens, load_s, failed = None, 0, 0.0, ""
+            t0 = start
+            try:
+                model = self._load()
+                load_s = 0.0 if loaded else time.time() - start
+                job["model"] = self.desc
+                t0 = time.time()
+                segments, info = model.transcribe(path, language=language or None, initial_prompt=prompt or None,
+                                                  vad_filter=True, beam_size=5)
+                job["duration_s"] = round(info.duration, 1)
+                out = []
+                for s in segments:
+                    tokens += len(getattr(s, "tokens", None) or ())
+                    out.append({"start": round(s.start, 2), "end": round(s.end, 2), "text": s.text.strip()})
+                    job["progress"] = round(min(1.0, s.end / info.duration), 3) if info.duration else None
+                self.last_used = time.time()
+                return {"language": info.language, "language_probability": round(info.language_probability, 3),
+                        "duration_s": round(info.duration, 1), "elapsed_s": round(time.time() - t0, 1),
+                        "model": self.desc, "segments": out}
+            except Exception as e:
+                failed = type(e).__name__  # not the message: decoders put the recording's path in it
+                raise
+            finally:
+                record_usage(self.name or GPU_MODEL, self.device, getattr(info, "duration", 0) or 0,
+                             time.time() - start, load_s, time.time() - t0, tokens, getattr(info, "language", "") or "",
+                             failed)
 
 
 ENGINE = Engine()

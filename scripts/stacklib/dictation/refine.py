@@ -20,9 +20,10 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field, fields
 
+from .. import usage_log
 from .cleanup import parse_reply
 
-USER_AGENT = "agent-stack-refine"
+USER_AGENT = usage_log.user_agent("refine")  # the tray's Usage tab names it "Refine selection" (usage.COMPONENTS)
 
 
 @dataclass(frozen=True)

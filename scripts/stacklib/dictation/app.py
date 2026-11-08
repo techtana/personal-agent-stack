@@ -26,7 +26,8 @@ import numpy as np
 from .. import env_value
 from .. import profile as prof
 from . import (Config, cleanup, control, ensure_refine_section, hotkey, read_state, refine, save_setting, state_dir,
-               write_state)
+               transcriptions, write_state)
+from . import api_key as transcription_key
 from .audio import RATE, Recorder, RecorderError
 from .engine import Engine
 from .refinelog import LOG_NAME, RefineLog
@@ -231,7 +232,11 @@ class App:
         self.refine_log = RefineLog(state_dir(profile) / LOG_NAME)
         self._esc_refine = False
         self._esc_lock = threading.Lock()
-        self.server = control.ControlServer(self.port, self.health, self.act)  # raises when another copy runs
+        # Raises when another copy runs. Also serves Open WebUI's microphone (transcriptions.py) on the same Whisper,
+        # for callers with DICTATION_BEARER, looked up on each request so a key added to .env later works at once.
+        self.server = control.ControlServer(
+            self.port, self.health, self.act, api_key=transcription_key, log=log,
+            transcribe=lambda data, **kw: transcriptions.transcribe_with(self.engine, data, **kw))
         state = read_state(profile)
         pos = (int(state["x"]), int(state["y"])) if "x" in state and "y" in state else None
         winsys.set_dpi_aware()
@@ -340,6 +345,7 @@ class App:
                 "refine": {"hotkey": self.rcfg.hotkey, "hotkey_ok": not self.refine_hotkey_error,
                            "button": bool(self.rcfg.button), "default": self.rcfg.default, "model": self.rcfg.model,
                            "busy": self.refiner.busy, "log": str(self.refine_log.path)},
+                "transcriptions": bool(transcription_key()),  # Open WebUI's microphone needs DICTATION_BEARER
                 "pid": os.getpid()}
 
     def act(self, name: str) -> dict:

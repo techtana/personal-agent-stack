@@ -9,6 +9,22 @@ entry stays and gets a "Done <date>" note.
 
 ## 2026-11-07
 
+- **Pending: a weekly security and confidentiality audit of the Claude setup (`/claude-security-audit`).** Asked by
+  the owner: regularly look for vulnerabilities and for new Claude settings that improve confidentiality and safety,
+  and always replace the owner's identity with placeholders where it is written down. The skill reports on settings
+  and never changes them: the owner's settings deny Claude edits, and AGENTS.md rule 9 warns against add-ons that
+  imply enforcement. It gains an explicit exception for an audit that says plainly what it cannot enforce. The skill
+  does replace identity, through a deterministic `scrub` that never puts the values in tool calls. A desktop
+  scheduled task runs it weekly from a throwaway worktree and opens a pull request for repository fixes, as
+  `skills-sync` does. A standing rule in the owner's `~/.claude/CLAUDE.md`, and AGENTS.md rule 10, cover every other
+  session.
+  - Sources: OSV for advisories, and the npm registry, the docs (`settings-reference.md`, `env-vars.md`) and the
+    changelog for what's new; only package names and versions leave the machine.
+  - Rejected:
+    - editing settings automatically;
+    - a cloud routine, which can't see local configuration;
+    - treating the computer name as identity to replace, since machine profiles are named after it (it is reported).
+
 - **Pending: voice typing in every app, as the stack service `dictation`.** Asked by the owner: Whisper on this machine
   instead of typing into text fields, documents and Logseq, with a button, a hotkey, a stop after quiet, and text as
   you speak or cleaned up after you finish. A Windows desktop app (floating mic button, Ctrl+Alt+D) rather than a
