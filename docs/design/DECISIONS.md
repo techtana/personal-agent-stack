@@ -7,6 +7,18 @@ elsewhere link there. Architecture decision records (ADR format) live in [../dec
 "Pending" marks a decision made in an open pull request that is not on `main` yet. When the pull request merges, the
 entry stays and gets a "Done <date>" note.
 
+## 2026-11-07
+
+- **Pending: voice typing in every app, as the stack service `dictation`.** Asked by the owner: Whisper on this machine
+  instead of typing into text fields, documents and Logseq, with a button, a hotkey, a stop after quiet, and text as
+  you speak or cleaned up after you finish. A Windows desktop app (floating mic button, Ctrl+Alt+D) rather than a
+  browser extension, which cannot reach Logseq desktop or Word. faster-whisper large-v3-turbo on the GPU in its own
+  environment under `media.root`, using Ollama's CUDA 12 cuBLAS; Silero VAD per 32 ms frame; WinMM for the microphone;
+  the cleanup through the private alias `local-small` with JSON output and thinking off. Rejected: whisper.cpp's
+  unsigned binaries and PortAudio-based audio packages (Smart App Control), Open WebUI's CPU Whisper as the engine, an
+  always-open microphone, Ctrl+Alt+Space (the Claude desktop app's quick entry). D-M4 is unchanged. Plan and
+  measurements: [plans/2026-11-07-voice-typing.md](plans/2026-11-07-voice-typing.md).
+
 ## 2026-11-01
 
 - **Pending: the installer checks drive speed, sets up the Hugging Face cache and installs OpenClaw.** Asked by the
