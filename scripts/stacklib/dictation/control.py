@@ -2,6 +2,8 @@
 
     GET  /health                 -> {"ok": true, "state": "idle", "engine": "ready", "device": "cuda", ...}
     POST /toggle|start|stop|cancel|show|hide|quit
+    POST /refine|revert          refine the selection of the window in front (or put its original back), as the hotkey
+    POST /show_refine|hide_refine
 
 It listens on 127.0.0.1 only. A web page could still aim a request at 127.0.0.1 (cross-site request forgery, or DNS
 rebinding with its own host name), so requests with an Origin header or a Host other than this address are refused,
@@ -17,7 +19,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Mapping
 
-ACTIONS = ("toggle", "start", "stop", "cancel", "show", "hide", "quit")
+ACTIONS = ("toggle", "start", "stop", "cancel", "show", "hide", "quit", "refine", "revert", "show_refine",
+           "hide_refine")
 
 
 def check_request(method: str, path: str, headers: Mapping[str, str], port: int) -> tuple[int, str] | None:

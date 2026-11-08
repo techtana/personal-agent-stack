@@ -71,10 +71,11 @@ def parse_reply(content: str) -> str | None:
     if not content:
         return None
     body = content.strip()
+    candidates = [body]  # the whole reply first: the text inside the JSON may itself hold a ``` code block
     fence = re.search(r"```(?:json)?\s*(.*?)```", body, re.DOTALL)
     if fence:
         body = fence.group(1).strip()
-    candidates = [body]
+        candidates.append(body)
     if "{" in body and "}" in body:
         candidates.append(body[body.index("{"): body.rindex("}") + 1])
     for cand in candidates:

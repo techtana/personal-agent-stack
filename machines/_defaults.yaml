@@ -132,6 +132,23 @@ dictation:
   button: true               # show the floating button (the hotkey works either way)
   env_dir: ''                # '' = <media.root>\dictation, or .run\dictation without a media root
 
+refine:
+  # Refine selected text in any app (part of the voice typing app; docs/manuals/user-guide.md "Refine selected text").
+  # Select text, then click the pencil button next to the mic or press the hotkey: the selection is copied, rewritten
+  # by a private gateway alias, checked, and pasted over the selection if it is still selected. Every suggestion is
+  # kept, with the text it replaced, in .run\dictation\refine-log.jsonl (History and Revert in the button's menu).
+  hotkey: ctrl+alt+r         # refine with the default style ('' = none; it replaces Word's Ctrl+Alt+R for (R))
+  default: polish            # polish | grammar | concise | professional | friendly | simple | bullets | your own id
+  model: local-primary       # gateway alias that rewrites (private models only)
+  button: true               # show the refine button next to the mic button (the hotkey works either way)
+  max_chars: 10000           # longest selection sent in one go
+  timeout_s: 120             # give up waiting for the model after this long; nothing is replaced
+  prompts: {}                # your own styles, shown in the button's menu: id: instructions, or id: {name, prompt}.
+                             # A built-in id replaces that style's instructions. Example (in machines/<HOST>.yaml):
+                             #   prompts:
+                             #     my-voice: Rewrite in my voice. Short sentences, active verbs, no jargon.
+                             #     email-reply: {name: Email reply, prompt: Turn my notes into a short polite email.}
+
 agent_access:
   # Folders agent sessions and media tools may use (decision D-M6). Empty means "ask the owner": every media path
   # is refused until the machine file lists it.

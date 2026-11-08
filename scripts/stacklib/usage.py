@@ -25,6 +25,8 @@ _CLIENTS = (
     ("undici", "OpenClaw"),
     ("openai/", "OpenAI SDK"),
     ("python-httpx", "Orchestrator"),    # orchestrator/jobs.py
+    ("agent-stack-voice-typing", "Voice typing"),   # dictation cleanup (scripts/stacklib/dictation/cleanup.py)
+    ("agent-stack-refine", "Refine selection"),     # the refine button (scripts/stacklib/dictation/refine.py)
     ("python-urllib", "Stack scripts"),  # stack.py smoke, bench, warm-up
     ("curl", "curl"),
 )

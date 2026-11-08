@@ -16,8 +16,9 @@ from . import profile as prof
 from .yamledit import dump_scalar as _dump_scalar, set_key  # noqa: F401 - set_key is imported from here by install.py
 
 CTX_CHOICES = ["8192", "16384", "32768", "65536"]
-from .dictation.hotkey import CHOICES as HOTKEY_CHOICES  # noqa: E402
+from .dictation.hotkey import CHOICES as HOTKEY_CHOICES, REFINE_CHOICES  # noqa: E402
 from .dictation.models import CHOICES as MODEL_CHOICES, LANGUAGES  # noqa: E402
+from .dictation.refine import BUILTIN as REFINE_STYLES  # noqa: E402
 
 
 @dataclass
@@ -81,6 +82,18 @@ SETTINGS = [
             "dictation", ["paste", "type"]),
     Setting("dictation", "button", "Show the mic button", "bool",
             "The floating button; the hotkey works without it.", "dictation"),
+    Setting("refine", "hotkey", "Refine hotkey", "choice",
+            "Rewrites the selected text in any app with the default style. Esc cancels while the model works.",
+            "dictation", REFINE_CHOICES),
+    Setting("refine", "default", "Default refine style", "choice",
+            "What a click on the pencil button and the hotkey do. The button's right-click menu offers every style, "
+            "your own (refine.prompts) included.", "refine", [s.id for s in REFINE_STYLES]),
+    Setting("refine", "model", "Refine model", "choice",
+            "Private gateway alias that rewrites the text: local-primary (the main model) or local-small (quicker "
+            "where it is a smaller model).", "refine",
+            ["local-primary", "local-small"]),
+    Setting("refine", "button", "Show the refine button", "bool",
+            "The pencil button next to the mic; the hotkey works without it.", "dictation"),
     Setting("ollama_env", "OLLAMA_KEEP_ALIVE", "Keep models loaded for", "choice",
             "How long an idle chat model stays in memory, gateway requests included; -1 holds its VRAM until Ollama stops.", "ollama", ["5m", "30m", "1h", "4h", "-1"]),
     Setting("ollama_env", "OLLAMA_KV_CACHE_TYPE", "KV cache precision", "choice",
@@ -99,6 +112,7 @@ EFFECT_TEXT = {
     "comfyui": "start or stop ComfyUI and turn Open WebUI's image button on or off",
     "ollama": "update Ollama's environment and restart Ollama (interrupts running requests)",
     "dictation": "restart voice typing",
+    "refine": "nothing to restart (voice typing reads it at the next refine)",
 }
 
 
@@ -115,6 +129,7 @@ def current_values(profile: dict) -> dict[str, object]:
         "services": profile["services"],
         "ollama_env": profile["ollama_env"],
         "dictation": profile.get("dictation") or {},
+        "refine": profile.get("refine") or {},
     }
     out: dict[str, object] = {}
     for s in SETTINGS:
@@ -214,18 +229,22 @@ def apply(old_profile: dict, edits: dict[str, object], log=print) -> dict:
             log("Restarting Open WebUI so the image button follows ComfyUI...")
             services.stop(profile, ["open_webui"])
             services.start(profile, ["open_webui"])
-    dictation_keys = {s.key for s in todo if s.effect == "dictation"}
-    if dictation_keys == {"button"} and profile["services"].get("dictation") == "native":
-        # Only the button's visibility changed: tell the running app instead of restarting it.
+    live = {"dictation.button": ("dictation", "show", "hide", "Voice typing button"),
+            "refine.button": ("refine", "show_refine", "hide_refine", "Refine button")}
+    dictation_ids = {setting_id(s) for s in todo if s.effect == "dictation"}
+    if dictation_ids and dictation_ids <= set(live) and profile["services"].get("dictation") == "native":
+        # Only a button's visibility changed: tell the running app instead of restarting it.
         from .dictation import control
 
         try:
-            control.call(int(profile["ports"]["dictation"]), "show" if profile["dictation"].get("button") else "hide")
-            log("Voice typing button " + ("shown" if profile["dictation"].get("button") else "hidden"))
-            effects.discard("dictation")
+            for sid in sorted(dictation_ids):
+                section, show, hide, name = live[sid]
+                visible = bool((profile.get(section) or {}).get("button"))
+                control.call(int(profile["ports"]["dictation"]), show if visible else hide)
+                log(f"{name} " + ("shown" if visible else "hidden"))
         except OSError:
             pass  # not running: the saved value applies when it starts
-            effects.discard("dictation")
+        effects.discard("dictation")
     if "dictation" in effects:
         services.stop(old_profile, ["dictation"])
         if profile["services"].get("dictation") == "native":
