@@ -137,9 +137,12 @@ def hf_home(profile: dict) -> str:
 
 def app_env(profile: dict, base_env: dict) -> dict:
     """Environment of the app process: scripts/ on the path for `-m stacklib.dictation`, the machine's name so it reads
-    the same profile, and the Hugging Face cache the owner chose."""
+    the same profile, where its Whisper calls are recorded for the Usage tab, and the Hugging Face cache the owner
+    chose."""
+    from .. import usage_log
+
     env = {**base_env, "PYTHONPATH": str(REPO / "scripts"), "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
-           "AGENT_STACK_MACHINE": profile.get("name") or ""}
+           "AGENT_STACK_MACHINE": profile.get("name") or "", **usage_log.env_for(profile)}
     if hf_home(profile):
         env["HF_HOME"] = hf_home(profile)
     env.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")

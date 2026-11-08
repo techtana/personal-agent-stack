@@ -1,6 +1,6 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+Updated: 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
@@ -242,7 +242,7 @@ once across a session restart.
    pasting into a Tk test window (clipboard restored) and typing live phrases. Ctrl+Alt+Space is taken here (Claude
    desktop quick entry), hence Ctrl+Alt+D. Not verified: a live microphone and hand-pressed hotkey, the bubble's look
    (screen capture refused), pasting into Logseq/Word/Notion, languages other than English, the tray's new row and
-   settings in the live tray. 2026-11-08: the language choice covers all 100 Whisper codes through a type-to-search
+   settings in the live tray. Later on 2026-11-07: the language choice covers all 100 Whisper codes through a type-to-search
    picker (button menu and tray Settings); its filtering and keyboard choice were checked in an invisible window, its
    look and the tray button were not.
    Also verified: cancel, a second instance, hold-to-talk with injected Ctrl+Alt+D (live text typed at release). A
@@ -280,6 +280,48 @@ once across a session restart.
 
    Not verified: a scheduled run end to end (it needs the merge), and the per-checkout fix advice on a repository
    other than this one.
+25. Usage tab for every model (2026-11-07, branch claude/usage-all-models). The tab reads gateway traces plus one record
+   per model call made elsewhere (`traces/usage/<source>/<date>.jsonl`, stacklib/usage_log.py):
+   - voice typing's Whisper (live previews re-read the phrase so far: shown under the table, not in the totals);
+   - the recordings MCP server (client Claude Desktop);
+   - ComfyUI jobs, which the tray reads from ComfyUI's GET /history each poll while it runs (high-water mark in
+     `traces/usage/comfyui/state.json`; jobs finished just before a ComfyUI restart are lost);
+   - `stack.py bench` and the warm-up (source ollama).
+   Rows show tokens, audio (x realtime) or images by kind. Gateway traces now carry data_class and location, and outside
+   API rows end in "· API". Retro, the orchestrator and smoke send User-Agent agent-stack-<id>. Open WebUI's document
+   embeddings go through the gateway on fresh installs. `stack.py usage` prints the tab. AGENTS.md rule 11 and
+   tests/test_tray_coverage.py make new services, profile sections and model calls show up in the tray.
+   On this box (30 days of real traces): qwen3.5:9b 175 requests. Also claude-sonnet-5-5, 13 requests ($0.13, Open
+   WebUI), and claude-haiku-5-5, 2 requests (orchestrator), both from before the private-only build.
+   Not counted, and named in the tab:
+   - Open WebUI's own speech-to-text: its database has audio.stt.engine "", so the chat mic runs Whisper base inside
+     Open WebUI;
+   - Open WebUI's document embeddings: its database still has rag.embedding_engine "ollama", until `media provision`;
+   - Kokoro, when it runs.
+   Claude Code profile A is outside the stack.
+   A code review's seven findings were fixed:
+   - ComfyUI collection is locked and de-duplicated by job id;
+   - an odd job cannot stop the tray's poll;
+   - records keep only an error's type, and paths are scrubbed;
+   - previews are kept out of the totals;
+   - a failed write is retried, and a lost state file does not duplicate jobs;
+   - RECORDING_OFF stops programs that were already running;
+   - no embedding rows are written without LITELLM_MASTER_KEY.
+   Verified:
+   - unit tests;
+   - a hidden render of the tab built from this worktree, with copies of the main checkout's gateway traces and
+     synthetic usage records (table, tiles, chart and notes read back through Tk; no screenshot);
+   - the engine tests in the dictation venv;
+   - Segment.tokens in both Whisper venvs;
+   - the coverage test failing on a probe file.
+   Not verified: a live ComfyUI job (its history was empty), live dictation or recording records, the tab's look, and
+   Open WebUI embeddings through the gateway on this install (not provisioned).
+   After merging:
+   - restart the tray from the main checkout;
+   - Stop and Start the Voice typing row;
+   - run `stack.py whisper install` and restart Claude Desktop (recordings);
+   - run `stack.py media provision` and restart Open WebUI (embeddings);
+   - restart the orchestrator (its name in the traces).
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

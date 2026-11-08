@@ -212,9 +212,7 @@ def commands(profile: dict) -> dict[str, dict]:
                 "OPENAI_API_BASE_URL": f"http://127.0.0.1:{p['litellm']}/v1",
                 "OPENAI_API_KEY": master,
                 "ENABLE_OLLAMA_API": "false",
-                "RAG_EMBEDDING_ENGINE": "ollama",
-                "RAG_EMBEDDING_MODEL": profile["models"].get("embed") or "nomic-embed-text",
-                "RAG_OLLAMA_BASE_URL": f"http://127.0.0.1:{p['ollama']}",
+                **openwebui_embedding_env(profile, master),
                 "ENABLE_EVALUATION_ARENA_MODELS": "false",
                 **media.openwebui_env(profile),
             },
@@ -225,6 +223,32 @@ def commands(profile: dict) -> dict[str, dict]:
     if spec:
         out["dictation"] = spec
     return out
+
+
+def openwebui_embedding_settings(profile: dict, master: str | None = None) -> dict[str, object]:
+    """Open WebUI config rows that send its document embeddings through the gateway's local-embed alias, so they are
+    traced and counted in the tray's Usage tab like every other model call; {} without an embedding model. All four
+    rows go together: engine "openai" with Open WebUI's default base URL would send documents to api.openai.com.
+    {} as well without LITELLM_MASTER_KEY: every embedding would get 401 from the gateway."""
+    if not profile["models"].get("embed"):
+        return {}
+    key = env_value("LITELLM_MASTER_KEY") if master is None else master
+    if not key:
+        return {}
+    return {"rag.embedding_engine": "openai", "rag.embedding_model": "local-embed",
+            "rag.openai.api_base_url": f"http://127.0.0.1:{profile['ports']['litellm']}/v1", "rag.openai.api_key": key}
+
+
+def openwebui_embedding_env(profile: dict, master: str) -> dict[str, str]:
+    """The same as environment variables, which Open WebUI reads only on a fresh install (`stack.py media provision`
+    writes the rows into an existing one). Without an embedding model or a gateway key it keeps asking Ollama
+    directly."""
+    s = openwebui_embedding_settings(profile, master)
+    if not s:
+        return {"RAG_EMBEDDING_ENGINE": "ollama", "RAG_EMBEDDING_MODEL": "nomic-embed-text",
+                "RAG_OLLAMA_BASE_URL": f"http://127.0.0.1:{profile['ports']['ollama']}"}
+    return {"RAG_EMBEDDING_ENGINE": str(s["rag.embedding_engine"]), "RAG_EMBEDDING_MODEL": str(s["rag.embedding_model"]),
+            "RAG_OPENAI_API_BASE_URL": str(s["rag.openai.api_base_url"]), "RAG_OPENAI_API_KEY": str(s["rag.openai.api_key"])}
 
 
 def _pid_file(profile: dict, svc: str) -> Path:

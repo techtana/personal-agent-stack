@@ -1,4 +1,5 @@
-"""Read LiteLLM / Claude Code JSONL traces for `why-routed` and the retrospective."""
+"""Read the JSONL traces: the gateway's (traces/litellm), Claude Code's hook (traces/claude) and the usage records
+of models run outside the gateway (traces/usage/<source>, written through stacklib/usage_log.py)."""
 from __future__ import annotations
 
 import json
@@ -7,20 +8,43 @@ from pathlib import Path
 
 from . import TRACES_DIR
 
+# path -> (mtime_ns, size, rows). The tray summarises up to 31 days of traces every few seconds; only files that
+# changed since the last read are parsed again. Callers get copies of the rows, so changing one cannot alter the cache.
+_cache: dict[Path, tuple[int, int, list[dict]]] = {}
+
+
+def _read_one(p: Path) -> list[dict]:
+    try:
+        st = p.stat()
+    except OSError:
+        _cache.pop(p, None)
+        return []
+    hit = _cache.get(p)
+    if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
+        return hit[2]
+    rows: list[dict] = []
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    _cache[p] = (st.st_mtime_ns, st.st_size, rows)
+    return rows
+
 
 def read_jsonl(paths: list[Path]) -> list[dict]:
     rows: list[dict] = []
     for p in paths:
-        if not p.exists():
-            continue
-        for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+        rows.extend(dict(r) for r in _read_one(p))
     return rows
 
 
@@ -36,6 +60,16 @@ def litellm_rows(days: int = 7) -> list[dict]:
 
 def claude_rows(days: int = 7) -> list[dict]:
     return read_jsonl(recent_files("claude", days))
+
+
+def usage_rows(days: int = 7) -> list[dict]:
+    """Usage records of every source folder under traces/usage for the last `days` local days."""
+    root = TRACES_DIR / "usage"
+    if not root.is_dir():
+        return []
+    today = date.today()
+    names = [f"{(today - timedelta(days=i)).isoformat()}.jsonl" for i in reversed(range(days))]
+    return read_jsonl([src / n for src in sorted(p for p in root.iterdir() if p.is_dir()) for n in names])
 
 
 def format_routed(rows: list[dict]) -> str:

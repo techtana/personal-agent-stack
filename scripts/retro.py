@@ -98,7 +98,7 @@ def reflect(summary: dict, model: str, port: int, cap_tokens: int = 1500) -> dic
     try:
         r = httpx.post(
             f"http://127.0.0.1:{port}/v1/chat/completions",
-            headers={"Authorization": f"Bearer {key}"},
+            headers={"Authorization": f"Bearer {key}", "User-Agent": "agent-stack-retro"},  # Usage tab: Retrospective
             json={"model": model, "max_tokens": cap_tokens, "messages": [{"role": "user", "content": prompt}], "response_format": {"type": "json_object"}},
             timeout=600,
         )

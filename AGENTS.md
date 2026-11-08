@@ -43,6 +43,12 @@ is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `
    guesses about the owner into this public repository, commits, PRs, memory or requests. Use placeholders
    (`you@example.com`, `Your Name`, `%USERPROFILE%` or `~`, `%USERNAME%`); `/claude-security-audit` finds and
    replaces leftovers.
+11. Everything the stack adds shows in the tray (`scripts/tray.py`). A new service gets its `LABELS` and `ROLES` row
+   and a place in `services.SERVICE_ORDER`; a new profile section gets Settings entries (`stacklib/settings.py`) or
+   a reason in `tests/test_tray_coverage.py`. Every model call is counted in the Usage tab: through the gateway with
+   `User-Agent: agent-stack-<id>` (id in `stacklib/usage.py` COMPONENTS), or recorded with
+   `stacklib.usage_log.record(<source>, ...)` (source in SOURCES); say in SERVICE_MODELS how a new service's model
+   use is counted, and put use that cannot be counted yet in UNCOUNTED. `tests/test_tray_coverage.py` checks this.
 
 ## Everyday commands
 
@@ -53,6 +59,7 @@ uv run scripts/stack.py tasks install|status|stop # edge mode: one Task Schedule
 uv run scripts/stack.py smoke                     # gateway + MCP end-to-end checks
 uv run scripts/stack.py bench                     # tok/s and GPU/CPU split of the primary local model
 uv run scripts/stack.py why-routed --last 20      # routing decisions from traces
+uv run scripts/stack.py usage --days 7            # every model the stack ran (the tray's Usage tab as text)
 uv run scripts/stack.py retro --days 7            # retrospective report (then /retro in Claude Code)
 uv run scripts/stack.py dictate install|start|transcribe f.wav  # voice typing in any app (Whisper, Ctrl+Alt+D)
 scripts/claude-local.ps1 | .sh                    # Claude Code on the local gateway (profile B)

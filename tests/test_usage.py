@@ -34,7 +34,7 @@ ROWS = [
 
 class Summary(unittest.TestCase):
     def summarize(self, group_by="alias"):
-        with mock.patch.object(usage.traces, "litellm_rows", return_value=ROWS):
+        with mock.patch.object(usage.traces, "litellm_rows", return_value=ROWS),                 mock.patch.object(usage.traces, "usage_rows", return_value=[]):
             return usage.summarize(1, group_by)
 
     def test_keeps_every_request_and_splits_decode_from_end_to_end_speed(self):

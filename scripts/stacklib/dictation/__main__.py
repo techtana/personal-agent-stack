@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import wave
 
 from .. import env_value
 from .. import profile as prof
+from .. import usage_log
 from . import Config, control, hotkey, model_cached
 
 
@@ -55,7 +57,7 @@ def cmd_transcribe(a, profile: dict) -> int:
     if a.vocabulary is not None:
         cfg.vocabulary = a.vocabulary
     pcm = _read_wav(a.file)
-    engine = Engine(cfg, lambda m: print(m, file=sys.stderr, flush=True))
+    engine = Engine(cfg, lambda m: print(m, file=sys.stderr, flush=True), client="Stack scripts")
     t0 = time.monotonic()
     if not engine.wait_ready():
         print(engine.note, file=sys.stderr)
@@ -164,6 +166,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("check")
     a = ap.parse_args(argv)
     profile = prof.resolve_profile()
+    if usage_log.ENV not in os.environ:  # started by hand, not by stack.py or the tray: follow the profile's switch
+        usage_log.configure(profile)
     if a.cmd == "run":
         from .app import main as run
 

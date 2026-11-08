@@ -48,19 +48,57 @@ primary model and its context size, and `cloud tiers on` or `local only`. The pi
 
 *Usage*
 
-Counts every request that went through the gateway, read from `traces/litellm/<date>.jsonl`.
+Counts every model the stack ran, local or outside API:
+
+- Gateway requests (chat, titles, document embeddings, Claude Code profile B, OpenClaw, the orchestrator, voice
+  typing's clean-up), read from `traces/litellm/<date>.jsonl`.
+- Models that run outside the gateway, each written to `traces/usage/<source>/<date>.jsonl`:
+  - Whisper in voice typing (the live previews shown while you speak re-read the phrase so far, so they are listed
+    under the table and kept out of the totals);
+  - Whisper in the recordings server that Claude Desktop uses;
+  - images made by ComfyUI (the tray reads ComfyUI's job history every few seconds while ComfyUI runs);
+  - `stack.py bench` and the start-up warm-up.
+
+What is in the tab:
 
 - **Period**: **Today**, **7 days** (default) or **30 days**.
-- **Group by**: **Gateway alias** (the name the client asked for, such as `local-primary` or `docs`) or
-  **Served model** (the model that answered, such as `qwen3.5:9b`).
-- Tiles: **Requests**, **Input tokens**, **Output tokens**, **Errors** (red when above 0) and **API cost**. Local
-  models cost $0; cost is cloud API spend.
-- The table has **Model**, **Requests**, **Errors**, **Input tok**, **Output tok**, **Avg latency**, **Output tok/s**,
-  **Cost** and **Last used**. Click a heading to sort. A red row means every request in it failed.
-- The chart shows tokens per day. Select a table row to show only that model.
+- **Group by**: **Model** (the model that did the work, such as `qwen3.5:9b`, `large-v3-turbo` or
+  `Z-Image-Turbo int8`; the default), **Alias or service** (the gateway name the client asked for, such as
+  `local-primary`, or the service that ran the model, such as **Voice typing** or **ComfyUI**) or **Client** (who
+  asked, such as **Open WebUI**, **Claude Code**, **Voice typing** or **Claude Desktop**). Each row opens into its
+  clients (into its aliases and services when grouped by client).
+- Tiles: **Requests**, **Tokens in / out**, **Speech audio**, **Images**, **Errors** (red when above 0) and **API
+  cost**. Local models cost $0; cost is what outside APIs charge.
+- The table has **Requests**, **Errors**, **Input**, **Output**, **Avg time**, **Speed**, **Overall**, **Cost** and
+  **Last used**. Input, output and speed are in the units of the row:
+  - chat and embeddings: tokens, and tokens per second while generating;
+  - speech: seconds or minutes of audio, and how many times faster than real time (for example `28x`);
+  - images: images made, and seconds per image.
 
-If the table says "No gateway requests in this period", either nothing used the gateway in that period or
-**Write usage traces** is off in Settings.
+  **Overall** adds the time spent loading the model and waiting in the queue. An outside API's row ends in `· API`.
+  Click a heading to sort. A red row means every request in it failed.
+- The line under the table says what the selected row's requests were and where their time went.
+- **Not counted** names model use the tab cannot see yet, while it can happen. Today that is the microphone in Open
+  WebUI's chat box, which runs Open WebUI's own Whisper, and on an existing install Open WebUI's document embeddings
+  until the provisioning step below.
+- The chart shows requests per day for all models together. Select a row to see that row in its own unit: tokens,
+  minutes of audio, or images per day.
+
+`uv run scripts/stack.py usage --days 7` prints the same table in a terminal (`--by alias|client`; `--clients` for
+the sub-rows).
+
+If the table says "No model was used in this period", either nothing ran a model in that period or **Write usage
+traces** is off in Settings. That switch also stops the usage records, including those of programs that were already
+running (they find a `RECORDING_OFF` file in `traces/usage`). Records hold the model, times, sizes and counts, and
+the type of an error, never a prompt, transcript, image or file path.
+
+Two steps apply this to an existing install:
+
+- Open WebUI's document embeddings go through the gateway (and are counted) on a fresh install. On an existing one,
+  run `uv run scripts/stack.py media provision`, then restart Open WebUI.
+- Recordings are counted once `uv run scripts/stack.py whisper install` has been run again from the main checkout
+  (a worktree would point the records at its own folder): it copies the new server and adds its usage folder to
+  Claude Desktop's config. Restart Claude Desktop afterwards.
 
 *Settings*
 
@@ -71,7 +109,7 @@ Changes the most common values in your machine profile, `machines/<HOST>.yaml`, 
 | Models | **Primary model**, **Primary context (tokens)** | The model behind `local-primary` and every `<department>-local`, and its context size. |
 | Models | **Memory-map primary weights** | Needed for the 35B MoE model; leave off for dense models. |
 | Models | **Small model**, **Small context (tokens)** | The model behind `local-small`. Keep the context equal to the primary's when both use the same model. |
-| Tracing and services | **Write usage traces** | Writes `traces/litellm/`. The Usage tab and `retro` need it. |
+| Tracing and services | **Write usage traces** | Writes `traces/litellm/` and `traces/usage/`. The Usage tab and `retro` need it. |
 | Tracing and services | **Phoenix tracing** | Runs Phoenix. Leave off on SEKAIHOME: Smart App Control blocks it. |
 | Tracing and services | **Open WebUI (chat)** | Runs the chat at http://127.0.0.1:3000. |
 | Ollama runtime | **Keep models loaded for**, **KV cache precision**, **Flash attention**, **Parallel requests per model** | Ollama's memory and speed options. |
@@ -325,5 +363,6 @@ uv run scripts/stack.py bench
 This measures the primary model's speed in tokens per second. Compare the result with the benchmark table in
 `memory/state.md`.
 
-Traces are written to `traces/litellm/` (gateway) and `traces/claude/` (Claude Code hooks). The tray's **Usage** tab
-summarises the gateway traces. They also appear in Phoenix when Phoenix runs.
+Traces are written to `traces/litellm/` (gateway), `traces/usage/` (models run outside the gateway: Whisper,
+ComfyUI, direct Ollama calls) and `traces/claude/` (Claude Code hooks). The tray's **Usage** tab and `stack.py usage`
+summarise the first two. Gateway traces also appear in Phoenix when Phoenix runs.
