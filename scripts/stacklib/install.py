@@ -207,6 +207,7 @@ def defaults(profile: dict) -> dict:
         "features": status,
         "estimates": features.estimates(profile, hw),
         "choice": features.initial_choice(status, hw),
+        "options": features.current_options(profile),
     }
 
 
@@ -354,9 +355,35 @@ def save_media(profile: dict, root: str) -> Path:
 FEATURE_SWITCHES = features.SWITCHES   # (section, key, on, off) per optional feature the profile switches
 
 
-def save_features(profile: dict, chosen, media_root: str = "", status: dict | None = None) -> Path | None:
+def option_edits(profile: dict, chosen, options: dict[tuple[str, str], str]) -> dict[tuple[str, str], object]:
+    """The (section, key) values that the chosen features' options change. A new chat model also sets
+    models.primary_options (memory-mapped experts for an MoE model, as Settings' "Memory-map primary weights"), and the
+    small model's context follows the primary's when both are one model, or Ollama reloads it between tiers."""
+    out: dict[tuple[str, str], object] = {}
+    now = features.current_options(profile)   # the profile's values, defaults filled in
+    for fid in chosen:
+        for opt, _fn in features.OPTIONS.get(fid, []):
+            k = (opt.section, opt.key)
+            if k in options and str(options[k]) != now[k]:
+                out[k] = features.option_value(opt.section, opt.key, options[k])
+    m = profile.get("models") or {}
+    primary = out.get(("models", "primary"), m.get("primary"))
+    ctx = out.get(("models", "primary_num_ctx"), m.get("primary_num_ctx"))
+    if ("models", "primary") in out:
+        mmap = {"use_mmap": True} if features.is_moe(profile, primary) else {}
+        if (m.get("primary_options") or {}) != mmap:
+            out[("models", "primary_options")] = mmap
+    if out.keys() & {("models", "primary"), ("models", "primary_num_ctx")} and m.get("small") == primary \
+            and m.get("small_num_ctx") != ctx:
+        out[("models", "small_num_ctx")] = ctx
+    return out
+
+
+def save_features(profile: dict, chosen, media_root: str = "", status: dict | None = None,
+                  options: dict[tuple[str, str], str] | None = None) -> Path | None:
     """Write what the installer's features page chose into machines/<HOST>.yaml, keeping comments: the switches in
-    FEATURE_SWITCHES, and the media folder when a chosen feature installs there. Only values that change are written.
+    FEATURE_SWITCHES, the options chosen next to the features (option_edits), and the media folder when a chosen
+    feature installs there. Only values that change are written.
 
     A feature that is installed and on stays on, whatever `chosen` says: the installer adds features and never turns
     one off (the tray's Settings does). A feature whose check failed keeps its switch as it is. Returns the file, or
@@ -379,6 +406,9 @@ def save_features(profile: dict, chosen, media_root: str = "", status: dict | No
     if media_root and needs_media(chosen) and (profile.get("media") or {}).get("root") != media_root:
         text, roots = _with_media_root(text, profile, media_root)
         want.update({("media", "root"): media_root, ("agent_access", "allowed_roots"): roots})
+    for (section, key), value in option_edits(profile, chosen, options or {}).items():
+        text = set_key(text, section, key, value)
+        want[(section, key)] = value
     if text == original:
         return None
     _write_checked(path, text, want, "the chosen features")

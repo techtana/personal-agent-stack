@@ -328,44 +328,61 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
                         held="always, while the tray runs it", basis="Measured: 0.54 GB on disk. Memory is an estimate.",
                         note=note)
     if fid == "images":
+        m = profile.get("media") or {}
+        size, steps = str(m.get("image_size") or "1024x1024"), int(m.get("image_steps") or 8)
+        try:
+            w, h = (int(x) for x in size.lower().split("x"))
+        except ValueError:
+            w = h = 1024
+        secs = 11.0 * (w * h / 1024 ** 2) * (steps / 8)   # measured: 11 s at 1024 x 1024, 8 steps; scales with both
+        exact = (w, h, steps) == (1024, 1024, 8)
         return Estimate(
             disk_gb=16.8, todo_gb=_images_todo_gb(profile), ram_gb=1.5, ram_busy_gb=8.0, vram_gb=0.4,
             vram_busy_gb=10.5, cpu_threads=1.0,
-            gpu_short="~11 s per image" if gpu else "not practical",
-            gpu=("the whole card for about 11 s per 1024 x 1024 image, 32 s for the first while the model loads"
-                 if gpu else "none: without an NVIDIA GPU an image takes many minutes"),
+            gpu_short=f"~{secs:.0f} s per image" if gpu else "not practical",
+            gpu=(f"the whole card for about {secs:.0f} s per {w} x {h} image at {steps} steps, about 20 s more for "
+                 "the first while the model loads" if gpu else "none: without an NVIDIA GPU an image takes many minutes"),
             cpu=f"{_cpu(1.0, hw)} logical processors while it makes an image",
             held=("ComfyUI runs all the time; the image model stays in memory after a job until Chat on the tray's "
                   "GPU card frees it"),
             basis=f"Measured on {REFERENCE}: 16.8 GB on disk, 11.6 GB of GPU memory on the card at the peak, 11 s "
-                  "per image. System memory is an estimate.")
-    if fid == "voice_typing":
+                  "per 1024 x 1024 image at 8 steps" + ("" if exact else " (other sizes and steps scaled from that)")
+                  + ". System memory is an estimate.")
+    if fid in ("voice_typing", "recordings"):
+        typing = fid == "voice_typing"
         d = profile.get("dictation") or {}
-        model = str(d.get("model") or "large-v3-turbo")
-        idle = float(d.get("unload_after_min") or 0)
+        model = str((d.get("model") if typing else (profile.get("media") or {}).get("whisper_model")) or "large-v3-turbo")
+        size, vram, per15 = WHISPER.get(model, WHISPER["large-v3-turbo"])
+        measured = model == "large-v3-turbo"
+        if measured and not typing:
+            vram = 1.1   # the recordings server measured 1.1 GB, voice typing 1.2 GB
+        shared = ((f"whisper:{model}", size, _whisper_cached(profile, model)),)
+        cpu_n = 1.0 if gpu else float(hw.threads)
+        if typing:
+            idle = float(d.get("unload_after_min") or 0)
+            return Estimate(
+                disk_gb=0.3, shared=shared, ram_gb=0.4, vram_gb=vram if gpu else 0.0, cpu_threads=cpu_n,
+                gpu_short=f"~{per15:.1f} s per phrase" if gpu else "none (CPU)",
+                gpu=(f"a moment per phrase: 15 s of speech in about {per15:.1f} s with {model}" if gpu
+                     else "none: on the CPU the small model takes about 10 s per 15 s of speech"),
+                cpu=(f"{_cpu(1.0, hw)} logical processors while you speak; close to none while it waits for the "
+                     "hotkey" if gpu else f"all {hw.threads} logical processors while it transcribes"),
+                held="Whisper loads on first use (5-8 s)" + (f" and is freed after {idle:.0f} idle minutes" if idle else ""),
+                basis=(f"Measured on {REFERENCE}: 1.2 GB of GPU memory, 0.3-0.6 s per phrase with large-v3-turbo."
+                       if measured else f"Estimate for {model}, scaled from large-v3-turbo measured on {REFERENCE}.")
+                      + " Memory is an estimate.",
+                note="Polish mode also asks the chat model to tidy the text, about 1 s per recording.")
+        two_min = per15 * 8 * 0.75   # a long file runs in larger batches than live phrases
         return Estimate(
-            disk_gb=0.3, shared=((f"whisper:{model}", 1.6, _whisper_cached(profile, model)),), ram_gb=0.4,
-            vram_gb=1.2 if gpu else 0.0, cpu_threads=1.0 if gpu else float(hw.threads),
-            gpu_short="~0.6 s per phrase" if gpu else "none (CPU)",
-            gpu=("a moment per phrase: 15 s of speech in 0.6 s" if gpu
-                 else "none: on the CPU the small model takes about 10 s per 15 s of speech"),
-            cpu=(f"{_cpu(1.0, hw)} logical processors while you speak; close to none while it waits for the hotkey"
-                 if gpu else f"all {hw.threads} logical processors while it transcribes"),
-            held="Whisper loads on first use (5-8 s)" + (f" and is freed after {idle:.0f} idle minutes" if idle else ""),
-            basis=f"Measured on {REFERENCE}: 1.2 GB of GPU memory, 0.3-0.6 s per phrase. Memory is an estimate.",
-            note="Polish mode also asks the chat model to tidy the text, about 1 s per recording.")
-    if fid == "recordings":
-        model = str((profile.get("media") or {}).get("whisper_model") or "large-v3-turbo")
-        return Estimate(
-            disk_gb=2.4, shared=((f"whisper:{model}", 1.6, _whisper_cached(profile, model)),), ram_gb=0.5,
-            vram_gb=1.1 if gpu else 0.0, cpu_threads=1.0 if gpu else float(hw.threads),
-            gpu_short="~4 s per 2 min of audio" if gpu else "none (CPU)",
-            gpu="a 2-minute recording in about 4 s" if gpu else "none: on the CPU it runs the small model, slowly",
-            cpu=f"{_cpu(1.0 if gpu else hw.threads, hw)} logical processors while it transcribes",
+            disk_gb=2.4, shared=shared, ram_gb=0.5, vram_gb=vram if gpu else 0.0, cpu_threads=cpu_n,
+            gpu_short=f"~{two_min:.0f} s per 2 min of audio" if gpu else "none (CPU)",
+            gpu=f"a 2-minute recording in about {two_min:.0f} s" if gpu else "none: on the CPU it runs the small model, slowly",
+            cpu=f"{_cpu(cpu_n, hw)} logical processors while it transcribes",
             held=("runs while Claude Desktop is open; the model loads for a transcription and is freed after "
                   "10 idle minutes"),
-            basis=f"Measured on {REFERENCE}: 2.4 GB on disk, 1.1 GB of GPU memory, 125 s of audio in 3.5 s. Memory "
-                  "is an estimate.")
+            basis=(f"Measured on {REFERENCE}: 2.4 GB on disk, 1.1 GB of GPU memory, 125 s of audio in 3.5 s."
+                   if measured else f"Estimate for {model}, scaled from large-v3-turbo measured on {REFERENCE}.")
+                  + " Memory is an estimate.")
     if fid == "openclaw":
         return Estimate(
             disk_gb=0.5, ram_gb=0.3, cpu_threads=0.3,
@@ -375,6 +392,106 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
             note="Needs Node.js 24.22.1+ or 26.12.1+; setup upgrades Node.js with winget if needed (Windows asks "
                  "for admin).")
     raise KeyError(fid)
+
+
+# faster-whisper model: (download GB, GPU GB in int8_float16, seconds per 15 s of speech on the reference GPU).
+# large-v3-turbo was measured (memory/state.md, open items 22 and 23); the others are scaled from it by model size.
+WHISPER = {
+    "large-v3-turbo": (1.6, 1.2, 0.6),
+    "large-v3": (3.1, 2.1, 1.4),
+    "medium": (1.5, 1.1, 0.8),
+    "small": (0.5, 0.5, 0.3),
+    "base": (0.15, 0.3, 0.2),
+}
+
+
+# ---------------------------------------------------------------- options chosen with a feature
+
+@dataclass(frozen=True)
+class Option:
+    """One setting the installer asks for next to its feature: a key of machines/<HOST>.yaml and its choices."""
+    section: str
+    key: str
+    label: str
+    default: str
+    number: bool = False   # stored as an int
+
+
+def _model_choices(profile: dict) -> list[tuple[str, str]]:
+    cat = profile.get("catalog") or {}
+    names = [n for n, c in cat.items() if (c or {}).get("role") in ("small", "primary")]
+    current = (profile.get("models") or {}).get("primary")
+    if current and current not in names:
+        names.append(current)
+    return [(n, f"{n} ({float((cat.get(n) or {}).get('size_gb') or 0):.1f} GB)") for n in names]
+
+
+def _whisper_choices(_profile: dict) -> list[tuple[str, str]]:
+    return [(m, f"{m} ({WHISPER[m][0]:.1f} GB)") for m in WHISPER]
+
+
+def _hotkey_choices(_profile: dict) -> list[tuple[str, str]]:
+    from .dictation.hotkey import CHOICES
+
+    return [(h, "+".join(p.capitalize() for p in h.split("+"))) for h in CHOICES]
+
+
+OPTIONS: dict[str, list[tuple[Option, object]]] = {
+    "models": [
+        (Option("models", "primary", "Chat model", "qwen3.5:9b"), _model_choices),
+        (Option("models", "primary_num_ctx", "Context", "32768", number=True),
+         lambda _p: [(str(n), f"{n // 1024}k tokens") for n in (8192, 16384, 32768, 65536)]),
+    ],
+    "images": [
+        (Option("media", "image_size", "Image size", "1024x1024"),
+         lambda _p: [(s, s.replace("x", " x ")) for s in ("512x512", "768x768", "1024x1024", "1280x1280")]),
+        (Option("media", "image_steps", "Steps", "8", number=True),
+         lambda _p: [(str(n), f"{n} steps") for n in (4, 6, 8, 12)]),
+    ],
+    "voice_typing": [
+        (Option("dictation", "model", "Whisper model", "large-v3-turbo"), _whisper_choices),
+        (Option("dictation", "hotkey", "Hotkey", "ctrl+alt+d"), _hotkey_choices),
+    ],
+    "recordings": [
+        (Option("media", "whisper_model", "Whisper model", "large-v3-turbo"), _whisper_choices),
+    ],
+}
+
+
+def option_choices(opt_and_fn, profile: dict) -> list[tuple[str, str]]:
+    return opt_and_fn[1](profile)
+
+
+def current_options(profile: dict) -> dict[tuple[str, str], str]:
+    """Each option's value in the profile now (the installer's first choice)."""
+    out = {}
+    for opts in OPTIONS.values():
+        for opt, _fn in opts:
+            value = (profile.get(opt.section) or {}).get(opt.key)
+            out[(opt.section, opt.key)] = str(value) if value not in (None, "") else opt.default
+    return out
+
+
+def option_value(section: str, key: str, value: str):
+    """The value as the profile stores it."""
+    for opts in OPTIONS.values():
+        for opt, _fn in opts:
+            if (opt.section, opt.key) == (section, key):
+                return int(value) if opt.number else value
+    return value
+
+
+def is_moe(profile: dict, model: str) -> bool:
+    """A mixture-of-experts model, whose experts live in mapped RAM (it needs use_mmap on Windows with CUDA)."""
+    return "moe" in str(((profile.get("catalog") or {}).get(model) or {}).get("notes") or "").lower()
+
+
+def with_options(profile: dict, values: dict[tuple[str, str], str]) -> dict:
+    """The profile as it will be once the chosen options are written: for estimates on the installer's page."""
+    out = {**profile}
+    for (section, key), value in values.items():
+        out[section] = {**(out.get(section) or {}), key: option_value(section, key, value)}
+    return out
 
 
 def estimates(profile: dict, hw: Hardware | None = None, loaded: list[dict] | None = None) -> dict[str, Estimate]:

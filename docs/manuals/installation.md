@@ -87,6 +87,18 @@ box under the table explains it: when the memory is held, what keeps the GPU bus
 Figures marked *measured* come from the reference PC (an RTX 3060 12 GB, a Ryzen 5 5500, 32 GB of DDR4); the chat
 model's GPU memory is read from Ollama when the model is loaded; the rest are estimates and say so.
 
+Under some features a line of drop-downs sets the models and first settings it installs with; the figures and the box
+below follow each change:
+
+| Feature | Drop-downs | Written to `machines/<HOST>.yaml` |
+|---|---|---|
+| Local models | **Chat model** (with its download size), **Context** | `models.primary`, `models.primary_num_ctx`; an MoE model also gets `primary_options: {use_mmap: true}`, and the small model's context follows when it is the same model |
+| Image generation | **Image size**, **Steps** | `media.image_size`, `media.image_steps` |
+| Voice typing | **Whisper model**, **Hotkey** | `dictation.model`, `dictation.hotkey` |
+| Recordings | **Whisper model** | `media.whisper_model` |
+
+Only values you change are written, and only for features you install. Settings in the tray changes them later.
+
 The box **Your choice on this PC** adds up what you ticked and says what does not fit, for example:
 
 - how much setup downloads (installed features count nothing; the Whisper model that voice typing and recordings

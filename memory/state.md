@@ -492,6 +492,15 @@ once across a session restart.
    - Linux and macOS.
 
    After merging, restart the tray from the main checkout.
+
+   2026-11-08, same branch: drop-downs under four features set what they install with (chat model and context,
+   image size and steps, Whisper model and hotkey for voice typing, Whisper model for recordings); the estimates follow
+   each change and `install.option_edits` writes only changed values. Seen on this PC that morning, through the
+   page: the main checkout's new local profile (written fresh after the privacy cleanup untracked the old one) had
+   no model override, so setup pulled the class default qwen3.6:35b-a3b-coding (30.9 GB) and voice typing was off; the
+   page flags the 35B as not fitting next to the other features (11.4 GB of GPU memory against 9.5 GB free), and the
+   recordings entry in Claude Desktop still points at the old D: drive ("Files missing"). Voice typing was reinstalled
+   under C:\media\dictation by then and worked. Picking qwen3.5:9b in the drop-down restores the earlier primary.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

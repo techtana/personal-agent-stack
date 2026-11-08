@@ -122,6 +122,37 @@ class SaveFeatures(Temp):
         self.assertEqual(self.file.read_text(encoding="utf-8"), MACHINE)
 
 
+class OptionEdits(unittest.TestCase):
+    def setUp(self):
+        self.p = make_profile(Path("S"))
+        self.p["models"].update(primary_options={})
+
+    def test_a_new_moe_chat_model_maps_its_experts_and_keeps_tiers_apart(self):
+        out = install.option_edits(self.p, {"models"}, {("models", "primary"): "qwen3.6:35b-a3b-coding",
+                                                        ("models", "primary_num_ctx"): "32768"})
+        self.assertEqual(out, {("models", "primary"): "qwen3.6:35b-a3b-coding",
+                               ("models", "primary_options"): {"use_mmap": True}})
+
+    def test_a_new_context_follows_the_small_model_when_it_is_the_same_model(self):
+        out = install.option_edits(self.p, {"models"}, {("models", "primary_num_ctx"): "16384"})
+        self.assertEqual(out, {("models", "primary_num_ctx"): 16384, ("models", "small_num_ctx"): 16384})
+
+    def test_only_chosen_features_and_changed_values(self):
+        opts = {("dictation", "model"): "small", ("media", "image_steps"): "8", ("models", "primary"): "qwen3.5:9b"}
+        self.assertEqual(install.option_edits(self.p, {"models", "images"}, opts), {})   # voice typing not chosen
+        self.assertEqual(install.option_edits(self.p, {"voice_typing"}, opts), {("dictation", "model"): "small"})
+
+    def test_saved_into_the_machine_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "TESTBOX.yaml"
+            f.write_text(MACHINE, encoding="utf-8")
+            with mock.patch.object(install.prof, "machine_file", return_value=f):
+                install.save_features({**self.p, "media": {}}, {"chat", "tracing", "voice_typing"},
+                                      status=statuses(), options={("dictation", "hotkey"): "pause"})
+            doc = yaml.safe_load(f.read_text(encoding="utf-8"))
+        self.assertEqual(doc["dictation"], {"hotkey": "pause"})
+
+
 class PlanAndSpace(Temp):
     def test_feature_plan(self):
         plan = install.feature_plan({"images", "openclaw"}, statuses(openclaw=S(True, False, "Not set up", level="warn")))
@@ -307,7 +338,8 @@ class InstallerWindow(Temp):
                   "openclaw_installed": True, "openclaw_state": "Bypasses the gateway",
                   "models": features.models_to_pull(self.profile), "models_gb": 7.9,
                   "media_root": str(self.tmp / "media"), "media_installed": False, "hardware": h,
-                  "features": self.status, "estimates": est, "choice": features.initial_choice(self.status, h)}
+                  "features": self.status, "estimates": est, "choice": features.initial_choice(self.status, h),
+                  "options": features.current_options(self.profile)}
         self.calls = {"save_paths": mock.Mock(), "save_features": mock.Mock(), "spawn_worker": mock.Mock(return_value=1)}
         patches = [
             mock.patch.object(install, "worker_running", return_value=False),
@@ -373,12 +405,26 @@ class InstallerWindow(Temp):
         self.app.store.set(str(self.tmp / "elsewhere"))
         self.assertTrue(self.app.move_box.grid_info())
 
+    def test_choosing_a_model_changes_the_estimates_and_is_saved(self):
+        box = self.app.option_boxes[("models", "primary")]
+        moe = next(n for n in box.cget("values") if n.startswith("qwen3.6:35b-a3b-coding"))
+        self.assertEqual(self.app.cell_labels["models"]["vram"].cget("text"), "5.7")
+        box.set(moe)
+        box.event_generate("<<ComboboxSelected>>")
+        self.assertEqual(self.app.cell_labels["models"]["vram"].cget("text"), "8.7")   # the MoE measured at 32k
+        self.assertIn("chat model 8.7", self.summary())
+        self.assertEqual(self.app.options()[("models", "primary")], "qwen3.6:35b-a3b-coding")
+        self.app.show_folders()
+        self.app.on_install()
+        options = self.calls["save_features"].call_args.args[4]
+        self.assertEqual(options[("models", "primary")], "qwen3.6:35b-a3b-coding")
+
     def test_install_writes_the_choice_and_starts_the_plan(self):
         self.app.feature_vars["recordings"].set(True)
         self.app.show_folders()
         self.assertTrue(self.app.validate())
         self.app.on_install()
-        _profile, chosen, media_root, status = self.calls["save_features"].call_args.args
+        _profile, chosen, media_root, status, options = self.calls["save_features"].call_args.args
         self.assertEqual(chosen, {"models", "gateway", "chat", "images", "recordings", "openclaw"})
         self.assertEqual(media_root, str(self.tmp / "media"))
         self.assertIs(status, self.status)

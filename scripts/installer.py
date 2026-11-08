@@ -150,6 +150,7 @@ class Installer:
         self.profile = prof.resolve_profile()
         d = self.d = install.defaults(self.profile)
         self.feature_vars = {fid: tk.BooleanVar(value=on) for fid, on in d["choice"].items()}
+        self.option_vars = {k: tk.StringVar(value=v) for k, v in d["options"].items()}   # (section, key) -> value
         self.store = tk.StringVar(value=d["model_store"])
         self.tools = tk.StringVar(value=d["tool_dir"])
         self.media_root = tk.StringVar(value=d["media_root"])
@@ -165,6 +166,24 @@ class Installer:
 
     def chosen(self) -> set[str]:
         return {fid for fid, v in self.feature_vars.items() if v.get()}
+
+    def options(self) -> dict[tuple[str, str], str]:
+        return {k: v.get() for k, v in self.option_vars.items()}
+
+    def option_changed(self, _event=None):
+        """A model or setting changed: estimate again with it, as if it were in the profile already."""
+        d = self.d
+        planned = features.with_options(self.profile, self.options())
+        d["estimates"] = features.estimates(planned, d["hardware"])
+        d["models"] = features.models_to_pull(planned)
+        d["models_gb"] = d["estimates"]["models"].disk_gb
+        for fid, labels in self.cell_labels.items():
+            values = features.cells(d["estimates"][fid], d["hardware"])
+            for key, label in labels.items():
+                label.configure(text=values[key])
+        self.update_summary()
+        if _event is not None:
+            self.show_detail(self.option_owner.get(str(_event.widget), features.FEATURES[0].id))
 
     def _check_checkout(self):
         """Fetch in a thread (it can take seconds, or time out offline) and show the warning on whichever page is up."""
@@ -213,8 +232,10 @@ class Installer:
             ttk.Label(table, text=head, foreground=MUTED_FG, font=("Segoe UI", 9, "bold")).grid(
                 row=0, column=c, sticky="w" if c < 2 else "e", padx=(0 if c == 0 else 14, 0), pady=(0, 4))
         first = None
-        self.feature_boxes = {}
-        for r, feat in enumerate(features.FEATURES, start=1):
+        self.feature_boxes, self.cell_labels, self.option_boxes, self.option_owner = {}, {}, {}, {}
+        r = 0
+        for feat in features.FEATURES:
+            r += 1
             st, is_locked = d["features"][feat.id], features.locked(feat.id, d["features"])
             box = self.feature_boxes[feat.id] = ttk.Checkbutton(table, text=feat.title, command=self.update_summary,
                                                                  variable=self.feature_vars[feat.id])
@@ -227,12 +248,35 @@ class Installer:
             row = [box, ttk.Label(table, text=text, foreground=fg)]
             row[1].grid(row=r, column=1, sticky="w", padx=(14, 0))
             values = features.cells(d["estimates"][feat.id], d["hardware"])
+            self.cell_labels[feat.id] = {}
             for c, (key, _title) in enumerate(COLUMNS, start=2):
                 row.append(ttk.Label(table, text=values[key]))
                 row[-1].grid(row=r, column=c, sticky="e", padx=(14, 0))
+                self.cell_labels[feat.id][key] = row[-1]
             for w in row:   # the box below explains the row under the pointer, or the one with keyboard focus
                 w.bind("<Enter>", lambda _e, fid=feat.id: self.show_detail(fid), add="+")
             box.bind("<FocusIn>", lambda _e, fid=feat.id: self.show_detail(fid), add="+")
+            if feat.id in features.OPTIONS:   # its models and first settings, on a line of their own
+                r += 1
+                line = ttk.Frame(table)
+                line.grid(row=r, column=0, columnspan=2 + len(COLUMNS), sticky="w", padx=(28, 0), pady=(0, 4))
+                for opt, fn in features.OPTIONS[feat.id]:
+                    choices = fn(self.profile)
+                    names = dict(choices)
+                    var = self.option_vars[(opt.section, opt.key)]
+                    shown = self.tk.StringVar(value=names.get(var.get(), var.get()))
+                    ttk.Label(line, text=f"{opt.label}:", foreground=MUTED_FG).pack(side="left", padx=(0, 4))
+                    combo = ttk.Combobox(line, textvariable=shown, state="readonly", width=max(len(n) for n in names.values()) + 1,
+                                         values=[n for _v, n in choices])
+
+                    def picked(event, var=var, shown=shown, back={n: v for v, n in choices}):
+                        var.set(back.get(shown.get(), shown.get()))
+                        self.option_changed(event)
+                    combo.bind("<<ComboboxSelected>>", picked)
+                    combo.bind("<FocusIn>", lambda _e, fid=feat.id: self.show_detail(fid), add="+")
+                    combo.pack(side="left", padx=(0, 14))
+                    self.option_boxes[(opt.section, opt.key)] = combo
+                    self.option_owner[str(combo)] = feat.id
 
         self.detail_box = ttk.LabelFrame(f, text="", padding=10)
         self.detail_box.grid(sticky="ew", pady=(10, 0))
@@ -414,7 +458,7 @@ class Installer:
             for path in (store, tools):
                 Path(path).mkdir(parents=True, exist_ok=True)
             install.save_paths(self.profile, store)
-            install.save_features(self.profile, chosen, media_root, self.d["features"])
+            install.save_features(self.profile, chosen, media_root, self.d["features"], self.options())
             plan = install.Plan(
                 model_store=store,
                 tool_dir="" if self.d["tool_dir"] and Path(tools) == Path(self.d["tool_dir"]) else tools,
