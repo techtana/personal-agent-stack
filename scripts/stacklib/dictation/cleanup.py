@@ -1,13 +1,17 @@
 """Polish a transcript with the gateway's local model: drop fillers and false starts, fix punctuation, optionally
 shorten. Standard library only (urllib), so the project's tests cover it without the app's environment.
 
-Three details from measurements on SEKAIHOME (2026-11-07), qwen3.5:9b behind `local-small`:
+Three details from measurements on the reference machine (2026-11-07), qwen3.5:9b behind `local-small`:
   - `think: false` is required. With thinking on, the model spent all 400 tokens reasoning and returned no text after
     49 s; with it off the same request took 0.8 s.
   - `response_format: json_object` keeps the gateway's "**Used:** ..." footer off the reply (custom_callbacks.py skips
     JSON requests) and gives a field to read instead of free text with a preamble.
   - The transcript is data, not instructions: a dictated question must come back as the question, not an answer.
     The prompt says so, and acceptable() rejects replies that grew or shrank too much.
+
+The instructions are DEFAULT_PROMPT unless the machine profile sets dictation.cleanup_prompt (the tray's Settings tab,
+Voice typing > Show advanced). Either way the Concise style adds its rule and the reply format is added last, because
+parse_reply depends on it; acceptable() checks every reply the same way.
 """
 from __future__ import annotations
 
@@ -36,6 +40,10 @@ CONCISE = ("Also make it concise: shorten wordy sentences, cut repetition and he
            "unless they change the meaning, and prefer short plain sentences. Keep every fact, name, number, date and "
            "request.")
 STYLE_NAMES = {"verbatim": "Verbatim", "clean": "Clean", "concise": "Concise"}
+# The built-in instructions: what dictation.cleanup_prompt replaces. The tray shows this text until you change it.
+DEFAULT_PROMPT = ("You turn raw speech-to-text output into the text the speaker meant to type.\n"
+                  + "\n".join(f"- {r}" for r in RULES))
+REPLY_FORMAT = 'Reply with JSON only: {"text": "<the cleaned text>"}'
 
 
 @dataclass
@@ -46,17 +54,19 @@ class Result:
     seconds: float = 0.0
 
 
-def system_prompt(style: str) -> str:
-    rules = RULES + ([CONCISE] if style == "concise" else [])
-    return ("You turn raw speech-to-text output into the text the speaker meant to type.\n"
-            + "\n".join(f"- {r}" for r in rules)
-            + '\nReply with JSON only: {"text": "<the cleaned text>"}')
+def system_prompt(style: str, prompt: str = "") -> str:
+    """`prompt` (dictation.cleanup_prompt; empty means DEFAULT_PROMPT), the concise rule for that style, then the reply
+    format. With no prompt this is exactly the built-in system prompt."""
+    text = (prompt or "").strip() or DEFAULT_PROMPT
+    if style == "concise":
+        text += f"\n- {CONCISE}"
+    return f"{text}\n{REPLY_FORMAT}"
 
 
-def request_body(raw: str, style: str, model: str) -> dict:
+def request_body(raw: str, style: str, model: str, prompt: str = "") -> dict:
     return {
         "model": model,
-        "messages": [{"role": "system", "content": system_prompt(style)},
+        "messages": [{"role": "system", "content": system_prompt(style, prompt)},
                      {"role": "user", "content": f"Transcript:\n{raw}"}],
         "response_format": {"type": "json_object"},
         "think": False,              # forwarded by LiteLLM to Ollama; see the module docstring
@@ -111,8 +121,10 @@ def acceptable(raw: str, cleaned: str, style: str) -> tuple[bool, str]:
     return True, ""
 
 
-def polish(raw: str, style: str, *, base_url: str, api_key: str, model: str, timeout: float = 30.0) -> Result:
-    """Cleaned text, or the transcript with filler sounds removed when the gateway is down, slow or misbehaves."""
+def polish(raw: str, style: str, *, base_url: str, api_key: str, model: str, timeout: float = 30.0,
+           prompt: str = "") -> Result:
+    """Cleaned text, or the transcript with filler sounds removed when the gateway is down, slow or misbehaves.
+    `prompt` replaces the built-in instructions (see system_prompt)."""
     raw = tidy(raw)
     if style == "verbatim" or not raw:
         return Result(raw, False)
@@ -120,7 +132,7 @@ def polish(raw: str, style: str, *, base_url: str, api_key: str, model: str, tim
     t0 = time.monotonic()
     req = urllib.request.Request(
         f"{base_url.rstrip('/')}/v1/chat/completions",
-        data=json.dumps(request_body(raw, style, model)).encode("utf-8"),
+        data=json.dumps(request_body(raw, style, model, prompt)).encode("utf-8"),
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}",
                  "User-Agent": "agent-stack-voice-typing"},
     )

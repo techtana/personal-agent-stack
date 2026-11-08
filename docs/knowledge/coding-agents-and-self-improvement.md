@@ -375,7 +375,7 @@ self-development is the 2026-10-25 entry; the removals are under 2026-10-26).
   `ORCHESTRATOR_BEARER` into Open WebUI's tool-server settings fixed it (`memory/state.md`, open item 3).
 - **2026-11-01.** The `ux-rules` skill eval (one run each, Sonnet subagents): 19 of 19 checks passed with the skill and
   18 of 19 without it, at about 1.5 times the tokens. Most checks did not tell the two apart; a sharper second round
-  has not run. Source: [PR #13](https://github.com/techtana/personal-agent-stack/pull/13) and
+  has not run. Source: PR #13 and
   [the plan record](../design/plans/2026-11-01-ux-rules-skill.md); the raw result files are not in the repository. Treat the one-check difference as a hint, not proof. The skill's gains were per-fix verification, evidence grades and refusing
   to A/B-test deceptive patterns.
 - **2026-11-01.** Ten parallel research subagents shared one WebSearch budget, which ran out mid-task, and the fan-out

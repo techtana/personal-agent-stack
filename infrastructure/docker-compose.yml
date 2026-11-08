@@ -1,5 +1,5 @@
 # OPTIONAL containerised deployment (Linux server, or a Windows box that already runs Docker Desktop).
-# The reference machine (SEKAIHOME) runs everything natively via `uv run scripts/stack.py up` because
+# The reference machine runs everything natively via `uv run scripts/stack.py up` because
 # WSL2 would reserve RAM that the MoE expert-offload tier needs. This file has NOT been run there.
 #
 # Ollama stays NATIVE on the host (GPU, no port collision); containers reach it at host.docker.internal:11434.

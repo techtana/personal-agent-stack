@@ -1,10 +1,10 @@
 # Plan: hard block on AI agents reading personal files (2026-10-29, draft)
 
-Goal: no AI agent on SEKAIHOME (Claude Code, Claude Desktop and Cowork, Gemini CLI and the Gemini app, GitHub Copilot
+Goal: no AI agent on the reference machine (Claude Code, Claude Desktop and Cowork, Gemini CLI and the Gemini app, GitHub Copilot
 in the CLI, VS Code and Windows, browser agents, Windows agent workspaces, and this stack's own agents) can read or
 change the owner's personal files, even if the agent is prompt-injected, misconfigured or ignores its own settings.
 
-Status: research and plan only. Nothing here has been run. Checks marked **V-F** must run on SEKAIHOME first.
+Status: research and plan only. Nothing here has been run. Checks marked **V-F** must run on the reference machine first.
 
 ## 1. What "hard" means here
 

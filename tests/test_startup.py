@@ -84,16 +84,20 @@ class ShowRequest(unittest.TestCase):
 
 
 class MenuShortcut(unittest.TestCase):
-    def test_created_once_with_show(self):
+    def test_written_with_show_and_start_at_login_refreshed(self):
+        # Rewritten every time, so shortcuts made before PAS-Tray.exe start it (and carry the tray's icon).
         with tempfile.TemporaryDirectory() as tmp, \
                 mock.patch.object(startup, "IS_WINDOWS", True), \
                 mock.patch.object(startup, "_menu_dir", return_value=Path(tmp)), \
-                mock.patch.object(startup, "_make_shortcut", side_effect=lambda p, show: p.touch()) as make:
+                mock.patch.object(startup, "_autostart_file", return_value=Path(tmp) / "startup.lnk"), \
+                mock.patch.object(startup, "_make_shortcut", side_effect=lambda p, show=False: p.touch()) as make:
             lnk = startup.ensure_menu_shortcut()
             self.assertEqual(lnk, Path(tmp) / startup.SHORTCUT_NAME)
-            make.assert_called_once_with(lnk, show=True)
+            make.assert_called_once_with(lnk, show=True)  # start at login is off: only the menu entry
+            (Path(tmp) / "startup.lnk").touch()
+            make.reset_mock()
             startup.ensure_menu_shortcut()
-            make.assert_called_once()  # already there: left alone
+            self.assertEqual(make.call_args_list, [mock.call(lnk, show=True), mock.call(Path(tmp) / "startup.lnk")])
 
     def test_nothing_outside_windows(self):
         with mock.patch.object(startup, "IS_WINDOWS", False), mock.patch.object(startup, "_make_shortcut") as make:

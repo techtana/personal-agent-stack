@@ -16,7 +16,7 @@ Measurements live in `memory/state.md`; lessons in `memory/lessons.md`.
 3. Minimal cost: the Claude Max subscription covers interactive heavy work; API dollars only where a tier needs them.
 4. Intuitive: one name per department on every surface; composed from open-source tools, no custom harness.
 
-## 2. Environment found on SEKAIHOME (differs from the handoff's assumptions)
+## 2. Environment found on the reference machine (differs from the handoff's assumptions)
 
 | Assumed | Found | Consequence |
 |---|---|---|
@@ -70,8 +70,8 @@ state        machines/<HOST>.yaml (hardware class, models, Ollama env) · agents
 ```
 
 Everything that depends on hardware is derived from `machines/_defaults.yaml` (hardware classes) and
-`machines/<HOST>.yaml` (detected facts + overrides). `uv run scripts/stack.py doctor --write-profile` on a new
-machine creates its profile; `build` regenerates every derived file. This is the "configurable when I upgrade
+`machines/<HOST>.yaml` (detected facts + overrides; local to each machine, never committed). The installer, or
+`uv run scripts/stack.py doctor --write-profile`, on a new machine creates its profile; `build` regenerates every derived file. This is the "configurable when I upgrade
 or add machines" requirement.
 
 ## 5. Bandwidth tiers
@@ -106,9 +106,9 @@ Ollama disables mmap by default on Windows+CUDA, which turns the CPU-side expert
 the first load time out under normal desktop memory pressure.
 Measured throughput (2026-10-25): MoE primary ~25 tok/s decode with ~1 GB RAM left available; dense 9B ~52 tok/s
 with ~18 GB available. Details in `memory/state.md` (section Benchmarks); re-run with `uv run scripts/stack.py bench`.
-On that evidence SEKAIHOME overrides the class default: `local-primary` is qwen3.5:9b at 32k, sharing one Ollama
+On that evidence the reference machine overrides the class default: `local-primary` is qwen3.5:9b at 32k, sharing one Ollama
 runner with `local-small` (same num_ctx, no use_mmap). The 35B remains the class default for 32 GB machines with less
-desktop memory pressure, and returns here by deleting the override in `machines/SEKAIHOME.yaml`.
+desktop memory pressure, and returns here by deleting the override in `machines/<HOST>.yaml`.
 
 ## 7. Routing (LiteLLM complexity router, per department)
 
@@ -178,7 +178,7 @@ MCP annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`). Traces st
 
 - Open WebUI first-run (admin user, import `config/openwebui/*.json`, add the MCP server) is a manual step.
 - Services started from a Claude Code tool shell may stop when that session ends; persistence is open
-  (`memory/state.md`, open item 2). Smart App Control blocked the unsigned `~/.local/bin` uv launchers on SEKAIHOME, so
+  (`memory/state.md`, open item 2). Smart App Control blocked the unsigned `~/.local/bin` uv launchers on the reference machine, so
   `stack.py up` starts uv tools through their environment's python.exe and identifies them by pid plus start time.
 - Open WebUI thumbs export -> traces, and Prometheus/Grafana + `nvidia_gpu_exporter`, are documented but not wired.
 - `adaptive_router`, virtual-key budgets and Langfuse need Postgres; deferred until traffic justifies them.
