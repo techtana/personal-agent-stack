@@ -122,7 +122,7 @@ class Media(unittest.TestCase):
         self.assertRegex(k["revision"], r"^[0-9a-f]{40}$")
         self.assertEqual(set(speak.KOKORO_FILES), {"fp32", "int8"})
         self.assertIn(DEFAULTS["read_aloud"]["voice"], speak.KOKORO_VOICE_IDS)
-        self.assertTrue(set(speak.DEFAULT_FOR_LANGUAGE.values()) <= set(speak.KOKORO_VOICE_IDS))
+        self.assertTrue(all(speak.known_voice(v) for v in speak.DEFAULT_FOR_LANGUAGE.values()))   # Mandarin's too
         self.assertEqual(features.KOKORO["fp32"][1], k["variants"]["fp32"]["download_gb"])
         self.assertEqual(features.KOKORO_GPU_GB, k["gpu_libraries_gb"])
 

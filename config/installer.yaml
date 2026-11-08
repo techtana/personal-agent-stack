@@ -225,6 +225,56 @@ voice_packs:
       data_licence: CC-BY-SA-4.0
       lessac_base: true
 
+# ---------------------------------------------------------------- read aloud: Mandarin Chinese (Kokoro v1.1-zh)
+
+# Mandarin voices, an optional voice set beside the Piper voices above (read_aloud.packs: kokoro-zh). Kokoro-82M v1.1-zh
+# as ONNX (onnx-community's export of hexgrad/Kokoro-82M-v1.1-zh, Apache-2.0), fine-tuned from Kokoro v1.0 with 100
+# Mandarin speakers whose recordings LongMaoData, a dataset company, "freely and permissively granted" for it (model
+# card; no public licence text), plus 3 hours of crowdsourced synthetic English (the same kind of data as Kokoro v1.0's).
+# Its text front-end is misaki's ZHG2P 1.1 (Apache-2.0, adapted from PaddleSpeech) on jieba, pypinyin and cn2an (MIT):
+# Mandarin as zhuyin-like phonemes with tone digits, numbers and dates read out in Chinese; English words inside Chinese
+# text go through read aloud's espeak-ng. The model, its tokenizer and the voices below go to the Hugging Face cache at
+# the pinned revision, like Kokoro's; Remove deletes that folder and takes misaki's packages out of voice typing's
+# environment. Chosen in the installer (Read aloud > More voices) or with Download on the tray's Features card.
+kokoro_zh:
+  key: kokoro-zh                  # read_aloud.packs entry
+  repo: onnx-community/Kokoro-82M-v1.1-zh-ONNX
+  revision: 6cc0f0d2ebe369a68b0df87c2b65c1af8c0ac3e3   # 2025-07-05; a new revision is a new download to check
+  language: zh-cn
+  licence: Apache-2.0
+  data_licence: Mandarin recordings granted by LongMaoData (no public licence text); synthetic English
+  # read_aloud.kokoro picks the weights (the other variant is used when only it is downloaded): file, download MB,
+  # RAM GB while loaded and reading on the CPU (working set added, misaki's dictionaries included; 2026-11-08), sha256
+  # checked after a download. Measured on the reference PC: both make 3.1-3.2x real time on 6 CPU threads (one piece
+  # at a time), fp32 10x on the RTX 3060; loading takes about 2 s (the session and misaki in parallel).
+  variants:
+    fp32: {file: onnx/model.onnx, download_mb: 339, ram_gb: 0.9,
+           sha256: 94b973941b1852754f979be5d5e20be666d5c81d9bb886b88ae1dc85c9b895ca}
+    int8: {file: onnx/model_quantized.onnx, download_mb: 127, ram_gb: 0.7,
+           sha256: a39469be791eeaa3089c1ed5e58b8731d1f2462ea0e7dae2bc44388e58f973d8}
+  gpu_vram_gb: 0.7                # measured: fp32 on an RTX 3060 (658 MiB more in use)
+  voice_mb: 0.52                  # each voice file (510 x 256 float32)
+  # The voices offered (id: gender), the first one is the default for Chinese text. Of the 100 Mandarin voices (55 zf_
+  # female, 45 zm_ male; numbered, not named), the ones Whisper large-v3-turbo heard best on 2026-11-08: no toneless
+  # pinyin syllable wrong in 10 sentences (4 plain; 6 harder: a tongue twister, polyphones, long sentences), then the
+  # fewest wrong characters and Whisper's highest confidence. All 100 read the plain sentences right (97 without a
+  # syllable wrong); zf_001, upstream's sample voice, came last of the female voices on the harder ones.
+  voices: {zf_003: female, zf_092: female, zf_088: female, zf_006: female,
+           zm_031: male, zm_037: male, zm_013: male, zm_061: male}
+  # misaki[zh] and its dependencies, installed into voice typing's environment with the voices; versions that loaded
+  # under Smart App Control in a python.org 3.14 venv on 2026-11-08. regex is the only compiled module.
+  packages:
+    - misaki==0.9.4               # declares Python <3.13; uv ignores upper bounds there, and it runs on 3.14
+    - jieba==0.42.1               # published as source only: uv builds its (pure Python) wheel
+    - pypinyin==0.55.0
+    - pypinyin-dict==0.9.0
+    - cn2an==0.5.24
+    - proces==0.1.7
+    - ordered-set==4.1.0
+    - addict==2.4.0
+    - regex==2026.9.29            # not 2026.11.8, published the day this was tested
+  packages_mb: 131                # installed size of the packages above, measured
+
 # ---------------------------------------------------------------- OpenClaw
 
 openclaw:

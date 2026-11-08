@@ -9,6 +9,31 @@ entry stays and gets a "Done <date>" note.
 
 ## 2026-11-08
 
+- **Pending: Mandarin Chinese for read aloud through Kokoro v1.1-zh, an optional voice set.** The "next" of the Piper
+  entry below: Mandarin's cleanest model, offered like the Piper voices (read_aloud.packs `kokoro-zh`; Download and
+  Remove in the installer's More voices and on the tray's Features card).
+  - Model: onnx-community's ONNX export of hexgrad/Kokoro-82M-v1.1-zh (Apache-2.0), revision pinned with both weights'
+    sha256. Its data, from the model card: 100 Mandarin speakers' recordings "freely and permissively granted" by
+    LongMaoData, a dataset company (no public licence text; nothing non-commercial or research-only stated), and 3
+    hours of crowdsourced synthetic English. The owner's rule (open licences for weights and training data, no NC, ND
+    or research-only) is met as far as the card says; the grant without a licence text and the synthetic English are
+    named in the catalog, the installer's footnote and the tray's row, as Kokoro v1.0's synthetic data already is.
+  - Front-end: misaki's ZHG2P version 1.1 (Apache-2.0, adapted from PaddleSpeech) on jieba, pypinyin and cn2an (MIT),
+    the phonemes the model was trained on; nothing else gives them. Its packages go into voice typing's environment
+    only with the Mandarin voices, pinned to versions tested under Smart App Control in a throwaway python.org 3.14
+    venv (regex, the one compiled module, loaded; regex 2026.9.29 rather than the 2026.11.8 published that day).
+    misaki declares Python below 3.13; uv ignores such upper bounds and it runs on 3.14. English words inside Chinese
+    text go through the espeak-ng read aloud already has, not misaki's English G2P (spaCy and torch).
+  - Files in the Hugging Face cache at the pinned revision, like Kokoro v1.0's, not in the Piper voices' folder: the
+    same loader, the Storage card and removal already handle cache folders, and this PC had them there already.
+  - Eight voices offered of 100 (numbered, unnamed): ranked by a Whisper large-v3-turbo round trip of ten sentences
+    each, by toneless pinyin syllable errors, then character errors, then Whisper's confidence. zf_001, upstream's
+    sample voice, came last of the female voices, so the default is zf_003.
+  - A second Kokoro engine (tts.KokoroZh) with the same GPU, fallback and idle unload as Kokoro; misaki's dictionaries
+    load in a thread beside the ONNX session (2.1 s instead of 4.0 s). Language detection weighs a Han, Hangul or
+    kana character as three (kana two) letters, and pieces are measured the same way and cut at CJK commas.
+  - Turned down: Kokoro v1.0's eight Chinese voices (an earlier IPA front-end; v1.1-zh was trained for Mandarin with
+    100 speakers), Piper's Chinese voice (non-commercial data), GPU-only models such as CosyVoice3 (about 5 GB).
 - **Pending: read aloud in more languages with Piper voices, marked.** Asked by the owner: installation options for
   the best models for key languages Kokoro does not cover. Research (licences of weights and training data, checked
   at the source) found no clean CPU model for Cantonese, Korean or Indonesian, Kokoro-based options for Mandarin,

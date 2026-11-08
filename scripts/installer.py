@@ -212,7 +212,7 @@ class Installer:
         except Exception:  # noqa: BLE001 - the list is optional; Ollama may be off and its folder unreadable
             unused = []
         self.model_vars = {m.name: (tk.BooleanVar(value=False), m) for m in unused}
-        # More read aloud voices (Piper): ticked when the profile names them or they are downloaded already.
+        # More read aloud voices (Piper, Mandarin): ticked when the profile names them or they are downloaded already.
         from stacklib import dictation
         from stacklib.dictation import speak
 
@@ -221,7 +221,7 @@ class Installer:
         except Exception:  # noqa: BLE001 - optional: the boxes start unticked
             have = set()
         named = set((self.profile.get("read_aloud") or {}).get("packs") or [])
-        self.pack_vars = {k: tk.BooleanVar(value=k in have or k in named) for k in speak.PIPER_VOICES}
+        self.pack_vars = {k: tk.BooleanVar(value=k in have or k in named) for k in speak.PACK_KEYS}
         self.option_vars = {k: tk.StringVar(value=v) for k, v in d["options"].items()}   # (section, key) -> value
         self.store = tk.StringVar(value=d["model_store"])
         self.tools = tk.StringVar(value=d["tool_dir"])
@@ -398,7 +398,7 @@ class Installer:
                     combo.pack(side="left", padx=(0, 14))
                     self.option_boxes[(opt.section, opt.key)] = combo
                     self.option_owner[str(combo)] = feat.id
-            if feat.id == "read_aloud" and self.pack_vars:   # more languages: Piper voices, three to a line
+            if feat.id == "read_aloud" and self.pack_vars:   # more languages: Piper and Mandarin voices, three a line
                 from stacklib.dictation import speak
 
                 r += 1
@@ -406,20 +406,24 @@ class Installer:
                 grid.grid(row=r, column=0, columnspan=3 + len(COLUMNS), sticky="w", padx=(28, 0), pady=(0, 2))
                 ttk.Label(grid, text="More voices:", style="Card.Sub.TLabel").grid(row=0, column=0, sticky="nw",
                                                                                    padx=(0, 6))
+                chosen = self.option_vars.get(("read_aloud", "kokoro"))
+                variant = chosen.get() if chosen is not None else str(
+                    (self.profile.get("read_aloud") or {}).get("kokoro") or "fp32")
                 for i, (key, var) in enumerate(self.pack_vars.items()):
-                    meta = speak.PIPER_VOICES[key]
-                    who = " and ".join(str(x[0]) for x in (meta.get("speakers") or {}).values())
-                    lang = speak.language_label(str(meta.get("language") or ""))
-                    star = "*" if meta.get("lessac_base") else ""
-                    box = ttk.Checkbutton(grid, text=f"{lang}: {who} ({meta.get('size_mb')} MB){star}", variable=var,
-                                          command=self.packs_changed)
+                    mark = ("†" if key == speak.ZH_PACK else
+                            "*" if (speak.PIPER_VOICES.get(key) or {}).get("lessac_base") else "")
+                    box = ttk.Checkbutton(grid, text=f"{speak.pack_title(key)} ({speak.pack_disk_mb(key, variant):.0f} "
+                                                     f"MB){mark}", variable=var, command=self.packs_changed)
                     box.grid(row=i // 3, column=1 + i % 3, sticky="w", padx=(0, 14))
                     box.bind("<FocusIn>", lambda _e: self.show_detail("read_aloud"), add="+")
                 r += 1
+                zh = (" † Kokoro v1.1-zh (Apache-2.0), trained on Mandarin recordings LongMaoData granted for it and on "
+                      "synthetic English; it adds misaki (Mandarin text to phonemes) to read aloud's environment and "
+                      "runs on the GPU or the CPU like Kokoro." if speak.ZH_PACK in self.pack_vars else "")
                 ttk.Label(table, style="Card.Muted.TLabel", wraplength=WRAP - 60, justify="left",
                           text="* Piper voices fine-tuned from a voice whose training data is licensed for research "
                                "only; their own recordings are open (CC0, CC BY or CC BY-SA). They run on this PC's "
-                               "CPU in read aloud's own environment.").grid(
+                               "CPU in read aloud's own environment." + zh).grid(
                     row=r, column=0, columnspan=3 + len(COLUMNS), sticky="w", padx=(28, 0), pady=(0, 4))
             if feat.id == "models" and self.model_vars:   # downloaded models nothing uses: delete them?
                 r += 1
