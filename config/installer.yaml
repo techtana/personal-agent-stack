@@ -260,6 +260,7 @@ winget:
 features:
   gateway: {disk_gb: 0.6, ram_gb: 0.5}       # measured: LiteLLM 0.57 GB on disk, 0.3 GB working set
   chat: {disk_gb: 1.9, ram_gb: 0.7}          # measured: 1.94 GB on disk
+  web_filter: {disk_gb: 0.01, ram_gb: 0.01}  # measured: 3.1 MB for Phishing Army's list; nothing runs
   tracing: {disk_gb: 0.5, ram_gb: 0.4}       # measured: 0.54 GB on disk
   images: {disk_gb: 16.8, ram_gb: 1.5, ram_busy_gb: 8.0, vram_gb: 0.4, vram_busy_gb: 10.5}   # measured: 16.8 GB, 11.6 GB peak
   voice_typing: {disk_gb: 0.3, ram_gb: 0.4}  # measured: 0.25 GB environment

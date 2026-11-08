@@ -16,6 +16,7 @@ Docs root: https://code.claude.com/docs/en/ (append `.md` to any page for plain 
 6. Updates and advisories
 7. Identity (details in identity.md)
 8. Drift
+9. Web filter (blocked sites)
 
 ## 1. Paste-ready baseline
 
@@ -144,3 +145,19 @@ fingerprint holds versions, env names (values only for known on/off switches), t
 rules, MCP servers, hooks, plugins, marketplaces, skills, scheduled tasks and Desktop extensions. Additions and
 changes to MCP servers, hooks, plugins, marketplaces, rules, skills or tasks are medium: confirm you made each one.
 The fingerprint holds hashes and redacted rule text, never secret values or identifiers.
+
+## 9. Web filter (blocked sites)
+
+personal-agent-stack blocks sites with security problems or that take data from users (request catchers and tunnels
+used to exfiltrate data, people-search data brokers, phishing) in Open WebUI itself. For Claude Code and Claude
+Desktop the audit only reports. The stack writes `blocked-sites.txt` into the audit's state folder: UTF-8, one
+lower-case domain per line, `#` starts a comment, and a domain covers its subdomains. `uv run scripts/stack.py
+web-filter export` (in the stack) regenerates it, prints the WebFetch deny rules and writes a Chrome URLBlocklist
+`.reg` file. WebFetch rule syntax and the resolver addresses were checked against the Claude Code permissions docs
+and each provider's own pages on 2026-11-08.
+
+| ID | Checks | Recommended | Notes |
+|---|---|---|---|
+| WEB-BLOCKLIST-RULES, WEB-BLOCKLIST-MISSING | listed domains that user or managed `permissions.deny` doesn't deny for WebFetch (medium); skipped when a bare `WebFetch` or `WebFetch(domain:*)` deny rule stops every fetch, and info when the list is missing or empty | two rules per domain, `WebFetch(domain:x)` and `WebFetch(domain:*.x)`, in `~/.claude/settings.json`, or managed settings to make them binding | `domain:x` matches the host x only; `*.x` matches subdomains at any depth but not x itself; a `*` elsewhere stays within one label. Wildcards match from 2.1.172. The rules cover only Claude Code's WebFetch tool, not `curl` in Bash (on native Windows there's no sandbox to stop it). Rules only in a project's settings don't count for other projects. (permissions#webfetch) |
+| WEB-DNS | DNS servers of this PC's connected adapters (Windows `Get-DnsClientServerAddress`, Linux `/etc/resolv.conf` or `resolvectl dns`, macOS `scutil --dns`) against known filtering resolvers: Quad9, Cloudflare for Families, AdGuard DNS, CleanBrowsing, Control D's filtering addresses (76.76.2.1, .2, .4), NextDNS (filtering depends on your profile) | a protective resolver on every connection, or on the router | Low when none or only some are protective; info when all are. The only filter on this PC that reaches Claude Desktop's built-in browser, Claude in Chrome, computer use and `curl` in Bash, but it blocks the provider's threat lists, not `blocked-sites.txt`, unless the provider takes your own denylist. A router, VPN, local DNS program or DoH setting may filter too and isn't visible, so "not found" is a hint. Quad9 9.9.9.10, Cloudflare 1.1.1.1, AdGuard 94.140.14.140 and Control D 76.76.2.0 don't filter. A system setting: the owner changes it. |
+| WEB-SERVER-SIDE | always (info) | turn web search off in chats that don't need it; deny `WebSearch` in Claude Code if unused; Chrome's `URLBlocklist` policy for Claude in Chrome | Claude Desktop's (and claude.ai's) web search and web fetch and Claude Code's WebSearch run on Anthropic's servers, so no list, DNS or setting on this PC can filter them. Claude Code's WebFetch runs locally, so its deny rules apply. |

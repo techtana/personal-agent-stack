@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import IS_WINDOWS, LITELLM_DIR, REPO, TRACES_DIR, catalog, env_value, info, load_dotenv, procname, warn, which
+from . import webfilter
 
 # Media services (ComfyUI, Kokoro) start before Open WebUI, which points its image and speech settings at them.
 # Voice typing (dictation) comes last: it needs only the gateway, for its cleanup.
@@ -216,6 +217,8 @@ def commands(profile: dict) -> dict[str, dict]:
                 **openwebui_stt_env(profile, env_value("DICTATION_BEARER", dotenv)),
                 "ENABLE_EVALUATION_ARENA_MODELS": "false",
                 **media.openwebui_env(profile),
+                # Blocked sites: the page-fetch filter (read at start) and the search filter's seed for a fresh database.
+                **webfilter.openwebui_env(profile),
             },
         }
     from . import dictation

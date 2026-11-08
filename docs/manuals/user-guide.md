@@ -640,6 +640,8 @@ It looks at:
 - **New settings:** what Claude Code's docs and changelog have added since the last audit.
 - **Your identity:** your email, name or Windows user name in repositories, `CLAUDE.md`, Claude's memory, skills and
   scheduled tasks, and scripts that send an email address to web APIs.
+- **Blocked sites:** which of the stack's [blocked sites](#blocked-sites) Claude Code's WebFetch can still reach,
+  whether this PC uses protective DNS, and what no setting on this PC can filter.
 
 What it does about them:
 
@@ -660,6 +662,65 @@ in `.claude/skills/claude-security-audit/references/identity.md`.
 To set up the weekly run on another computer, create the scheduled task from
 `.claude/skills/claude-security-audit/scheduled-task.md` in the Claude desktop app (**Scheduled tasks**, weekly,
 Monday 09:30).
+
+## Blocked sites
+
+The stack keeps its web reader away from sites with security problems or that take data from you. Open WebUI is that
+reader: its web search, the links you paste into a chat and its fetch tool. Results from a blocked site are dropped
+before the model sees them, and its pages are not opened. It is on after install (the installer's **Blocked sites (web
+filter)**), and the tray's **Settings > Blocked sites** changes it.
+
+What it blocks, in this order:
+
+1. **Your blocked sites**, one per line. A site covers its subdomains: `evil.com` also blocks `www.evil.com`.
+2. **Request catchers and tunnels** (webhook.site, ngrok, interact.sh and 37 more). A page with hidden instructions can
+   tell a model to fetch `https://<catcher>/?q=<your data>`; this list stops that kind of leak.
+3. **People-search and data broker sites** (Spokeo, Whitepages and 36 more), so models do not gather personal data
+   about people, you included, from search results.
+4. **Phishing sites** from [Phishing Army](https://phishing.army/), about 124,000, downloaded and refreshed daily.
+5. **Malware and scam sites** from Hagezi (about 190,000), off by default because it is large.
+
+Lists 2 and 3 ship in `policy/web-filter.yaml`. Lists 4 and 5 are downloaded into `.run\webfilter` and refreshed every
+24 hours. When a download fails, the last copy stays in use. **Never block** takes sites off the lists. A site whose
+parent domain is blocked stays blocked, though, because Open WebUI has no exceptions. Downloaded lists may never block
+a shared platform whole (Google Docs, GitHub Pages, Weebly and others listed under `keep:`); their phishing subdomains
+stay blocked.
+
+Open WebUI has two filters:
+
+- **Web search:** up to 25,000 sites (Settings > Blocked sites > Advanced). Open WebUI compares every search result
+  with every blocked site in turn. On the reference PC that takes 0.8 s per search at 25,000 sites with 5 results, and
+  4 s at all 124,000 phishing sites. Your sites and the shipped lists always come first. The tray updates this filter
+  every 10 minutes, without restarting Open WebUI.
+- **Page fetches:** the first sites that fit in about 24,000 characters (about 1,200 sites). It is read when Open
+  WebUI starts, so Apply restarts Open WebUI when it changes.
+
+Check a site, or see where things stand:
+
+```
+uv run scripts/stack.py web-filter check example.com
+uv run scripts/stack.py web-filter status
+uv run scripts/stack.py web-filter refresh
+```
+
+### Claude Desktop, Claude Code and every other app
+
+The stack cannot block anything in Claude Desktop or Claude Code: they talk to Anthropic directly, and the web search
+in Claude's chats (and Claude Code's WebSearch) runs on Anthropic's servers. No setting on this PC can filter those;
+only turning web search off for a chat does. What does work on this PC:
+
+- **Protective DNS** blocks malware and phishing sites for every app, including Claude Desktop's browser, Claude in
+  Chrome, computer use and `curl` in a terminal. Set Quad9 (`9.9.9.9`, `149.112.112.112`) or Cloudflare for Families
+  (`1.1.1.2`, `1.0.0.2`) in **Windows Settings > Network & internet >** your connection **> DNS server assignment**.
+  `web-filter status` and the installer say whether this PC uses one.
+- **Claude Code's WebFetch** obeys deny rules. `uv run scripts/stack.py web-filter export` writes them to
+  `.run\webfilter\claude-webfetch-deny.json`. Add its `permissions.deny` entries to `~/.claude/settings.json`, or to
+  managed settings to make them binding. They stop WebFetch only, not `curl` in Bash.
+- **Claude in Chrome** obeys Chrome's `URLBlocklist` policy. The same command writes
+  `.run\webfilter\chrome-urlblocklist.reg` (your sites and the shipped lists, at most 1,000). Import it yourself,
+  then check `chrome://policy`.
+- **`/claude-security-audit`** reports which blocked sites Claude Code can still fetch and whether protective DNS is
+  on ([Checking your Claude setup](#checking-your-claude-setup)). It never changes a setting.
 
 ## Seeing what happened
 

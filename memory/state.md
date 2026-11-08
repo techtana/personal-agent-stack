@@ -1,6 +1,7 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-08 (the installer's catalog in config/installer.yaml, install and remove from the tray and the
+Updated: 2026-11-08 (blocked sites for Open WebUI's web reading, and audit checks for Claude; open item 38). Before
+that, the same day (the installer's catalog in config/installer.yaml, install and remove from the tray and the
 installer, the tray's Overview and Settings reworked; open item 37). Before that, the same day (read aloud of selected
 text, an optional part of voice typing; open item 36). Before that,
 the same day (voice typing history kept for dictation.keep_minutes; open item 35). Before that, the same day (the installer makes an app apart from the repository; open item 32). Before that, the same day (the installer asks which features to install, with their load on this PC, and the tray's Features card; open item 30). Before that, 2026-11-08 (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
@@ -718,6 +719,38 @@ once across a session restart.
      confirmation, and a running and a failed progress page, in both themes, from the worktree with writes and setup
      patched out. Not verified: the live installer, a 150% display, keyboard traversal by hand.
 
+38. Blocked sites (2026-11-08, branch claude/ban-insecure-web-search-a6dc77). Open WebUI is the stack's one web reader
+   (its web search, pasted links, its fetch tool), and stacklib/webfilter.py fills both of its filters from
+   policy/web-filter.yaml and the profile's `web_filter:` section (on by default; installer feature **Blocked sites (web
+   filter)**, setup step `web_filter`, tray Settings > Blocked sites, `stack.py web-filter`).
+   - Lists, in fill order: your own sites; request catchers and tunnels (40, shipped); people-search and data brokers
+     (38, shipped); Phishing Army (downloaded daily, 144,330 sites on 2026-11-08, 124,201 after subdomains fold into
+     their parents and the `keep:` platforms drop out); Hagezi TIF mini (~190,000, off). URLhaus's public hostfile
+     answers 410 Gone, so it is not used. Phishing Army listed docs.google.com whole, hence `keep:`.
+   - Page-fetch filter: WEB_FETCH_FILTER_LIST, read at Open WebUI's start, about 24,000 characters (1,219 sites here).
+     Web search filter: config row `web.search.domain.filter_list`, read on every search, up to web_filter.max_sites
+     (25,000), rewritten by the tray every 10 minutes without a restart; entries the owner added in Open WebUI's admin
+     page are kept. Every entry starts with "!" (an entry without it is an allow-list).
+   - Measured with Open WebUI 0.12.3's own matcher: 0.83 s per search at 25,000 sites with 5 results, 1.67 s at 50,000,
+     4.09 s at 124,279. So only about a fifth of the phishing list fits the search filter by default.
+   - Claude side, report only (rule 9): /claude-security-audit gained WEB-BLOCKLIST-RULES (Claude Code WebFetch deny
+     rules missing for the list in %LOCALAPPDATA%\claude-security-audit\blocked-sites.txt, which the stack writes),
+     WEB-DNS (protective resolver on the adapters that are up) and WEB-SERVER-SIDE (Claude's web search runs on
+     Anthropic's servers). `stack.py web-filter export` writes the deny rules (`WebFetch(domain:x)` plus
+     `WebFetch(domain:*.x)`, per code.claude.com/docs/en/permissions) and a Chrome URLBlocklist .reg file; the owner
+     applies both.
+   - This PC: no protective DNS on its adapters (read-only check that day).
+   Verified: unit tests (tests/test_webfilter.py and the audit's WebFilter tests); a real Phishing Army download into
+   the worktree's .run; the search-row sync on a temp copy of the installed app's webui.db (25,000 entries in 0.48 s,
+   a second run unchanged, an owner entry kept, off cleared only the stack's); Open WebUI's own validate_url with the
+   generated environment refused x.webhook.site and spokeo.com and allowed github.com and wikipedia.org; `audit.py
+   collect --offline` with its state in a temp folder read the stack's 78-site list and reported WEB-BLOCKLIST-RULES
+   (78 sites reachable), WEB-DNS low and WEB-SERVER-SIDE, its PowerShell DNS command included.
+   Not verified: the live tray and Open WebUI with the filter (the installed app runs the old code until install.cmd
+   is rerun), a web search through Open WebUI (web search is still off, M6), the Settings group's look, the .reg
+   import into Chrome.
+   After merging: rerun install.cmd from the main checkout (the setup step downloads the lists), then consider
+   protective DNS for this PC.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render
