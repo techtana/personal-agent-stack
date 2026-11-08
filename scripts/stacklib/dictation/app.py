@@ -1188,17 +1188,22 @@ class RefineUI:
     def __init__(self, app: App) -> None:
         self.app = app
 
-    def _set(self, state: str, title: str, body: str, hint: str, hide_after: float = 0.0) -> None:
-        self.app.ui(lambda: self.app.overlay.set_state(state, title, body, hint, hide_after=hide_after, which="refine"))
+    def _set(self, state: str, title: str, body: str, hint: str, hide_after: float = 0.0, copy: str = "",
+             copy_label: str = "Copy") -> None:
+        # Copy is a button in the bubble: the text goes on the clipboard only when you click it (or with
+        # refine.auto_copy, which the refiner handles), so what you copied before is never overwritten unasked.
+        actions = [(copy_label, lambda: self.app.copy_text(copy))] if copy else None
+        self.app.ui(lambda: self.app.overlay.set_state(state, title, body, hint, hide_after=hide_after, which="refine",
+                                                       actions=actions))
 
     def working(self, title: str, body: str = "", hint: str = "") -> None:
         self._set("working", title, body, hint)
 
-    def done(self, title: str, body: str = "", hint: str = "") -> None:
-        self._set("done", title, body, hint, hide_after=6)
+    def done(self, title: str, body: str = "", hint: str = "", copy: str = "", copy_label: str = "Copy") -> None:
+        self._set("done", title, body, hint, hide_after=8 if copy else 6, copy=copy, copy_label=copy_label)
 
-    def error(self, title: str, body: str = "", hint: str = "") -> None:
-        self._set("error", title, body, hint, hide_after=10)
+    def error(self, title: str, body: str = "", hint: str = "", copy: str = "", copy_label: str = "Copy") -> None:
+        self._set("error", title, body, hint, hide_after=10, copy=copy, copy_label=copy_label)
 
     def cancelled(self, title: str, body: str = "", hint: str = "") -> None:
         self._set("idle", title, body, hint, hide_after=2.5)

@@ -319,6 +319,13 @@ original back within 30 minutes. It is part of the voice typing app, so it runs 
 3. The pencil turns blue while the model works (about 1 to 2 seconds for a paragraph). Then the selection is replaced
    and the bubble shows the new text.
 
+The bubble also has a **Copy** button, which puts the new text on the clipboard. Refine leaves your clipboard alone
+otherwise, so whatever you copied before is still there. Moving the pointer over the bubble keeps it open until you
+move away. If nothing could be replaced (see step 4 below), the bubble says **Nothing was replaced** and Copy is how you
+get the text; when the reply fails the checks, **Copy suggestion** gives you the model's text anyway. To have every
+refined text land on the clipboard by itself, turn on **Copy refined text to the clipboard** in the tray's Settings tab
+(`refine.auto_copy`); then it replaces what you had copied.
+
 To pick the style each time instead, press **Ctrl+Alt+Shift+R** after selecting. A menu of every style opens at the
 text cursor: press a number (**1** Polish, **2** Fix spelling and grammar only, and so on) or click a style, and the
 selection is refined with it. **R** (Revert to the original) puts back the text of an earlier refine; **Esc** closes
@@ -359,8 +366,8 @@ How it works, all on this PC:
 3. The reply is checked. If it reads like an answer to you, grew or shrank far more than the style allows, or is empty,
    your text stays as it was. The suggestion still goes into the history.
 4. It presses Ctrl+C once more. Only if the same text is still selected in the same window does it paste the new text
-   over it. If you clicked elsewhere or switched windows meanwhile, nothing changes and the new text goes to the
-   clipboard; the bubble says so.
+   over it. If you clicked elsewhere or switched windows meanwhile, nothing changes and the bubble offers **Copy**
+   (with `refine.auto_copy` on, the new text is already on the clipboard).
 
 The log is `.run\dictation\refine-log.jsonl`, one line per refine: time, app, window title, style, model, the text
 before, the suggestion and what happened to it (replaced, rejected, copied, unchanged, cancelled). Unlike the voice
