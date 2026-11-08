@@ -177,6 +177,7 @@ def resolve_profile(name: str | None = None) -> dict:
         "data_dir": data_dir,
         "catalog": defaults.get("model_catalog", {}),
         "media": resolve_media(defaults.get("media") or {}, m.get("media") or {}),
+        "dictation": {**(defaults.get("dictation") or {}), **{k: v for k, v in (m.get("dictation") or {}).items() if v is not None}},
         "agent_access": {"allowed_roots": list(((m.get("agent_access") or {}).get("allowed_roots")) or [])},
     }
 

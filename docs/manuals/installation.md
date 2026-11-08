@@ -102,6 +102,9 @@ Setup does the following, in this order:
 10. **Install OpenClaw**: upgrades Node.js with winget if it is older than OpenClaw needs (Windows asks for
     administrator approval), runs `npm install -g openclaw@latest`, then sets OpenClaw up with the gateway as its only
     model provider ([details](choosing-drives.md#openclaw)).
+11. **Install voice typing (Whisper)**: only when voice typing is turned on (`services.dictation: native`); it builds
+    its environment under the media folder and fetches the Whisper model. Turn it on with
+    `uv run scripts/stack.py dictate install` ([details](user-guide.md#voice-typing)).
 
 A failed step does not stop the others; the window marks it with a cross and Ollama's or uv's message, and
 **Change folders and run again** goes back to the questions. Steps that already ran are quick the second time.

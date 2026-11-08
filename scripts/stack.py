@@ -23,6 +23,8 @@ Commands
   run           run one service in the foreground and restart it when it exits (what each task runs)
   tray          background tray app: runs the services; its window shows status, usage per model and settings
                 (--show, --foreground, --status, --stop, --install-startup, --remove-startup)
+  dictate       voice typing in any app: install | run | start | stop | status | toggle | show | hide | check |
+                transcribe FILE.wav (the live pipeline on a recording, with the cleanup)
 """
 from __future__ import annotations
 
@@ -377,6 +379,56 @@ def cmd_media(a):
         info(media.gpu_mode(p, a.mode))
 
 
+def cmd_dictate(a):
+    import os
+
+    from stacklib import dictation, load_dotenv
+    from stacklib.dictation import control
+
+    p = prof.resolve_profile()
+    port = int(p["ports"]["dictation"])
+    if a.action == "install":
+        info(dictation.install(p, info))
+        if p["services"].get("dictation") != "native":
+            from stacklib.yamledit import set_key
+
+            path = prof.machine_file(p["name"])
+            text = set_key(path.read_text(encoding="utf-8"), "services", "dictation", "native")
+            path.write_text(text, encoding="utf-8", newline="\n")
+            info(f"turned voice typing on in {path.name} (services.dictation: native); the tray starts it with the other services")
+        info("start it now with `uv run scripts/stack.py dictate start` (or Start on its row in the tray)")
+        return
+    if a.action in ("start", "stop"):
+        if a.action == "start" and p["services"].get("dictation") != "native":
+            die("voice typing is off in the machine profile; run `uv run scripts/stack.py dictate install` first")
+        problems = (services.start if a.action == "start" else services.stop)(p, ["dictation"])
+        if problems.get("dictation"):
+            die(problems["dictation"])
+        if a.action == "start":
+            ok = services.wait_healthy(p, ["dictation"], timeout=30)["dictation"]
+            info("voice typing is running: press " + dictation.hotkey_label(p) + " or click the mic button" if ok
+                 else "voice typing did not answer within 30 s; see .run/logs/dictation.log")
+        return
+    if a.action in ("status", "toggle", "show", "hide"):
+        try:
+            info(json.dumps(control.call(port, "health" if a.action == "status" else a.action), indent=2))
+        except OSError:
+            die(f"voice typing is not running (nothing answers on port {port})")
+        return
+    python = dictation.env_python(p, windowed=False)
+    if not python.exists():
+        die(f"voice typing is not installed ({python} is missing); run `uv run scripts/stack.py dictate install`")
+    env = dictation.app_env(p, {**load_dotenv(), **os.environ})  # .env holds LITELLM_MASTER_KEY for the cleanup
+    argv = [str(python), "-P", "-m", "stacklib.dictation", a.action]
+    if a.action == "transcribe":
+        if not a.file:
+            die("transcribe needs a WAV file")
+        argv.append(str(Path(a.file).resolve()))
+        argv += [x for opt, val in (("--style", a.style), ("--mode", a.mode), ("--language", a.language),
+                                    ("--device", a.device), ("--vocabulary", a.vocabulary)) if val for x in (opt, val)]
+    raise SystemExit(subprocess.run(argv, cwd=REPO, env=env).returncode)
+
+
 def cmd_whisper(a):
     from stacklib import whisper
 
@@ -430,6 +482,11 @@ def main(argv=None):
     s = sub.add_parser("media", help="ComfyUI and media models under media.root: check, install, provision, gpu chat|media")
     s.add_argument("action", choices=["check", "install", "provision", "gpu"]); s.add_argument("mode", nargs="?", choices=["chat", "media"])
     s.set_defaults(f=cmd_media)
+    s = sub.add_parser("dictate", help="voice typing in any app: install, run, start/stop, status, transcribe a WAV")
+    s.add_argument("action", choices=["install", "run", "start", "stop", "status", "toggle", "show", "hide", "check", "transcribe"])
+    s.add_argument("file", nargs="?"); s.add_argument("--style", choices=["verbatim", "clean", "concise"])
+    s.add_argument("--mode", choices=["polish", "live"]); s.add_argument("--language"); s.add_argument("--device", choices=["auto", "cuda", "cpu"])
+    s.add_argument("--vocabulary"); s.set_defaults(f=cmd_dictate)
     s = sub.add_parser("whisper", help="local Whisper for recordings: install, register|unregister in Claude Desktop, entry")
     s.add_argument("action", choices=["install", "register", "unregister", "entry"]); s.set_defaults(f=cmd_whisper)
     s = sub.add_parser("retro"); s.add_argument("rest", nargs=argparse.REMAINDER); s.set_defaults(f=cmd_retro)
