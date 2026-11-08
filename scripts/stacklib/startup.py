@@ -15,6 +15,7 @@ TRAY_SCRIPT = REPO / "scripts" / "tray.py"
 SHORTCUT_NAME = "Agent Stack.lnk"
 PIDFILE = REPO / ".run" / "pids" / "tray.pid"
 TRAY_LOG = REPO / ".run" / "logs" / "tray.log"
+SHOW_REQUEST = REPO / ".run" / "tray.show"  # a second launch with --show leaves this for the running tray
 # Lines the tray writes to its log (READY and FAILED in scripts/tray.py; keep the two in step).
 TRAY_READY = "[tray] ready"
 TRAY_FAILED = "[tray] start-up failed:"
@@ -33,14 +34,34 @@ def _startup_dir() -> Path:
     return Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
 
 
-def _make_shortcut(path: Path) -> None:
-    """Windows .lnk that runs the tray with pythonw from the repository folder."""
+def _menu_dir() -> Path:
+    return Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+
+
+def menu_shortcut() -> Path:
+    """Start menu entry that starts the tray, or opens its window when it is already running."""
+    return _menu_dir() / SHORTCUT_NAME
+
+
+def ensure_menu_shortcut() -> Path | None:
+    """Create the Start menu entry if it is missing (Windows only). Returns its path, or None elsewhere."""
+    if not IS_WINDOWS:
+        return None
+    lnk = menu_shortcut()
+    if not lnk.exists():
+        _make_shortcut(lnk, show=True)
+    return lnk
+
+
+def _make_shortcut(path: Path, show: bool = False) -> None:
+    """Windows .lnk that runs the tray with pythonw from the repository folder. `show` opens its window on launch."""
     ps = (
         "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:LNK_PATH); "
         "$s.TargetPath = $env:LNK_TARGET; $s.Arguments = $env:LNK_ARGS; $s.WorkingDirectory = $env:LNK_DIR; "
         "$s.Description = 'Agent Stack tray (personal-agent-stack)'; $s.WindowStyle = 7; $s.Save()"
     )
-    env = {**os.environ, "LNK_PATH": str(path), "LNK_TARGET": str(tray_python()), "LNK_ARGS": f'"{TRAY_SCRIPT}"', "LNK_DIR": str(REPO)}
+    args = f'"{TRAY_SCRIPT}"' + (" --show" if show else "")
+    env = {**os.environ, "LNK_PATH": str(path), "LNK_TARGET": str(tray_python()), "LNK_ARGS": args, "LNK_DIR": str(REPO)}
     path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(["powershell", "-NoProfile", "-Command", ps], env=env, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0)
 
@@ -75,17 +96,32 @@ def remove() -> None:
     _autostart_file().unlink(missing_ok=True)
 
 
-def launch_detached() -> None:
+def request_show() -> None:
+    """Ask the running tray to open its window (it watches for this file)."""
+    SHOW_REQUEST.parent.mkdir(parents=True, exist_ok=True)
+    SHOW_REQUEST.touch()
+
+
+def take_show_request() -> bool:
+    """True once per request_show(); the tray calls this from its UI loop."""
+    try:
+        SHOW_REQUEST.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def launch_detached(show: bool = False) -> None:
     """Start the tray outside the current terminal/agent session (Windows: through Explorer, like the Start menu)."""
     python = tray_python()
     if not python.exists():
         raise FileNotFoundError(f"{python} not found; run `uv sync` first")
     if IS_WINDOWS:
         lnk = REPO / ".run" / SHORTCUT_NAME
-        _make_shortcut(lnk)
+        _make_shortcut(lnk, show=show)
         subprocess.run(["explorer.exe", str(lnk)], check=False)
     else:
-        subprocess.Popen([str(python), str(TRAY_SCRIPT)], cwd=REPO, start_new_session=True,
+        subprocess.Popen([str(python), str(TRAY_SCRIPT)] + (["--show"] if show else []), cwd=REPO, start_new_session=True,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
@@ -132,10 +168,10 @@ def wait_for_tray(log: Path, offset: int, timeout: float = 20.0, alive=None, pol
         time.sleep(poll)
 
 
-def launch_and_wait(timeout: float = 20.0) -> tuple[str, str]:
+def launch_and_wait(timeout: float = 20.0, show: bool = False) -> tuple[str, str]:
     """Start the tray detached, then confirm from its log that it came up, or say why it did not."""
     offset = TRAY_LOG.stat().st_size if TRAY_LOG.exists() else 0
-    launch_detached()
+    launch_detached(show=show)
     return wait_for_tray(TRAY_LOG, offset, timeout)
 
 

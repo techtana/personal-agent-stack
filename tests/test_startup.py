@@ -10,6 +10,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import tray  # noqa: E402
@@ -65,6 +66,39 @@ class WaitForTray(unittest.TestCase):
         self._append_later("[tray] another tray instance is running; exiting\n")
         state, _ = startup.wait_for_tray(self.log, self.offset, timeout=5, alive=lambda: None, poll=0.05)
         self.assertEqual(state, "ready")
+
+
+class ShowRequest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        patcher = mock.patch.object(startup, "SHOW_REQUEST", Path(tmp.name) / "run" / "tray.show")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_one_request_is_taken_once(self):
+        self.assertFalse(startup.take_show_request())
+        startup.request_show()
+        self.assertTrue(startup.take_show_request())
+        self.assertFalse(startup.take_show_request())
+
+
+class MenuShortcut(unittest.TestCase):
+    def test_created_once_with_show(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(startup, "IS_WINDOWS", True), \
+                mock.patch.object(startup, "_menu_dir", return_value=Path(tmp)), \
+                mock.patch.object(startup, "_make_shortcut", side_effect=lambda p, show: p.touch()) as make:
+            lnk = startup.ensure_menu_shortcut()
+            self.assertEqual(lnk, Path(tmp) / startup.SHORTCUT_NAME)
+            make.assert_called_once_with(lnk, show=True)
+            startup.ensure_menu_shortcut()
+            make.assert_called_once()  # already there: left alone
+
+    def test_nothing_outside_windows(self):
+        with mock.patch.object(startup, "IS_WINDOWS", False), mock.patch.object(startup, "_make_shortcut") as make:
+            self.assertIsNone(startup.ensure_menu_shortcut())
+            make.assert_not_called()
 
 
 class StartupFailureText(unittest.TestCase):
