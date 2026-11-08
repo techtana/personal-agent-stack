@@ -135,9 +135,12 @@ class Engine:
 
     # ---------------------------------------------------------------- transcription
 
-    def transcribe(self, audio: np.ndarray, *, prompt: str = "", fast: bool = False, language: str = "") -> tuple[str, str]:
+    def transcribe(self, audio: np.ndarray, *, prompt: str = "", fast: bool = False, language: str = "",
+                   client: str = "") -> tuple[str, str]:
         """(text, language) for float32 mono 16 kHz audio. `fast` (beam 1) is for previews while you speak.
-        Every call is recorded for the tray's Usage tab: audio length, model and load time, tokens; never the text."""
+        Every call is recorded for the tray's Usage tab: audio length, model and load time, tokens; never the text.
+        `client` names who asked when it is not this engine's own client (Open WebUI through the transcription
+        endpoint, which shares the loaded model with voice typing)."""
         t0 = time.monotonic()
         stats = {"run_s": 0.0, "tokens": 0, "language": ""}
         ready = self.state == "ready"
@@ -165,13 +168,14 @@ class Engine:
             failed = type(e).__name__  # not the message, which can name files and folders
             raise
         finally:
-            self._record(audio, t0, load_s, stats, fast, failed)
+            self._record(audio, t0, load_s, stats, fast, failed, client or self.client)
 
-    def _record(self, audio: np.ndarray, t0: float, load_s: float, stats: dict, fast: bool, failed: str) -> None:
+    def _record(self, audio: np.ndarray, t0: float, load_s: float, stats: dict, fast: bool, failed: str,
+                client: str) -> None:
         try:
             usage_log.record(
                 "voice-typing", self.model_name or self.cfg.model, "transcription",
-                client=self.client, status="failure" if failed else "success", error=failed,
+                client=client, status="failure" if failed else "success", error=failed,
                 latency_ms=(time.monotonic() - t0) * 1000, load_ms=load_s * 1000 if load_s else None,
                 run_ms=stats["run_s"] * 1000, output_tokens=stats["tokens"], audio_s=len(audio) / 16000,
                 # A preview re-reads the phrase so far while you speak; the tab keeps previews out of its totals.
@@ -181,7 +185,11 @@ class Engine:
             self.log(f"[dictation] usage record failed: {_short(e)}")
 
     def _decode(self, audio: np.ndarray, prompt: str, fast: bool, language: str, stats: dict) -> tuple[str, str]:
-        lang = language or (None if self.cfg.language in ("", "auto") else self.cfg.language)
+        # "auto" detects even when dictation.language names one (Open WebUI's recordings); "" follows the setting.
+        if language == "auto":
+            lang = None
+        else:
+            lang = language or (None if self.cfg.language in ("", "auto") else self.cfg.language)
         with self.lock:
             if self.model is None:
                 raise RuntimeError("Whisper was unloaded")
