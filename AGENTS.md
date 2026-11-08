@@ -68,5 +68,6 @@ uv run scripts/stack.py why-routed --last 20      # routing decisions from trace
 uv run scripts/stack.py usage --days 7            # every model the stack ran (the tray's Usage tab as text)
 uv run scripts/stack.py retro --days 7            # retrospective report (then /retro in Claude Code)
 uv run scripts/stack.py dictate install|start|transcribe f.wav  # voice typing in any app (Whisper, Ctrl+Alt+D); refine selected text (Ctrl+Alt+R; style menu Ctrl+Alt+Shift+R)
+uv run scripts/stack.py read-aloud install|voices|speak "text"  # optional: read selected text aloud (Kokoro on the CPU or Windows voices, Ctrl+Alt+S)
 scripts/claude-local.ps1 | .sh                    # Claude Code on the local gateway (profile B)
 ```

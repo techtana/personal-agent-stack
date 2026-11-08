@@ -31,6 +31,8 @@ Commands
                 (--show, --foreground, --status, --stop, --install-startup, --remove-startup)
   dictate       voice typing in any app: install | run | start | stop | status | toggle | show | hide | reload |
                 check | transcribe FILE.wav (the live pipeline on a recording, with the cleanup)
+  read-aloud    read selected text aloud (optional, in the voice typing app): install | off | voices |
+                speak "TEXT" [--voice V --speed S --out F.wav] | read | stop
 """
 from __future__ import annotations
 
@@ -639,6 +641,56 @@ def cmd_dictate(a):
     raise SystemExit(subprocess.run(argv, cwd=REPO, env=env).returncode)
 
 
+def cmd_read_aloud(a):
+    """Read aloud, an optional part of the voice typing app: install it (espeak-ng, comtypes, Kokoro's voices) and turn
+    it on, turn it off, list the voices, speak text the way it would, or read the selection in the running app."""
+    import os
+
+    from stacklib import dictation, load_dotenv
+    from stacklib.dictation import control
+    from stacklib.yamledit import set_key
+
+    p = prof.resolve_profile()
+    path = prof.machine_file(p["name"])
+    enabled = bool((p.get("read_aloud") or {}).get("enabled"))
+    restart = ("restart voice typing for the speaker button and hotkey: Stop and Start its row in the tray, or "
+               "`uv run scripts/stack.py dictate stop` then `start`")
+    if a.action in ("install", "off"):
+        if a.action == "install":
+            if not dictation.installed(p):
+                die("read aloud runs in the voice typing app, which is not installed: run "
+                    "`uv run scripts/stack.py dictate install` first")
+            info(dictation.install_read_aloud(p, info))
+        want = a.action == "install"
+        if enabled != want:
+            text = set_key(path.read_text(encoding="utf-8"), "read_aloud", "enabled", want)
+            path.write_text(text, encoding="utf-8", newline="\n")
+            info(f"turned read aloud {'on' if want else 'off'} in {path.name} (read_aloud.enabled: {str(want).lower()})")
+        if p["services"].get("dictation") == "native":
+            info(restart)
+        return
+    if a.action in ("read", "stop"):
+        try:
+            info(json.dumps(control.call(int(p["ports"]["dictation"]), "read" if a.action == "read" else "read_stop")))
+        except OSError:
+            die("voice typing is not running")
+        return
+    python = dictation.env_python(p, windowed=False)
+    if not python.exists():
+        die("voice typing is not installed; run `uv run scripts/stack.py dictate install`, then `read-aloud install`")
+    argv = [str(python), "-P", "-m", "stacklib.dictation", "speak"]
+    if a.action == "voices":
+        argv.append("--list")
+    else:
+        if not a.text:
+            die('speak needs the text: stack.py read-aloud speak "Hello there"')
+        argv.append(a.text)
+        argv += [x for opt, val in (("--voice", a.voice), ("--speed", a.speed), ("--out", a.out)) if val
+                 for x in (opt, str(val))]
+    env = dictation.app_env(p, {**load_dotenv(), **os.environ})
+    raise SystemExit(subprocess.run(argv, cwd=REPO, env=env).returncode)
+
+
 def cmd_whisper(a):
     from stacklib import whisper
 
@@ -718,6 +770,11 @@ def main(argv=None):
     s.add_argument("file", nargs="?"); s.add_argument("--style", choices=["verbatim", "clean", "concise"])
     s.add_argument("--mode", choices=["polish", "live"]); s.add_argument("--language"); s.add_argument("--device", choices=["auto", "cuda", "cpu"])
     s.add_argument("--vocabulary"); s.set_defaults(f=cmd_dictate)
+    s = sub.add_parser("read-aloud", help="read selected text aloud (optional, in the voice typing app): install, off, "
+                                          "voices, speak TEXT, read, stop")
+    s.add_argument("action", choices=["install", "off", "voices", "speak", "read", "stop"]); s.add_argument("text", nargs="?")
+    s.add_argument("--voice"); s.add_argument("--speed", type=float); s.add_argument("--out", help="speak: write a WAV file")
+    s.set_defaults(f=cmd_read_aloud)
     s = sub.add_parser("whisper", help="local Whisper for recordings: install, register|unregister in Claude Desktop, entry")
     s.add_argument("action", choices=["install", "register", "unregister", "entry"]); s.set_defaults(f=cmd_whisper)
     s = sub.add_parser("retro"); s.add_argument("rest", nargs=argparse.REMAINDER); s.set_defaults(f=cmd_retro)

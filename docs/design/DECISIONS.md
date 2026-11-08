@@ -7,6 +7,20 @@ elsewhere link there. Architecture decision records (ADR format) live in [../dec
 "Pending" marks a decision made in an open pull request that is not on `main` yet. When the pull request merges, the
 entry stays and gets a "Done <date>" note.
 
+## 2026-11-08
+
+- **Pending: read selected text aloud, an optional part of the voice typing app.** Asked by the owner: the same
+  manner, settings and interface as voice typing and refine; buttons pencil, mic, speaker from left to right; a
+  separate optional choice in the installer, handled gracefully when missing.
+  - Voices: Kokoro-82M (Apache-2.0) as ONNX on the CPU through voice typing's onnxruntime, with espeak-ng phonemes
+    through ctypes; Windows' own voices (SAPI and OneCore) through comtypes for instant speech and other languages.
+  - Not the multimodal plan's Kokoro-FastAPI service, which needs PyTorch and its own Smart App Control spike; that
+    service, for Open WebUI's read-aloud, stays planned (M2).
+  - `read_aloud.enabled` off by default; the installer's feature requires voice typing; reading never downloads.
+  - Rejected: phonemizer and kokoro-onnx (dependency chain), WinRT speech through ctypes, a PowerShell helper, a low
+    level keyboard hook for a Ctrl tap to stop (latency on every key system-wide).
+  - Details: [plans/2026-11-08-read-aloud.md](plans/2026-11-08-read-aloud.md).
+
 ## 2026-11-07
 
 - **Pending: the installer asks which features to install, shows what each takes on this PC, and the tray shows what

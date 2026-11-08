@@ -36,6 +36,7 @@ class Feature:
     required: bool = False           # always installed; the installer offers no way to leave it out
     services: tuple[str, ...] = ()   # the tray's service rows that belong to it
     needs_media: bool = False        # installs under the media folder (agent_access.allowed_roots)
+    requires: tuple[str, ...] = ()   # features it runs inside; choosing it chooses them too
 
 
 FEATURES: tuple[Feature, ...] = (
@@ -57,6 +58,10 @@ FEATURES: tuple[Feature, ...] = (
     Feature("voice_typing", "Voice typing (Whisper)", "voice typing",
             "A hotkey and a floating mic button type what you say into any app. Whisper transcribes on this PC.",
             services=("dictation",)),
+    Feature("read_aloud", "Read aloud (Kokoro)", "read aloud",
+            "A hotkey and a speaker button read selected text aloud in any app, with natural Kokoro voices on this "
+            "PC's CPU, or Windows' own voices. It runs in the voice typing app, so it comes with voice typing.",
+            requires=("voice_typing",)),
     Feature("recordings", "Recordings in Claude Desktop (Whisper)", "recordings",
             "Claude Desktop transcribes audio files through a local Whisper server. The audio stays here; Claude gets "
             "only the text.", needs_media=True),
@@ -76,7 +81,22 @@ SWITCHES = {
     "tracing": ("observability", "phoenix", True, False),
     "images": ("services", "comfyui", "native", "off"),
     "voice_typing": ("services", "dictation", "native", "off"),
+    "read_aloud": ("read_aloud", "enabled", True, False),
 }
+
+
+def with_requirements(chosen) -> set[str]:
+    """The chosen features plus the ones they run inside (read aloud needs voice typing's app)."""
+    out = set(chosen)
+    for fid in list(out):
+        if fid in BY_ID:
+            out.update(BY_ID[fid].requires)
+    return out
+
+
+def dependents(fid: str) -> list[str]:
+    """Features that need `fid`: unticking it unticks them."""
+    return [f.id for f in FEATURES if fid in f.requires]
 
 
 def switch_on(fid: str, profile: dict) -> bool:
@@ -150,6 +170,7 @@ class Estimate:
     vram_gb: float = 0.0           # GPU memory held while loaded
     vram_busy_gb: float = 0.0      # GPU memory while it works, when more than vram_gb
     cpu_threads: float = 0.0       # logical processors busy while it works
+    cpu_bursts: bool = False       # runs on the CPU by design, in short bursts (read aloud's Kokoro), not as GPU spill
     gpu_short: str = "none"        # GPU work, for a table column
     gpu: str = ""                  # GPU work, in a sentence
     cpu: str = ""                  # CPU load, in a sentence
@@ -431,6 +452,25 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
             basis=(f"Measured on {REFERENCE}: 2.4 GB on disk, 1.1 GB of GPU memory, 125 s of audio in 3.5 s."
                    if measured else f"Estimate for {model}, scaled from large-v3-turbo measured on {REFERENCE}.")
                   + " Memory is an estimate.")
+    if fid == "read_aloud":
+        variant = str((profile.get("read_aloud") or {}).get("kokoro") or "fp32")
+        name, disk, ram = KOKORO.get(variant, KOKORO["fp32"])
+        cached = _kokoro_cached(profile, variant)
+        idle = float((profile.get("read_aloud") or {}).get("unload_after_min") or 0)
+        if not name:
+            return Estimate(disk_gb=0.02, ram_gb=0.05, cpu_threads=0.2, gpu="none", cpu="almost none",
+                            held="only while it reads", basis="Windows' own voices (read_aloud.kokoro: off).",
+                            note="Windows voices make speech almost at once; they sound flatter than Kokoro's.")
+        return Estimate(
+            disk_gb=0.02 + disk, todo_gb=0.02 if cached else None, ram_gb=ram, cpu_threads=hw.threads / 2,
+            cpu_bursts=True,
+            gpu_short="none (CPU)", gpu="none: Kokoro runs on the CPU, about 3x faster than real time",
+            cpu=f"{_cpu(hw.threads / 2, hw)} logical processors while it prepares speech; none while it waits",
+            held="Kokoro loads on its first reading (about 2 s)" + (f" and is freed after {idle:.0f} idle minutes"
+                                                                       if idle else ""),
+            basis=f"Measured on the reference PC's 6-core Ryzen 5 5500: {ram:.1f} GB of RAM with the {name} weights, "
+                  "a short sentence ready in 0.8 s, 17 s of speech in 5 s. Faster or slower CPUs scale it.",
+            note="Windows' own voices (any language with a Windows voice installed) work too, at once.")
     if fid == "openclaw":
         return Estimate(
             disk_gb=0.5, ram_gb=0.3, cpu_threads=0.3,
@@ -440,6 +480,20 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
             note="Needs Node.js 24.22.1+ or 26.12.1+; setup upgrades Node.js with winget if needed (Windows asks "
                  "for admin).")
     raise KeyError(fid)
+
+
+# read_aloud.kokoro: (name, download GB with the voices, RAM GB while loaded and reading), measured on the reference
+# PC (2026-11-08: working set after a sentence, 0.50 GB for fp32 and 0.31 GB for int8). "off" reads with Windows voices.
+KOKORO = {"fp32": ("fp32", 0.35, 0.5), "int8": ("int8", 0.12, 0.3), "off": ("", 0.0, 0.0)}
+
+
+def _kokoro_cached(profile: dict, variant: str) -> bool:
+    try:
+        from . import dictation
+
+        return dictation.kokoro_cached(profile, variant)
+    except Exception:  # noqa: BLE001 - an unreadable cache counts as not downloaded
+        return False
 
 
 # faster-whisper model: (download GB, GPU GB in int8_float16, seconds per 15 s of speech on the reference GPU).
@@ -499,6 +553,11 @@ OPTIONS: dict[str, list[tuple[Option, object]]] = {
     "voice_typing": [
         (Option("dictation", "model", "Whisper model", "large-v3-turbo"), _whisper_choices),
         (Option("dictation", "hotkey", "Hotkey", "ctrl+alt+d"), _hotkey_choices),
+    ],
+    "read_aloud": [
+        (Option("read_aloud", "kokoro", "Voices", "fp32"),
+         lambda _p: [("fp32", "Kokoro (0.35 GB)"), ("int8", "Kokoro, smaller (0.12 GB)"),
+                     ("off", "Windows voices only")]),
     ],
     "recordings": [
         (Option("media", "whisper_model", "Whisper model", "large-v3-turbo"), _whisper_choices),
@@ -670,13 +729,18 @@ def assess(chosen, est: dict[str, Estimate], hw: Hardware, installed=frozenset()
             out.append(Finding("ok", text + " Your other programs need the rest."))
     else:
         out.append(Finding("ok", text + "."))
-    busiest = max(est[i].cpu_threads for i in ids)
+    busiest = max([est[i].cpu_threads for i in ids if not est[i].cpu_bursts] or [0.0])
     if hw.vram_gb > 0 and busiest <= 2:
         out.append(Finding("ok", f"CPU: close to idle between requests; about 1 of {hw.threads} logical processors "
                                  "while a model works on the GPU."))
     else:
         out.append(Finding("warn", f"CPU: models that do not fit the GPU use up to {busiest:.0f} of {hw.threads} logical "
                                    "processors while they work, so the PC is slow for other things meanwhile."))
+    for i in ids:
+        if est[i].cpu_bursts:
+            out.append(Finding("ok", f"CPU: {BY_ID[i].short} uses about {est[i].cpu_threads:.0f} of {hw.threads} "
+                                     "logical processors for a moment per sentence, about a third of the time it "
+                                     "speaks."))
     if hw.smart_app_control and "tracing" in ids and "tracing" not in installed:
         out.append(Finding("warn", "Smart App Control is on: it blocked Phoenix on the reference PC. Leave the trace "
                                    "viewer out unless you need it."))
@@ -785,6 +849,15 @@ def _status_images(profile: dict, **_) -> Status:
     return _switch(False, on, "ComfyUI", "", "ComfyUI (images)")
 
 
+def _status_read_aloud(profile: dict, **_) -> Status:
+    from . import dictation
+    from .dictation.hotkey import label
+
+    key = (profile.get("read_aloud") or {}).get("hotkey") or "ctrl+alt+s"
+    return _switch(dictation.read_aloud_installed(profile), switch_on("read_aloud", profile), "Read aloud",
+                   f"Select text, then press {label(str(key))} or click the speaker button.", "Read aloud")
+
+
 def _status_voice_typing(profile: dict, **_) -> Status:
     from . import dictation
 
@@ -839,7 +912,8 @@ def _status_openclaw(profile: dict, openclaw=None, **_) -> Status:
 
 
 _STATUS = {"models": _status_models, "gateway": _status_gateway, "chat": _status_chat, "tracing": _status_tracing,
-           "images": _status_images, "voice_typing": _status_voice_typing, "recordings": _status_recordings,
+           "images": _status_images, "voice_typing": _status_voice_typing, "read_aloud": _status_read_aloud,
+           "recordings": _status_recordings,
            "openclaw": _status_openclaw}
 
 
@@ -881,6 +955,7 @@ RECOMMENDED = {
     "tracing": lambda hw: not hw.smart_app_control,   # Smart App Control blocked Phoenix on the reference PC
     "images": lambda hw: hw.vram_gb >= 10,            # Z-Image-Turbo int8 peaks at 10.5 GB; smaller cards offload
     "voice_typing": lambda hw: False,                 # holds a hotkey and 1.2 GB of GPU memory: only when asked for
+    "read_aloud": lambda hw: False,                   # another hotkey, and Kokoro's 0.35 GB: only when asked for
     "recordings": lambda hw: False,                   # changes Claude Desktop's config: only when asked for
     "openclaw": lambda hw: True,
 }

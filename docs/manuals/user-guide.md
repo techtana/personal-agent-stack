@@ -395,6 +395,85 @@ Good to know:
   pencil's menu keeps only the hotkey; **Show pencil** on the tray's **Voice typing** row, the tray menu's **Refine
   button (pencil)** item or **Show the refine button** in the mic button's menu brings it back.
 
+## Read aloud
+
+Have the text you selected in any app read to you by a voice on this PC. It is an optional part of the voice typing
+app: tick **Read aloud (Kokoro)** in the installer (the tray's **Add features...**), or run
+
+```
+uv run scripts/stack.py read-aloud install
+```
+
+which adds espeak-ng and comtypes to voice typing's environment, downloads the Kokoro voices (about 0.35 GB into the
+Hugging Face cache) and turns it on (`read_aloud.enabled: true`). Then restart voice typing (Stop and Start on its tray
+row). Ticking read aloud in the installer ticks voice typing too, since it runs in that app. Without it nothing
+changes: no speaker button, no hotkey.
+
+1. Select the text.
+2. Click the speaker button, right of the mic, or press **Ctrl+Alt+S**.
+3. The button turns blue while the first sentence is prepared (under a second; about two the first time, while Kokoro
+   loads), then shows a stop sign while it reads. The bubble shows the sentence being read and a line along the
+   button's bottom edge shows how far it has got.
+
+To stop, press **Ctrl+Alt+S** again, click the button, or press **Esc** (Esc belongs to read aloud only while it reads;
+turn that off with **Esc stops reading** under Show advanced). Right-click the button for **Pause** and **Resume**,
+**Read it again**, the **Voice**, the **Speed** (0.75x to 2x) and **Other languages get their own voice**.
+
+Voices:
+
+- **Kokoro** (Apache-2.0, 82 million parameters) speaks naturally in US and UK English, Spanish, French, Hindi,
+  Italian and Brazilian Portuguese. It runs on the CPU, about three times faster than real time on the reference
+  machine's Ryzen 5 5500, and uses no GPU memory. It holds about 0.5 GB of RAM while loaded and is freed after 30 idle
+  minutes (`read_aloud.unload_after_min`). **Kokoro weights** under Show advanced picks fp32 (326 MB), int8 (92 MB and
+  0.3 GB of RAM, as fast on this CPU) or off.
+- **Windows voices** (David, Zira and Mark on an English Windows; any voice added in Windows Settings > Time & language
+  > Speech) start at once and sound flatter. They cover the languages Kokoro does not.
+
+Choosing a voice in the button's menu (a search list) plays a short sample in it and saves the choice
+(`read_aloud.voice`). With **Other languages get their own voice** on, text that is clearly in another language is
+read by a voice for that language: Kokoro's when it has one, else an installed Windows voice; the bubble says which.
+Thai, Russian, Japanese and other scripts are recognised by their letters; Latin-script languages by common words, so
+a short phrase keeps your chosen voice. Pick per-language voices in the machine file:
+
+```yaml
+read_aloud:
+  voices: {fr: ff_siwis, de: 'windows:Microsoft Katja'}
+```
+
+`uv run scripts/stack.py read-aloud voices` lists every voice id; `read-aloud speak "Some text" --voice bf_emma` says
+it (or writes a WAV with `--out file.wav`), with the time each piece took.
+
+How it works, all on this PC:
+
+1. It presses Ctrl+C in the app to read the selection, then puts back what was on your clipboard, as refine does.
+   Pictures and tables in the selection are fine: only the text is read.
+2. The text is cleaned for listening: Markdown and Logseq markup (`**bold**`, `[[page links]]`, `#tags`,
+   `key:: value` properties, block references) is dropped, a link is read as its site's name, and every list item or
+   heading gets a short pause.
+3. It is cut into pieces of a sentence or a few. The first piece is one sentence, so the voice starts quickly; the
+   next ones are prepared while it speaks, at most 8 seconds of speech ahead.
+4. Nothing is saved: the text stays in memory for **Read it again** until the app quits. The tray's Usage tab counts
+   each reading (seconds of speech, the voice, the time it took to make), never the words.
+
+Good to know:
+
+- **Not installed or half installed.** With read aloud on but its packages missing, the button says so and how to
+  add it. If Kokoro's weights are missing or Kokoro fails to load, a Windows voice of the same language reads instead
+  and the bubble says why. Reading never starts a download.
+- **Voice typing first.** Starting to dictate stops a reading, so the microphone does not hear the voice. Read aloud
+  waits while you dictate.
+- **Refused on purpose,** as for refine: terminals (Ctrl+C there could stop the running program) and apps running as
+  administrator.
+- **Ctrl+Alt+S** splits the window in Word and opens Settings in JetBrains IDEs; while voice typing runs, it reads
+  instead. Choose another **Read aloud hotkey** in the tray's Settings tab (restarts voice typing).
+- **Limits.** Up to 20,000 characters at a time (`read_aloud.max_chars`); a longer selection is cut at a sentence and
+  the bubble says so.
+- **Settings.** The tray's Settings tab has a **Read aloud** group: on or off, hotkey, voice, speed and the
+  per-language switch; Show advanced has Esc and the Kokoro weights. Every setting is under `read_aloud:` in
+  `machines/_defaults.yaml`. **Hide this button** in the speaker's menu keeps only the hotkey; **Show speaker** on the
+  tray's **Voice typing** row, the tray menu's **Read aloud button (speaker)** item or **Show the read aloud button**
+  in the mic button's menu brings it back.
+
 ## Working with the departments
 
 There are six department agents: `app-dev`, `testing`, `security`, `devops`, `code-review` and `docs`.

@@ -46,6 +46,7 @@ class Source:
 # Programs that run models outside the gateway; each writes usage records under traces/usage/<source>/.
 SOURCES: dict[str, Source] = {
     "voice-typing": Source("Voice typing", ("transcription",), "scripts/stacklib/dictation/engine.py"),
+    "read-aloud": Source("Read aloud", ("speech",), "scripts/stacklib/dictation/tts.py"),
     "recordings": Source("Recordings", ("transcription",),
                          "scripts/whisper_mcp.py, the local-whisper MCP server Claude Desktop starts"),
     "comfyui": Source("ComfyUI", ("image",), "scripts/stacklib/comfy_usage.py, from ComfyUI's job history"),
@@ -75,7 +76,8 @@ SERVICE_MODELS: dict[str, str | None] = {
     "kokoro": "text to speech, in UNCOUNTED until it records its calls",
     "dictation": "Whisper calls (source voice-typing): its own, and Open WebUI's microphone through "
                  "/v1/audio/transcriptions (client Open WebUI); the text clean-up through the gateway "
-                 "(agent-stack-voice-typing); refining selected text through the gateway (agent-stack-refine)",
+                 "(agent-stack-voice-typing); refining selected text through the gateway (agent-stack-refine); "
+                 "reading selected text aloud with Kokoro or a Windows voice on this PC (source read-aloud)",
 }
 
 

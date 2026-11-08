@@ -1,6 +1,7 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-08 (voice typing history kept for dictation.keep_minutes; open item 35). Before that, the same day (the installer makes an app apart from the repository; open item 32). Before that, the same day (the installer asks which features to install, with their load on this PC, and the tray's Features card; open item 30). Before that, 2026-11-08 (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+Updated: 2026-11-08 (read aloud of selected text, an optional part of voice typing; open item 36). Before that,
+the same day (voice typing history kept for dictation.keep_minutes; open item 35). Before that, the same day (the installer makes an app apart from the repository; open item 32). Before that, the same day (the installer asks which features to install, with their load on this PC, and the tray's Features card; open item 30). Before that, 2026-11-08 (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
@@ -581,6 +582,27 @@ once across a session restart.
    Verified: unit tests (tests/test_voice_history.py, the hidden window included); `_remember`, `copy_last` and the
    prune run in the voice typing venv against a stub app. Not verified: the live app, a real dictation, the window's
    look. The live app runs the new code only after a restart from the main checkout (or the installed app).
+36. Read aloud (2026-11-08, branch claude/read-aloud-highlighted-text-57ce4d; design
+   docs/design/plans/2026-11-08-read-aloud.md). An optional part of the voice typing app: a speaker button right of
+   the mic (bar order pencil, mic, speaker, as the owner asked), Ctrl+Alt+S, Esc while it reads, a right-click menu
+   (pause, read it again, voice picker with a sample, speed, voice per language), a tray Settings group "Read aloud"
+   and Show/Hide speaker. `read_aloud.enabled` is off by default; the installer's feature **Read aloud (Kokoro)**
+   (requires voice typing) or `stack.py read-aloud install` adds espeakng-loader 0.2.4 and comtypes 1.4.17 to voice
+   typing's environment and downloads Kokoro-82M ONNX (pinned revision 1939ad2a) into HF_HOME.
+   - Voices: Kokoro on the CPU (fp32 default; int8 as fast, 0.3 GB instead of 0.5 GB of RAM) and Windows' SAPI and
+     OneCore voices (here only English: David, Zira, Mark). Usage records: source read-aloud, kind speech.
+   - Measured: Kokoro 3-3.5x real time on 6 threads, load 1.2-2.3 s; first speech 2.1 s cold in a test copy of the
+     app. Whisper heard the output back word for word.
+   - Already on this PC from the spike: Kokoro fp32, fp16 and int8 weights and four voices in D:\huggingface (about
+     0.6 GB); the install step fetches the rest of the voices.
+   - Verified: unit tests (58 in tests/test_read_aloud.py, one in the installer window tests; 573 in total); a test copy of
+     the app on port 8797 writing WAV files (bubble, states, pause, resume, stop, voice sample, hide and show, usage
+     records); the WinMM player with silence.
+   - Not verified: sound through the speakers; read aloud installed into C:\media\dictation and the live tray (not
+     run: it changes the live environment); a real selection read with the button or hotkey; Kokoro's other languages
+     by ear.
+   - After merging: rerun install.cmd from the main checkout and tick Read aloud (or `uv run scripts/stack.py
+     read-aloud install`), then Stop and Start the Voice typing row; the tray shows its new group after a restart.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

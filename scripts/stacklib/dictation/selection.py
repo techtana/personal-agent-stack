@@ -91,17 +91,22 @@ def line_copy(data: dict) -> bool:
     return '"isFromEmptySelection":true' in (data.get("custom") or "").replace(" ", "")
 
 
-def capture(ws, clip, target: int, *, elevated: bool, copy_wait: float = 2.0) -> Selection:
-    """The text selected in `target`, read with Ctrl+C; your clipboard is put back right after. Raises SelectionError."""
+PURPOSES = {"refine": ("Refine", "refined"), "read": ("Read aloud", "read aloud")}
+
+
+def capture(ws, clip, target: int, *, elevated: bool, copy_wait: float = 2.0, purpose: str = "refine") -> Selection:
+    """The text selected in `target`, read with Ctrl+C; your clipboard is put back right after. Raises SelectionError.
+    purpose "read" (read aloud) also takes a selection with pictures or tables in it: only its text is used."""
+    what, done = PURPOSES.get(purpose, PURPOSES["refine"])
     if not target:
-        raise SelectionError("No app window to read from", "Click into the text you want to refine first.")
+        raise SelectionError("No app window to read from", f"Click into the text you want {done} first.")
     if not ws.wait_modifiers_released(2.0):
         raise SelectionError("Keys are still held down", "Let go of Ctrl, Alt and Shift, then try again.")
     _front(ws, target)
     pid = ws.window_pid(target)
     app = ws.process_name(pid)
     if app in TERMINALS:
-        raise SelectionError("Refine does not work in a terminal", "Ctrl+C there could stop the program that runs in it.")
+        raise SelectionError(f"{what} does not work in a terminal", "Ctrl+C there could stop the program that runs in it.")
     if not elevated and ws.is_elevated(pid) is not False:
         raise SelectionError(f"{app or 'That window'} may run as administrator",
                              "Windows blocks simulated keys there, so its selection cannot be read.")
@@ -111,7 +116,7 @@ def capture(ws, clip, target: int, *, elevated: bool, copy_wait: float = 2.0) ->
         raise SelectionError("The clipboard is in use by another program", "Try again in a moment.") from None
     if snap is None:
         raise SelectionError("The clipboard holds more than 64 MB",
-                             "Copy something small first, so refine does not lose what is on it.")
+                             f"Copy something small first, so {what.lower()} does not lose what is on it.")
     before = ws.sequence()
     if not ws.send_copy(ctrl_insert=app in COPY_WITH_CTRL_INSERT):
         raise SelectionError("Windows refused the simulated keys", "Try again, or copy and paste the text yourself.")
@@ -127,8 +132,8 @@ def capture(ws, clip, target: int, *, elevated: bool, copy_wait: float = 2.0) ->
         raise SelectionError("Nothing selected", "This editor copied the whole line. " + NOTHING_SELECTED)
     text = data.get("text") or ""
     if not text.strip():
-        raise SelectionError("The selection has no text", "Pictures and other objects cannot be refined.")
-    if OBJECTS.search(fragment(data.get("html") or "")):
+        raise SelectionError("The selection has no text", f"Pictures and other objects cannot be {done}.")
+    if purpose != "read" and OBJECTS.search(fragment(data.get("html") or "")):
         raise SelectionError("The selection includes a picture or a table",
                              "Refine would replace it with plain text. Select text only.")
     return Selection(text, target, app, ws.window_title(target))

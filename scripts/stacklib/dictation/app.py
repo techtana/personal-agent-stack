@@ -1,12 +1,14 @@
 """The voice typing app: hotkey or button -> microphone -> VAD -> Whisper -> optional cleanup -> the focused window.
 It also refines selected text: the refine button or its hotkey -> Ctrl+C -> the gateway's local model -> Ctrl+V over
 the selection, with every suggestion kept in the refine log (refiner.py). What you dictate is kept in the voice
-typing history (voicelog.py) for dictation.keep_minutes.
+typing history (voicelog.py) for dictation.keep_minutes. And it reads selected text aloud: the speaker button or its
+hotkey -> Ctrl+C -> Kokoro or a Windows voice on this PC -> the speakers (reader.py).
 
 Threads: Tk main loop (buttons, bubble, history window); hotkeys (Win32 message loop); microphone (WinMM) which also
 runs the VAD and the segmenter on each 32 ms frame; control (start, stop, cancel, in order); worker (Whisper and the
 cleanup, one job at a time); inserter (clipboard and keystrokes, in order); a refine job's own thread while it waits
-for the model; the local HTTP control endpoint.
+for the model; a reading's own thread, which prepares the speech, and its player thread (WinMM); the local HTTP
+control endpoint.
 
 One pipeline serves both modes. Each phrase is transcribed as soon as you pause, with the text so far as Whisper's
 prompt. Live mode types each phrase right away; polish mode joins them when you stop and asks the gateway's local model
@@ -25,15 +27,18 @@ import numpy as np
 
 from .. import env_value
 from .. import profile as prof
-from . import (Config, cleanup, control, ensure_refine_section, hotkey, read_state, refine, save_setting, state_dir,
-               transcriptions, write_state)
+from . import (Config, cleanup, control, ensure_refine_section, hotkey, read_state, refine, save_setting, speak,
+               state_dir, transcriptions, write_state)
 from . import api_key as transcription_key
+from . import player as playback
 from .audio import RATE, Recorder, RecorderError
 from .engine import Engine
+from .reader import Reader
 from .refinelog import LOG_NAME, RefineLog
 from .refiner import Refiner
 from .segment import FRAME, Event, Segmenter
 from .textops import joiner, strip_fillers
+from .tts import Speech
 from .voicelog import VOICE_LOG_NAME, VoiceLog
 from .vad import level, make_vad
 
@@ -234,6 +239,10 @@ class App:
         self.refine_log = RefineLog(state_dir(profile) / LOG_NAME, keep_minutes=self.rcfg.keep_minutes)
         self._esc_refine = False
         self._esc_lock = threading.Lock()
+        self.scfg = speak.Config.from_profile(profile, warn=lambda m: log(f"[read] {m}"))
+        self.read_hotkey_error = ""
+        self._esc_read = False
+        self.speech = Speech(log)
         # Raises when another copy runs. Also serves Open WebUI's microphone (transcriptions.py) on the same Whisper,
         # for callers with DICTATION_BEARER, looked up on each request so a key added to .env later works at once.
         self.server = control.ControlServer(
@@ -243,13 +252,18 @@ class App:
         pos = (int(state["x"]), int(state["y"])) if "x" in state and "y" in state else None
         winsys.set_dpi_aware()
         self.overlay = Overlay(self, self.cfg.button, pos, show_refine=self.rcfg.button,
-                               saved_width=int(state.get("w") or 0))
+                               saved_width=int(state.get("w") or 0), show_read=self.scfg.enabled and self.scfg.button)
         self.inserter = Inserter(self.overlay.windows)
         self.hotkeys = winsys.HotkeyThread(self._on_hotkey)
         self.refiner = Refiner(call=self.inserter.call, target=self._target, ui=RefineUI(self), cfg=self._refine_cfg,
                                refine_fn=self._refine_fn, log=self.refine_log, esc=self._refine_esc,
                                elevated=winsys.self_elevated(), ours=self._ours, busy_elsewhere=self._dictating,
                                logline=log)
+        self.reader = Reader(call=self.inserter.call, target=self._target, ui=ReadUI(self), cfg=self._read_cfg,
+                             voices=self.speech.voices, synth=self.speech.synth, ready=self.speech.ready,
+                             player=playback.make, esc=self._read_esc, busy_elsewhere=self._dictating,
+                             record=self.speech.record, logline=log, elevated=winsys.self_elevated(),
+                             hotkey_text=self.read_hotkey_text, missing=self.speech.missing)
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -263,10 +277,16 @@ class App:
         threading.Thread(target=self._track_focus, name="dictation-focus", daemon=True).start()
         threading.Thread(target=self._prune_logs, name="dictation-prune", daemon=True).start()
         self.engine.load_async()
+        reading = f"{self.read_hotkey_text() or 'button only'} ({self.scfg.voice})" if self.scfg.enabled else "off"
+        missing = self.speech.missing(self.scfg) if self.scfg.enabled else ""
         log(f"[dictation] ready: hotkey {self.hotkey_text()}, mode {self.cfg.mode}, cleanup {self.cfg.style} "
             f"({self.prompt_kind()} prompt), VAD {self.vad.name}, refine {self.refine_hotkey_text()} "
-            f"({self.rcfg.default} via {self.rcfg.model}), style menu {self.menu_hotkey_text() or 'off'}, control http://127.0.0.1:{self.port}")
-        problems = [p for p in (self.hotkey_error, self.refine_hotkey_error, self.menu_hotkey_error) if p]
+            f"({self.rcfg.default} via {self.rcfg.model}), style menu {self.menu_hotkey_text() or 'off'}, "
+            f"read aloud {reading}, control http://127.0.0.1:{self.port}")
+        if missing:
+            log(f"[read] {missing}")
+        problems = [p for p in (self.hotkey_error, self.refine_hotkey_error, self.menu_hotkey_error,
+                                self.read_hotkey_error) if p]
         if problems:
             self.ui(lambda: self.overlay.set_state("error", "Hotkey not available", " ".join(problems),
                                                    "Pick another one in the tray's Settings tab; the buttons still work.",
@@ -310,13 +330,15 @@ class App:
                 self.hotkey_error = f"{self.hotkey_text()} is taken by another program ({err})."
                 log(f"[dictation] {self.hotkey_error}")
         taken = {"the voice typing hotkey": dictate} if dictate else {}
-        # refine.hotkey / refine.menu_hotkey: '' (or off) leaves the pencil button and its menu only.
+        # refine.hotkey / refine.menu_hotkey / read_aloud.hotkey: '' (or off) leaves the buttons and their menus only.
         self.refine_hotkey_error = self._register_extra("refine", self.rcfg.hotkey, "Refine", taken)
         self.menu_hotkey_error = self._register_extra("refine_menu", self.rcfg.menu_hotkey, "Refine style menu", taken)
+        if self.scfg.enabled:   # an optional feature: off, it takes no hotkey and shows no button
+            self.read_hotkey_error = self._register_extra("read", self.scfg.hotkey, "Read aloud", taken)
 
     def _register_extra(self, name: str, key: str, what: str, taken: dict) -> str:
-        """Register one of the refine hotkeys; '' when it worked or is off, else what went wrong. A key registered
-        here joins `taken`, so two settings naming the same key report it instead of failing silently."""
+        """Register one of the refine or read aloud hotkeys; '' when it worked or is off, else what went wrong. A key
+        registered here joins `taken`, so two settings naming the same key report it instead of failing silently."""
         if hotkey.is_off(key):
             return ""
         try:
@@ -330,7 +352,7 @@ class App:
         ok, err = self.hotkeys.register(name, *combo)
         if not ok:
             problem = f"{what}: {text} is taken by another program ({err})."
-            log(f"[refine] {problem}")
+            log(f"[dictation] {problem}")
             return problem
         taken[f"the {what.lower()} hotkey"] = combo
         return ""
@@ -347,6 +369,11 @@ class App:
         """'Ctrl+Alt+Shift+R', or '' when refine.menu_hotkey is empty or off."""
         key = (self.rcfg.menu_hotkey or "").strip()
         return "" if hotkey.is_off(key) else hotkey.label(key)
+
+    def read_hotkey_text(self) -> str:
+        """'Ctrl+Alt+S', or '' when read_aloud.hotkey is empty or off (or did not register)."""
+        key = (self.scfg.hotkey or "").strip()
+        return "" if not self.scfg.enabled or hotkey.is_off(key) or self.read_hotkey_error else hotkey.label(key)
 
     def summary(self) -> str:
         mode = "types when you finish, cleaned up" if self.cfg.mode == "polish" else "types as you speak"
@@ -368,6 +395,11 @@ class App:
                            "busy": self.refiner.busy, "log": str(self.refine_log.path),
                            "keep_minutes": self.rcfg.keep_minutes},
                 "history": {"log": str(self.voice_log.path), "keep_minutes": self.cfg.keep_minutes},
+                "read_aloud": {"enabled": self.scfg.enabled, "hotkey": self.scfg.hotkey,
+                               "hotkey_ok": not self.read_hotkey_error,
+                               "button": bool(self.scfg.button), "voice": self.scfg.voice, "speed": self.scfg.speed,
+                               "busy": self.reader.busy, "paused": self.reader.paused,
+                               "unload_after_min": self.scfg.unload_after_min, **self.speech.health()},
                 "transcriptions": bool(transcription_key()),  # Open WebUI's microphone needs DICTATION_BEARER
                 "pid": os.getpid()}
 
@@ -392,6 +424,19 @@ class App:
             return {"ok": self.refiner.start("", "http"), "state": self.state}
         elif name == "revert":
             return {"ok": self.refiner.revert("", "http"), "state": self.state}
+        elif name in ("show_read", "hide_read", "read", "read_stop", "read_pause") and not self.scfg.enabled:
+            return {"ok": False, "error": "read aloud is off (read_aloud.enabled); `stack.py read-aloud install` adds it",
+                    "state": self.state}
+        elif name in ("show_read", "hide_read"):
+            visible = name == "show_read"
+            self.scfg.button = visible
+            self.ui(lambda: self.set_read_option("button", visible))
+        elif name == "read":
+            return {"ok": self.reader.toggle("http"), "state": self.state}
+        elif name == "read_stop":
+            return {"ok": self.reader.stop(), "state": self.state}
+        elif name == "read_pause":
+            return {"ok": self.read_pause_toggle(), "state": self.state}
         elif name == "quit":
             self.quit()
         elif name == "reload":
@@ -449,6 +494,11 @@ class App:
             return
         if name == "refine_menu":
             self._style_menu_at_caret()
+            return
+        if name in ("read", "read_stop"):
+            # Off this thread: stopping releases Esc, which waits for this (the hotkey) thread to answer.
+            fn = (lambda: self.reader.toggle("hotkey")) if name == "read" else self.reader.stop
+            threading.Thread(target=fn, name="read-aloud-key", daemon=True).start()
             return
         if self.refiner.busy:
             self.toggle("hotkey")  # says it is still refining
@@ -547,6 +597,8 @@ class App:
             return
         if self.refiner.busy:
             return
+        if self.reader.busy:
+            self.reader.stop()   # the microphone would hear the voice
         target = self._target()
         app = self.ws.process_name(self.ws.window_pid(target)) if target else ""
         cfg = self.cfg
@@ -669,6 +721,8 @@ class App:
                 job = self.jobs.get(timeout=30)
             except queue.Empty:
                 self.engine.unload_if_idle()
+                if not self.reader.busy:
+                    self.speech.unload_if_idle(self.scfg.unload_after_min)
                 continue
             kind, s = job[0], job[1]
             try:
@@ -984,6 +1038,141 @@ class App:
         text = str((last or {}).get("before" if raw else "after") or "")
         if text:
             self.inserter.submit(InsertJob(text, "copy", 0))
+
+    # ---------------------------------------------------------------- read selected text aloud
+
+    def _read_cfg(self, quiet: bool = False) -> speak.Config:
+        """The read aloud settings as the machine file has them now, so a voice or speed chosen in the tray applies to
+        the next reading without a restart. The hotkey stays the one registered at start."""
+        try:
+            fresh = speak.Config.from_profile(prof.resolve_profile(self.profile.get("name")))
+        except Exception as e:  # noqa: BLE001 - a typo in the YAML must not break the button
+            if not quiet:
+                log(f"[read] could not read the machine profile ({e}); using the settings from start-up")
+            return self.scfg
+        fresh.hotkey = self.scfg.hotkey
+        self.scfg = fresh
+        return fresh
+
+    def _read_esc(self, on: bool) -> None:
+        """Esc stops a reading while it reads (read_aloud.esc_stops). Never call this on the hotkey thread."""
+        with self._esc_lock:
+            if on == self._esc_read:
+                return
+            self._esc_read = on
+            if on:
+                ok, err = self.hotkeys.register("read_stop", 0, hotkey.VK_ESCAPE)
+                if not ok:   # refine holds Esc for a moment, say; the hotkey and the button still stop it
+                    log(f"[read] Esc not available while reading ({err})")
+            else:
+                self.hotkeys.unregister("read_stop")
+
+    def _run_off_ui(self, fn, *args) -> None:
+        """Reader calls that may wait for the hotkey thread (Esc) run on a thread of their own, never on Tk's."""
+        threading.Thread(target=fn, args=args, name="read-aloud-action", daemon=True).start()
+
+    def read_click(self) -> None:
+        self._run_off_ui(self.reader.toggle, "button")
+
+    def read_selection(self) -> None:
+        self._run_off_ui(self.reader.start, "menu")
+
+    def read_stop(self) -> None:
+        self._run_off_ui(self.reader.stop)
+
+    def read_again(self) -> None:
+        self._run_off_ui(self.reader.again, "menu")
+
+    def read_pause_toggle(self) -> bool:
+        return self.reader.resume() if self.reader.paused else self.reader.pause()
+
+    def read_enabled(self) -> bool:
+        return self.scfg.enabled
+
+    def read_voice_id(self) -> str:
+        return self.scfg.voice
+
+    def read_voices(self) -> list[tuple[str, str]]:
+        """(id, label) of the voices available now, for the voice picker."""
+        return [(v.id, v.label) for v in self.speech.voices(self._read_cfg())]
+
+    def _voice(self, cfg: speak.Config | None = None) -> speak.Voice | None:
+        cfg = cfg or self.scfg
+        return speak.find_voice(cfg.voice, self.speech.voices(cfg)) or speak.kokoro_voice(cfg.voice)
+
+    def read_summary(self) -> str:
+        cfg = self._read_cfg()
+        voice = self._voice(cfg)
+        name = voice.label if voice else cfg.voice
+        return f"Reads the selection with {name} at {speak.speed_text(cfg.speed)}, on this PC."
+
+    def read_menu_state(self) -> dict:
+        cfg = self._read_cfg()
+        voice = self._voice(cfg)
+        job = self.reader.job
+        return {"busy": self.reader.busy, "playing": bool(job and job.player is not None),
+                "paused": self.reader.paused, "has_last": bool(self.reader.last_text), "can_start": self.state == "idle",
+                "voice": voice.label if voice else cfg.voice, "speed": cfg.speed, "auto_language": cfg.auto_language}
+
+    def set_read_option(self, key: str, value) -> None:
+        """A choice from the speaker button's menu (or the tray's show and hide): applied now and saved in the machine
+        file's `read_aloud:` section, so it survives a restart and shows in the tray's Settings tab."""
+        setattr(self.scfg, key, value)
+        if key == "button":
+            self.overlay.set_read_visible(bool(value))
+            if not value:
+                note = f"{self.read_hotkey_text()} still reads the selection. " if self.read_hotkey_text() else ""
+                self.overlay.show_bubble("Read aloud button hidden", "", note + "Show it again from the tray (Show "
+                                         "speaker) or the mic button's menu.", owner="idle", source="read")
+                self.overlay._schedule_hide(5, "read")
+        elif key == "voice":
+            voice = self._voice()
+            if voice is not None and not self.reader.busy:
+                self.reader.sample(voice.id, voice.name)   # hear it at once
+        elif key in ("speed", "auto_language"):
+            text = (f"Speed {speak.speed_text(float(value))}" if key == "speed" else
+                    "Other languages get their own voice" if value else "One voice for every language")
+            self.overlay.show_bubble(text, "", "The next reading uses it.", owner="idle", source="read")
+            self.overlay._schedule_hide(3, "read")
+        try:
+            save_setting(self.profile, key, value, section="read_aloud")
+        except Exception as e:  # noqa: BLE001 - the change still applies until the app restarts
+            log(f"[read] could not save read_aloud.{key}: {e}")
+
+
+class ReadUI:
+    """The speaker button's states and bubble, for Reader (which runs on its own threads)."""
+
+    def __init__(self, app: App) -> None:
+        self.app = app
+
+    def _set(self, state: str, title: str, body: str, hint: str, hide_after: float = 0.0) -> None:
+        self.app.ui(lambda: self.app.overlay.set_state(state, title, body, hint, hide_after=hide_after, which="read"))
+
+    def working(self, title: str, body: str = "", hint: str = "") -> None:
+        self._set("working", title, body, hint)
+
+    def speaking(self, title: str, body: str = "", hint: str = "") -> None:
+        self._set("speaking", title, body, hint)
+
+    def paused(self, title: str, body: str = "", hint: str = "") -> None:
+        self._set("paused", title, body, hint)
+
+    def done(self, title: str, body: str = "", hint: str = "") -> None:
+        self._set("done", title, body, hint, hide_after=5)
+
+    def error(self, title: str, body: str = "", hint: str = "") -> None:
+        self._set("error", title, body, hint, hide_after=10)
+
+    def cancelled(self, title: str, body: str = "", hint: str = "") -> None:
+        self._set("idle", title, body, hint, hide_after=2)
+
+    def note(self, title: str, body: str = "", hint: str = "") -> None:
+        self.app.ui(lambda: self.app.overlay.show_bubble(title, body, hint, ink="#8cc8ff", owner="note",
+                                                         source="read"))
+
+    def progress(self, fraction: float | None) -> None:
+        self.app.ui(lambda: self.app.overlay.set_progress(fraction))
 
 
 class RefineUI:

@@ -1,11 +1,14 @@
-"""The floating buttons and their bubble (Tk): the mic for voice typing and, beside it, the refine button for selected
-text. Neither window ever takes the focus, so the caret and the selection stay in the app you work in.
+"""The floating buttons and their bubble (Tk): the mic for voice typing and, beside it, the refine button and the read
+aloud button for selected text. No window here ever takes the focus, so the caret and the selection stay in the app
+you work in.
 
-Button states: idle (grey), listening (red, mic only, with a level bar), working (blue, with a spinner), done (green
-check), error (red "!"). The bubble above the buttons shows what is happening: the words as Whisper hears them, the
-text that was typed, or the refined text. Left click: start (dictate, or refine the selection). Drag either button:
-move both (the position is remembered). Right click: options (the menu closes half a second after the pointer leaves
-it and the buttons). All Tk calls happen on the main thread; other threads hand work over with post().
+Button states: idle (grey), listening (red, mic only, with a level bar), working (blue, with a spinner), speaking
+(blue with a stop sign and a progress line, read aloud only), paused (grey with a play sign), done (green check),
+error (red "!"). The bubble above the buttons shows what is happening: the words as Whisper hears them, the text that
+was typed, the refined text, or the sentence being read. Left click: start (dictate, refine or read the selection;
+while it reads, stop). Drag any button: move them all (the position is remembered). Right click: options (the menu
+closes half a second after the pointer leaves it and the buttons). All Tk calls happen on the main thread; other
+threads hand work over with post().
 """
 from __future__ import annotations
 
@@ -17,24 +20,32 @@ from typing import Callable
 
 from .cleanup import STYLE_NAMES
 from .models import language_name, languages_for, search
+from .speak import SPEEDS, speed_text
 
 IS_WINDOWS = os.name == "nt"
 FONT = "Segoe UI" if IS_WINDOWS else "TkDefaultFont"
 # Dark surfaces read on any wallpaper or app. Text colours pass 4.5:1 on BG (WCAG AA); white passes on every state fill.
 BG, BORDER, FG, MUTED = "#1f1f1f", "#3d3d3d", "#f3f3f3", "#b4b4b4"
-STATE_FILL = {"idle": "#2d2d2d", "listening": "#c42b1c", "working": "#0f6cbd", "done": "#107c10", "error": "#c42b1c"}
-STATE_INK = {"idle": FG, "listening": "#ff9a8f", "working": "#8cc8ff", "done": "#7fd67f", "error": "#ff9a8f"}
-# Segoe Fluent Icons / MDL2 Assets code points: Microphone, Edit (pencil), CheckMark, Warning.
-GLYPHS = {"mic": "\ue720", "pen": "\ue70f", "check": "\ue73e", "error": "\ue783"}
-FALLBACK_GLYPHS = {"mic": "●", "pen": "✎", "check": "✓", "error": "!"}
-BUTTONS = ("refine", "mic")   # left to right
+STATE_FILL = {"idle": "#2d2d2d", "listening": "#c42b1c", "working": "#0f6cbd", "done": "#107c10", "error": "#c42b1c",
+              "speaking": "#0f6cbd", "paused": "#2d2d2d"}
+STATE_INK = {"idle": FG, "listening": "#ff9a8f", "working": "#8cc8ff", "done": "#7fd67f", "error": "#ff9a8f",
+             "speaking": "#8cc8ff", "paused": FG}
+# Segoe Fluent Icons / MDL2 Assets code points: Microphone, Edit (pencil), Volume (speaker), Stop, Play, CheckMark,
+# Warning.
+GLYPHS = {"mic": "\ue720", "pen": "\ue70f", "speaker": "\ue767",
+          "stop": "\ue71a", "play": "\ue768", "check": "\ue73e", "error": "\ue783"}
+FALLBACK_GLYPHS = {"mic": "\u25cf", "pen": "\u270e", "speaker": "\u266a", "stop": "\u25a0", "play": "\u25b6",
+                   "check": "\u2713", "error": "!"}
+BUTTONS = ("refine", "mic", "read")   # left to right
+IDLE_GLYPH = {"mic": "mic", "refine": "pen", "read": "speaker"}
+STATE_GLYPH = {"done": "check", "error": "error", "speaking": "stop", "paused": "play"}
 MENU_POLL_MS = 100    # how often the open right-click menu checks the pointer
 MENU_LEAVE_MS = 500   # the menu closes after the pointer has been off it (and off the buttons) this long
 
 
 class Overlay:
     def __init__(self, app, show_button: bool, position: tuple[int, int] | None, show_refine: bool = False,
-                 saved_width: int = 0) -> None:
+                 saved_width: int = 0, show_read: bool = False) -> None:
         self.app = app
         self.q: queue.Queue = queue.Queue()
         self.root = tk.Tk()
@@ -45,16 +56,16 @@ class Overlay:
         self.gap = max(2, int(4 * self.scale))
         families = set(tkfont.families(self.root))
         self.icon_font = next((f for f in ("Segoe Fluent Icons", "Segoe MDL2 Assets") if f in families), None)
-        self.states = {"mic": "idle", "refine": "idle"}
-        self.visible = {"mic": bool(show_button), "refine": bool(show_refine)}
-        self.hide_jobs: dict[str, str | None] = {"mic": None, "refine": None}
+        self.states = {w: "idle" for w in BUTTONS}
+        self.visible = {"mic": bool(show_button), "refine": bool(show_refine), "read": bool(show_read)}
+        self.hide_jobs: dict[str, str | None] = {w: None for w in BUTTONS}
         self.level = 0.0
         self.spin = 0
         self.hover_job: str | None = None
         self.drag: tuple[int, int, int, int] | None = None
         self.dragged = False
         self.bubble_owner = ""   # "hover" while the hover hint is up, else the state that opened it
-        self.bubble_from = ""    # which button the bubble speaks for: mic | refine
+        self.bubble_from = ""    # which button the bubble speaks for: mic | refine | read
         self.menu_open: tk.Menu | None = None
 
         self.root.overrideredirect(True)
@@ -70,19 +81,22 @@ class Overlay:
             c = tk.Canvas(self.bar, width=self.size, height=self.size, bg=STATE_FILL["idle"], highlightthickness=0,
                           bd=0, cursor="hand2")
             self.canvases[which] = c
-            idle = "pen" if which == "refine" else "mic"
-            self.glyphs[which] = c.create_text(self.size / 2, self.size / 2 - self.scale, text=self._g(idle), fill=FG,
-                                               font=self._icon(15 if which == "refine" else 16))
+            self.glyphs[which] = c.create_text(self.size / 2, self.size / 2 - self.scale,
+                                               text=self._g(IDLE_GLYPH[which]), fill=FG,
+                                               font=self._icon(16 if which == "mic" else 15))
             self.arcs[which] = c.create_arc(pad, pad, self.size - pad, self.size - pad, start=0, extent=0,
                                             style="arc", outline="#ffffff", width=max(2, int(2 * self.scale)))
+            menu = {"mic": self._menu, "refine": self._refine_menu, "read": self._read_menu}[which]
             for seq, fn in (("<ButtonPress-1>", self._press), ("<B1-Motion>", self._motion),
-                            ("<ButtonRelease-1>", lambda e, w=which: self._release(e, w)),
-                            ("<Button-3>", self._menu if which == "mic" else self._refine_menu),
+                            ("<ButtonRelease-1>", lambda e, w=which: self._release(e, w)), ("<Button-3>", menu),
                             ("<Enter>", lambda e, w=which: self._enter(w)), ("<Leave>", lambda e, w=which: self._leave(w))):
                 c.bind(seq, fn)
         self.canvas = self.canvases["mic"]
         bar_h = max(2, int(3 * self.scale))
         self.level_bar = self.canvas.create_rectangle(0, self.size - bar_h, 0, self.size, fill="#ffffff", width=0)
+        # How far read aloud has got through the text: a line along the speaker button's bottom edge.
+        self.progress_bar = self.canvases["read"].create_rectangle(0, self.size - bar_h, 0, self.size,
+                                                                   fill="#ffffff", width=0)
 
         self.bubble = tk.Toplevel(self.root)
         self.bubble.withdraw()
@@ -189,7 +203,7 @@ class Overlay:
 
     def _layout(self, keep_right: bool = True, show: bool = True) -> None:
         """Show the visible buttons side by side; with keep_right the bar keeps its right edge on the right half of
-        the screen (where it starts), so the mic does not jump when the refine button comes or goes."""
+        the screen (where it starts), so the buttons stay near the screen's edge when one comes or goes."""
         old_w, x, y = self.root.winfo_width(), self.root.winfo_x(), self.root.winfo_y()
         for c in self.canvases.values():
             c.pack_forget()
@@ -225,6 +239,10 @@ class Overlay:
         self.visible["refine"] = bool(visible)
         self._layout()
 
+    def set_read_visible(self, visible: bool) -> None:
+        self.visible["read"] = bool(visible)
+        self._layout()
+
     # ---------------------------------------------------------------- state (call through post())
 
     def set_state(self, state: str, title: str = "", body: str = "", hint: str = "", hide_after: float = 0.0,
@@ -232,11 +250,12 @@ class Overlay:
         self.states[which] = state
         c = self.canvases[which]
         c.configure(bg=STATE_FILL.get(state, STATE_FILL["idle"]))
-        idle = "pen" if which == "refine" else "mic"
-        c.itemconfigure(self.glyphs[which], text=self._g({"done": "check", "error": "error"}.get(state, idle)))
+        c.itemconfigure(self.glyphs[which], text=self._g(STATE_GLYPH.get(state, IDLE_GLYPH[which])))
         if which == "mic" and state != "listening":
             self.level = 0.0
             self.canvas.coords(self.level_bar, 0, self.size, 0, self.size)
+        if which == "read" and state not in ("speaking", "paused"):
+            self.set_progress(None)
         if state != "working":
             c.itemconfigure(self.arcs[which], extent=0)
         if title or body:
@@ -253,6 +272,14 @@ class Overlay:
         self.level = self.level * 0.4 + value * 0.6
         bar_h = max(2, int(3 * self.scale))
         self.canvas.coords(self.level_bar, 0, self.size - bar_h, self.size * min(1.0, self.level), self.size)
+
+    def set_progress(self, fraction: float | None) -> None:
+        """The speaker button's progress line: the share of the text read so far; None hides it."""
+        bar_h = max(2, int(3 * self.scale))
+        width = 0 if fraction is None else self.size * min(1.0, max(0.0, fraction))
+        if fraction is not None:
+            width = max(width, bar_h)   # a dot from the start, so you see that it reads
+        self.canvases["read"].coords(self.progress_bar, 0, self.size - bar_h, width, self.size)
 
     def set_text(self, body: str) -> None:
         """Replace only the transcript line of the open bubble."""
@@ -344,6 +371,8 @@ class Overlay:
             self._cancel_hover()
             if which == "mic":
                 self.app.toggle("button")
+            elif which == "read":
+                self.app.read_click()
             else:
                 self.app.refine_click()
         self.drag = None
@@ -371,6 +400,11 @@ class Overlay:
             self.show_bubble("Voice typing", self.app.summary(),
                              f"Click or press {self.app.hotkey_text()} to talk (hold it to talk while held). "
                              "Right-click for options.", owner="hover", source="mic")
+        elif which == "read":
+            key = self.app.read_hotkey_text()
+            self.show_bubble("Read aloud", self.app.read_summary(),
+                             "Select text in any app, then click here" + (f" or press {key}" if key else "") +
+                             ". Right-click for the voice, the speed and pause.", owner="hover", source="read")
         else:
             key = self.app.refine_hotkey_text()
             self.show_bubble("Refine selected text", self.app.refine_summary(),
@@ -433,6 +467,8 @@ class Overlay:
         m.add_separator()
         if not self.visible["refine"]:
             m.add_command(label="Show the refine button", command=lambda: app.set_refine_option("button", True))
+        if not self.visible["read"] and app.read_enabled():
+            m.add_command(label="Show the read aloud button", command=lambda: app.set_read_option("button", True))
         m.add_command(label="Hide button (the hotkey still works)", command=lambda: app.set_option("button", False))
         m.add_command(label="Quit voice typing", command=app.quit)
         # Keep references alive while the menu is open (Tk variables die with their Python objects).
@@ -465,6 +501,48 @@ class Overlay:
                       command=lambda: app.set_refine_option("button", False))
         m._vars = (chosen,)  # type: ignore[attr-defined]
         self._popup(m, e)
+
+    def _read_menu(self, e) -> None:
+        self._close_hover()
+        app = self.app
+        s = app.read_menu_state()
+        m = tk.Menu(self.root, tearoff=0)
+        if s["busy"]:
+            m.add_command(label="Stop reading", accelerator=app.read_hotkey_text(), command=app.read_stop)
+            if s["playing"]:
+                m.add_command(label="Resume" if s["paused"] else "Pause", command=app.read_pause_toggle)
+        else:
+            m.add_command(label="Read the selection", accelerator=app.read_hotkey_text(), command=app.read_selection,
+                          state="normal" if s["can_start"] else "disabled")
+        m.add_command(label="Read it again", command=app.read_again,
+                      state="normal" if s["has_last"] and not s["busy"] and s["can_start"] else "disabled")
+        m.add_separator()
+        m.add_command(label=f"Voice: {s['voice']}...", command=self.pick_voice)
+        speed = tk.StringVar(self.root, f"{s['speed']:g}")
+        sub = tk.Menu(m, tearoff=0)
+        for value in SPEEDS:
+            sub.add_radiobutton(label=speed_text(float(value)), variable=speed, value=f"{float(value):g}",
+                                command=lambda v=float(value): app.set_read_option("speed", v))
+        m.add_cascade(label=f"Speed: {speed_text(s['speed'])}", menu=sub)
+        auto = tk.BooleanVar(self.root, s["auto_language"])
+        m.add_checkbutton(label="Other languages get their own voice", variable=auto,
+                          command=lambda: app.set_read_option("auto_language", bool(auto.get())))
+        m.add_separator()
+        m.add_command(label="Hide this button (the hotkey still works)",
+                      command=lambda: app.set_read_option("button", False))
+        m._vars = (speed, auto)  # type: ignore[attr-defined]
+        self._popup(m, e)
+
+    def pick_voice(self) -> None:
+        """Every voice in a search picker above the buttons: Kokoro's, then this PC's Windows voices. A choice is
+        saved (read_aloud.voice) and says a short sentence in the new voice."""
+        from .picker import Picker
+
+        self.hide_bubble()
+        Picker(self.root, self.app.read_voices(), self.app.read_voice_id(),
+               lambda vid: self.app.set_read_option("voice", vid), search, title="Read aloud voice",
+               anchor=self.bar_box(), above=True, placeholder="Search by name or language",
+               empty="No voice matches. Esc closes.", show_code=False)
 
     def style_menu_at(self, point: tuple[int, int], target: int) -> None:
         """The style menu hotkey: every refine style in a menu at the caret (or the pointer), numbered so 1-9 pick
