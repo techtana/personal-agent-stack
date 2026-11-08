@@ -18,6 +18,12 @@ REPOS = {
 # Offered in the tray's Settings tab: (name, what it is good for). Sizes are the CTranslate2 downloads.
 CHOICES = ["large-v3-turbo", "large-v3", "medium", "small", "base"]
 
+# Offered in the button's menu and the tray's Settings tab: detection first, then common languages in alphabetical
+# order of their English names. Any other Whisper language code works in dictation.language.
+LANGUAGES = [("auto", "Detect automatically"), ("ar", "Arabic"), ("zh", "Chinese"), ("en", "English"),
+             ("fr", "French"), ("de", "German"), ("hi", "Hindi"), ("it", "Italian"), ("ja", "Japanese"),
+             ("ko", "Korean"), ("pt", "Portuguese"), ("ru", "Russian"), ("es", "Spanish")]
+
 
 def repo_for(model: str) -> str:
     """Hugging Face repository of a model name; a name with a slash is already a repository."""

@@ -17,7 +17,7 @@ from .yamledit import dump_scalar as _dump_scalar, set_key  # noqa: F401 - set_k
 
 CTX_CHOICES = ["8192", "16384", "32768", "65536"]
 from .dictation.hotkey import CHOICES as HOTKEY_CHOICES  # noqa: E402
-from .dictation.models import CHOICES as MODEL_CHOICES  # noqa: E402
+from .dictation.models import CHOICES as MODEL_CHOICES, LANGUAGES  # noqa: E402
 
 
 @dataclass
@@ -71,7 +71,7 @@ SETTINGS = [
             "How long a pause ends the recording once you have spoken.", "dictation", ["1.5", "2.0", "3.0", "4.0", "6.0"]),
     Setting("dictation", "language", "Language", "choice",
             "auto detects it from the first phrase; a fixed language is more reliable for short phrases.", "dictation",
-            ["auto", "en", "th", "ja", "zh", "de", "fr", "es"]),
+            [code for code, _ in LANGUAGES]),
     Setting("dictation", "model", "Whisper model", "choice",
             "large-v3-turbo: best on the GPU (1.6 GB). small or base: lighter, for the CPU.", "dictation", MODEL_CHOICES),
     Setting("dictation", "insert", "Insert text by", "choice",

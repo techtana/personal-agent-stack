@@ -159,7 +159,7 @@ class TextRules(unittest.TestCase):
         self.assertEqual(textops.joiner("line\n", "Next"), "")
         self.assertEqual(textops.joiner("(", "aside"), "")
         self.assertEqual(textops.joiner("日本", "語"), "")
-        self.assertEqual(textops.joiner("สวัสดี", "ครับ"), " ")
+        self.assertEqual(textops.joiner("Привет", "мир"), " ")  # scripts other than Chinese/Japanese get a space
 
     def test_stock_hallucinations(self):
         self.assertTrue(textops.is_stock_hallucination(" Thanks for watching!"))

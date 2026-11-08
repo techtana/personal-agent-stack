@@ -14,6 +14,7 @@ import tkinter.font as tkfont
 from typing import Callable
 
 from .cleanup import STYLE_NAMES
+from .models import LANGUAGES
 
 IS_WINDOWS = os.name == "nt"
 FONT = "Segoe UI" if IS_WINDOWS else "TkDefaultFont"
@@ -23,8 +24,6 @@ STATE_FILL = {"idle": "#2d2d2d", "listening": "#c42b1c", "working": "#0f6cbd", "
 STATE_INK = {"idle": FG, "listening": "#ff9a8f", "working": "#8cc8ff", "done": "#7fd67f", "error": "#ff9a8f"}
 GLYPHS = {"mic": "", "check": "", "error": ""}
 FALLBACK_GLYPHS = {"mic": "●", "check": "✓", "error": "!"}
-LANGUAGES = [("auto", "Detect automatically"), ("en", "English"), ("th", "Thai"), ("ja", "Japanese"),
-             ("zh", "Chinese"), ("de", "German"), ("fr", "French"), ("es", "Spanish")]
 
 
 class Overlay:

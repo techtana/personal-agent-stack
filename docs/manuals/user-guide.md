@@ -164,7 +164,8 @@ Good to know:
 - **Names and jargon.** Add words Whisper should expect to `dictation.vocabulary` in `machines/<HOST>.yaml`, for
   example `vocabulary: 'Logseq, LiteLLM, Ollama'`. In a test, "Logseq" came out as "Logsake" without it.
 - **Language.** It is detected from your first phrase. If short phrases come out in the wrong language, set one under
-  **Language** in the button's menu. Thai works with the default model.
+  **Language** in the button's menu. The menu lists common languages; any other Whisper language code works in
+  `dictation.language`.
 - **Hotkey.** Ctrl+Alt+D by default, because the Claude desktop app uses Ctrl+Alt+Space for its quick entry. Change
   it in the tray's Settings tab. If another program already has the key, the bubble says so at start; the button still
   works.
