@@ -229,7 +229,7 @@ class App:
         self.pid = os.getpid()
         self.rcfg = refine.Config.from_profile(profile, warn=lambda m: log(f"[refine] {m}"))
         self.refine_hotkey_error = ""
-        self.refine_log = RefineLog(state_dir(profile) / LOG_NAME)
+        self.refine_log = RefineLog(state_dir(profile) / LOG_NAME, keep_minutes=self.rcfg.keep_minutes)
         self._esc_refine = False
         self._esc_lock = threading.Lock()
         # Raises when another copy runs. Also serves Open WebUI's microphone (transcriptions.py) on the same Whisper,
@@ -259,6 +259,7 @@ class App:
         threading.Thread(target=self._command_loop, name="dictation-control-loop", daemon=True).start()
         threading.Thread(target=self._worker_loop, name="dictation-worker", daemon=True).start()
         threading.Thread(target=self._track_focus, name="dictation-focus", daemon=True).start()
+        threading.Thread(target=self._prune_refine_log, name="dictation-refine-prune", daemon=True).start()
         self.engine.load_async()
         log(f"[dictation] ready: hotkey {self.hotkey_text()}, mode {self.cfg.mode}, cleanup {self.cfg.style} "
             f"({self.prompt_kind()} prompt), VAD {self.vad.name}, refine {self.refine_hotkey_text()} "
@@ -344,7 +345,8 @@ class App:
                 "style": self.cfg.style, "language": self.cfg.language, "button": bool(self.cfg.button),
                 "refine": {"hotkey": self.rcfg.hotkey, "hotkey_ok": not self.refine_hotkey_error,
                            "button": bool(self.rcfg.button), "default": self.rcfg.default, "model": self.rcfg.model,
-                           "busy": self.refiner.busy, "log": str(self.refine_log.path)},
+                           "busy": self.refiner.busy, "log": str(self.refine_log.path),
+                           "keep_minutes": self.rcfg.keep_minutes},
                 "transcriptions": bool(transcription_key()),  # Open WebUI's microphone needs DICTATION_BEARER
                 "pid": os.getpid()}
 
@@ -753,7 +755,7 @@ class App:
             self.overlay.set_button_visible(bool(value))
             if not value:
                 self.overlay.show_bubble("Mic button hidden", "", f"{self.hotkey_text()} still works. Show it again "
-                                         "from the tray: Voice typing row, Show button.", owner="idle")
+                                         "from the tray: Voice typing row, Show mic.", owner="idle")
                 self.overlay._schedule_hide(5)
         try:
             save_setting(self.profile, key, value)
@@ -765,17 +767,36 @@ class App:
 
     # ---------------------------------------------------------------- refine selected text
 
-    def _refine_cfg(self) -> refine.Config:
-        """The refine settings as the machine file has them now, so styles you add apply without a restart. The
-        hotkey stays the one registered at start."""
+    def _refine_cfg(self, quiet: bool = False) -> refine.Config:
+        """The refine settings as the machine file has them now, so styles you add and a new keep_minutes apply
+        without a restart. The hotkey stays the one registered at start."""
         try:
             fresh = refine.Config.from_profile(prof.resolve_profile(self.profile.get("name")))
         except Exception as e:  # noqa: BLE001 - a typo in the YAML must not break the button
-            log(f"[refine] could not read the machine profile ({e}); using the settings from start-up")
+            if not quiet:
+                log(f"[refine] could not read the machine profile ({e}); using the settings from start-up")
             return self.rcfg
         fresh.hotkey = self.rcfg.hotkey
         self.rcfg = fresh
+        self.refine_log.keep_minutes = fresh.keep_minutes
         return fresh
+
+    def _prune_refine_log(self) -> None:
+        """Delete refine log entries older than refine.keep_minutes: at start, then once a minute, so a suggestion
+        and the text it replaced leave the disk within a minute of expiring, whether or not you refine again."""
+        while True:
+            try:
+                self._refine_cfg(quiet=True)   # the tray may have changed keep_minutes
+                removed = self.refine_log.prune()
+                if removed:
+                    log(f"[refine] deleted {removed} expired log entr{'y' if removed == 1 else 'ies'}")
+            except Exception as e:  # noqa: BLE001 - keep trying; the next minute may work
+                log(f"[refine] could not prune the log: {type(e).__name__}")
+            time.sleep(60)
+
+    def refine_keep_text(self) -> str:
+        """'30 minutes': how long the refine log keeps an entry, for the History window and the bubbles."""
+        return refine.keep_text(self.rcfg.keep_minutes)
 
     def _refine_fn(self, text: str, style, *, model: str, timeout: float):
         return refine.refine_text(text, style, base_url=self.gateway, api_key=self.api_key, model=model,
@@ -819,7 +840,7 @@ class App:
             self.overlay.set_refine_visible(bool(value))
             if not value:
                 key_note = f"{self.refine_hotkey_text()} still refines the selection. " if self.refine_hotkey_text() else ""
-                self.overlay.show_bubble("Refine button hidden", "", key_note + "Show it again from the mic button's "
+                self.overlay.show_bubble("Refine button hidden", "", key_note + "Show it again from the tray (Show pencil) or the mic button's "
                                          "menu.", owner="idle")
                 self.overlay._schedule_hide(5)
         elif key == "default":
