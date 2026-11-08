@@ -190,19 +190,40 @@ def api_key() -> str:
 def ensure_api_key(path: Path | None = None) -> str:
     """DICTATION_BEARER, appended to .env as a new random key when it is not set yet; the rest of .env is left as it
     is (comments included). The running voice typing app reads it on its next request."""
+    return _ensure_key(KEY_NAME, "the key Open WebUI's microphone uses with voice typing", path)
+
+
+REFINE_KEY_NAME = "REFINE_BEARER"
+
+
+def refine_key() -> str:
+    """The key app plugins (the Logseq refine plugin) send to voice typing's /plugin/ routes (pluginapi.py):
+    REFINE_BEARER from the environment or .env. Its own key, because a plugin's settings are one more place it is
+    kept, and with it a caller can only refine text and add refine log entries."""
+    from .. import env_value
+
+    return env_value(REFINE_KEY_NAME)
+
+
+def ensure_refine_key(path: Path | None = None) -> str:
+    """REFINE_BEARER, appended to .env as a new random key when it is not set yet."""
+    return _ensure_key(REFINE_KEY_NAME, "the key the Logseq refine plugin sends to voice typing", path)
+
+
+def _ensure_key(name: str, purpose: str, path: Path | None = None) -> str:
     import secrets
 
     from .. import ENV_FILE, load_dotenv
 
     path = path or ENV_FILE
-    key = os.environ.get(KEY_NAME) or load_dotenv(path).get(KEY_NAME, "")
+    key = os.environ.get(name) or load_dotenv(path).get(name, "")
     if key:
         return key
     key = secrets.token_urlsafe(32)
     text = path.read_text(encoding="utf-8") if path.exists() else ""
     with open(path, "a", encoding="utf-8", newline="\n") as f:
-        f.write(("" if not text or text.endswith("\n") else "\n") + f"{KEY_NAME}={key}\n")
-    info(f"{path.name}: added {KEY_NAME}, the key Open WebUI's microphone uses with voice typing")
+        f.write(("" if not text or text.endswith("\n") else "\n") + f"{name}={key}\n")
+    info(f"{path.name}: added {name}, {purpose}")
     return key
 
 

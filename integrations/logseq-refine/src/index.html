@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'none'">
+  <title>Refine with the local AI</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="backdrop" class="backdrop" hidden>
+    <div class="panel" role="dialog" aria-modal="true" aria-labelledby="picker-title" aria-describedby="picker-note">
+      <h2 id="picker-title">Refine with...</h2>
+      <p id="picker-note" class="note"></p>
+      <ul id="picker-list" class="list"></ul>
+      <div class="actions"><button id="picker-cancel" type="button">Cancel</button></div>
+    </div>
+  </div>
+  <script src="lsplugin.user.js"></script>
+  <script src="core.js"></script>
+  <script src="main.js"></script>
+</body>
+</html>

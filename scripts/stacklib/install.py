@@ -352,6 +352,7 @@ def ensure_env_file() -> dict[str, str]:
         ("ORCHESTRATOR_BEARER", lambda: secrets.token_urlsafe(32)),
         ("WEBUI_SECRET_KEY", lambda: secrets.token_hex(32)),
         ("DICTATION_BEARER", lambda: secrets.token_urlsafe(32)),  # Open WebUI's microphone -> voice typing
+        ("REFINE_BEARER", lambda: secrets.token_urlsafe(32)),     # the Logseq refine plugin -> voice typing
     )
     for k, gen in generators:
         if not env.get(k):

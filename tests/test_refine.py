@@ -768,6 +768,21 @@ class Flow(unittest.TestCase):
         self.assertEqual(self.win.document, TEXT)
         self.assertIn("Edits you made after it were undone too", self.ui.hint("done"))
 
+    def test_entries_from_the_logseq_plugin_are_never_pasted_into_an_app(self):
+        # Any program with the plugin's key can add such an entry; its "before" must not reach another app.
+        planted = self.log.append({"kind": "refine", "status": "replaced", "source": "plugin", "app": "logseq",
+                                   "before": "payload", "after": FIXED})
+        self.win.select(FIXED)
+        self.win.document = FIXED
+        self.refiner.revert()
+        self.wait()
+        self.assertEqual(self.ui.last("error"), "Not in the refine history")
+        self.refiner.revert(planted["id"])
+        self.wait()
+        self.assertEqual(self.ui.last("error"), "Undo that one where it was made")
+        self.assertEqual(self.win.document, FIXED)
+        self.assertEqual([e["kind"] for e in self.log.entries()], ["refine"], "nothing logged, nothing pasted")
+
 
 class Wiring(unittest.TestCase):
     def test_control_actions(self):

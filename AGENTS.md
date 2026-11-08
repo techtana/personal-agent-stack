@@ -68,5 +68,6 @@ uv run scripts/stack.py why-routed --last 20      # routing decisions from trace
 uv run scripts/stack.py usage --days 7            # every model the stack ran (the tray's Usage tab as text)
 uv run scripts/stack.py retro --days 7            # retrospective report (then /retro in Claude Code)
 uv run scripts/stack.py dictate install|start|transcribe f.wav  # voice typing in any app (Whisper, Ctrl+Alt+D); refine selected text (Ctrl+Alt+R)
+uv run scripts/stack.py logseq-plugin                  # Logseq refine plugin (integrations/logseq-refine): build it, copy its key
 scripts/claude-local.ps1 | .sh                    # Claude Code on the local gateway (profile B)
 ```

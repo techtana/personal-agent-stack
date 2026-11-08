@@ -23,7 +23,7 @@ import threading
 from dataclasses import dataclass
 
 from . import refine
-from .refinelog import MATCH_CHOSEN, RefineLog, similarity
+from .refinelog import MATCH_CHOSEN, RefineLog, revertable_in_app, similarity
 from .selection import Selection, SelectionError, capture, replace
 
 PREVIEW = 260
@@ -204,6 +204,10 @@ class Refiner:
             return
         if job.entry:
             entry = self.log.get(job.entry)
+            if entry is not None and not revertable_in_app(entry):
+                self.ui.error("Undo that one where it was made", preview(entry.get("after") or ""),
+                              "A refine from the Logseq plugin: right-click the block's bullet > Put back the original.")
+                return
             score = similarity(sel.text, (entry or {}).get("after") or "")
             if entry is None or score < MATCH_CHOSEN:
                 self.ui.error("The selected text is not that suggestion", preview(sel.text),

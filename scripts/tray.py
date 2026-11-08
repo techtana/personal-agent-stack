@@ -4,8 +4,9 @@
 It lives in the notification area (on Windows it starts among the hidden icons). Left-click or "Show status" opens a
 window with three tabs:
   Overview  each service's health with start/stop and links into the UIs, the models loaded in Ollama, and the
-            Hugging Face cache and OpenClaw (where the cache is; whether OpenClaw uses only the gateway, with a
-            Use gateway button that makes it so)
+            Hugging Face cache, OpenClaw and the Logseq refine plugin (where the cache is; whether OpenClaw uses
+            only the gateway, with a Use gateway button that makes it so; whether the plugin is built and loaded,
+            with Set up and Copy key)
   Usage     every model the stack ran (gateway, Whisper, ComfyUI, direct Ollama calls): requests, tokens, audio,
             images, speed and cost per model, service or client, with a per-day chart
   Settings  models, context sizes, tracing and Ollama runtime options; Apply writes machines/<HOST>.yaml,
@@ -89,7 +90,7 @@ from PIL import ImageTk  # noqa: E402
 from stacklib import IS_WINDOWS, clients, media, ollama, process_metrics, procname, profile as prof, services  # noqa: E402
 from stacklib.icon import COLORS, make_icon  # noqa: E402
 from stacklib import settings as cfg  # noqa: E402
-from stacklib import comfy_usage, startup, usage, usage_log  # noqa: E402
+from stacklib import comfy_usage, logseq_plugin, startup, usage, usage_log  # noqa: E402
 
 POLL_SECONDS = 10
 CLIENT_SECONDS = 60  # between Hugging Face / OpenClaw checks: measuring the cache walks every file in it
@@ -117,7 +118,8 @@ ROLES = {
     "dictation": "speak into any app (Whisper)",
 }
 CLIENTS = (("huggingface", "Hugging Face cache", "model weights for Python tools"),
-           ("openclaw", "OpenClaw", "agent client; private only through the gateway"))
+           ("openclaw", "OpenClaw", "agent client; private only through the gateway"),
+           ("logseq", "Logseq refine plugin", "refine a block from its right-click menu"))
 FONT = "Segoe UI" if IS_WINDOWS else "TkDefaultFont"
 
 # Window palette (light / dark): neutral surfaces, one blue accent for data, status colours only for state.
@@ -220,6 +222,8 @@ class TrayApp:
         self.clients_checked = 0.0  # monotonic; 0 = never
         self.openclaw_busy = False
         self.openclaw_result = ""  # why the last Use gateway click failed, shown until the next click
+        self.logseq_busy = False
+        self.logseq_result = ""  # what the last Set up or Copy key click did, shown until the next click
         self.dictation_button: bool | None = None  # floating mic button visible? None while voice typing is down
         self.usage_data: dict | None = None
         self.usage_notes: list[str] = []  # model use the Usage tab cannot count, while it can happen
@@ -318,7 +322,8 @@ class TrayApp:
     def _check_clients(self) -> dict[str, clients.ClientStatus]:
         out = {}
         for key, fn in (("huggingface", clients.huggingface),
-                        ("openclaw", lambda: clients.openclaw(self.profile["ports"]["litellm"]))):
+                        ("openclaw", lambda: clients.openclaw(self.profile["ports"]["litellm"])),
+                        ("logseq", logseq_plugin.status)):
             try:
                 out[key] = fn()
             except Exception as e:  # noqa: BLE001 - a bad config file must not stop the poller
@@ -694,7 +699,7 @@ class TrayApp:
         t = self.t
         w = tk.Toplevel(self.root, bg=t["page"])
         w.title("Agent Stack")
-        w.geometry(f"940x{min(900, w.winfo_screenheight() - 80)}")  # Overview: services, GPU and loaded models, HF and OpenClaw, action bar
+        w.geometry(f"940x{min(940, w.winfo_screenheight() - 80)}")  # Overview: services, GPU and loaded models, HF, OpenClaw and Logseq, action bar
         w.minsize(760, 560)
         w.protocol("WM_DELETE_WINDOW", w.withdraw)  # closing hides it; the tray keeps running
         if IS_WINDOWS and system_theme() == "dark":
@@ -800,7 +805,7 @@ class TrayApp:
         ttk.Button(gbtn, text="Chat", width=7, command=lambda: self.set_gpu_mode("chat")).pack(side="left", padx=2)
         ttk.Button(gbtn, text="Media", width=7, command=lambda: self.set_gpu_mode("media")).pack(side="left", padx=2)
 
-        extras = self._card(body, "Hugging Face and OpenClaw", row=2, column=0, pady=(12, 0))
+        extras = self._card(body, "Hugging Face, OpenClaw and Logseq", row=2, column=0, pady=(12, 0))
         extras.columnconfigure(1, weight=1)
         self.client_widgets: dict[str, tuple] = {}
         for n, (key, label, role) in enumerate(CLIENTS):
@@ -820,6 +825,9 @@ class TrayApp:
                 fix = ttk.Button(extras, text="Use gateway", command=self.openclaw_use_gateway)
                 fix.grid(row=i, column=3, sticky="e", padx=2)
                 fix.grid_remove()
+            elif key == "logseq":
+                fix = ttk.Button(extras, text="Set up", command=self.logseq_action)
+                fix.grid(row=i, column=3, sticky="e", padx=2)
             self.client_widgets[key] = (dot, state, detail, fix)
 
         bar = ttk.Frame(tab, padding=(0, 12, 0, 0))
@@ -927,14 +935,20 @@ class TrayApp:
         style = {"warn": "Warn.TLabel", "bad": "Bad.TLabel"}
         for key, (dot, state, detail, fix) in self.client_widgets.items():
             s = self.client_status.get(key)
-            if key == "openclaw" and self.openclaw_busy:
+            busy = self.openclaw_busy if key == "openclaw" else self.logseq_busy if key == "logseq" else False
+            result = self.openclaw_result if key == "openclaw" else self.logseq_result if key == "logseq" else ""
+            if busy:
                 dot.configure(fg=t["warn"])
                 state.configure(text="Setting up...", style="Warn.TLabel")
             elif s:
                 dot.configure(fg=colour.get(s.level, t["muted"]))
                 state.configure(text=s.state, style=style.get(s.level, "Card.Sub.TLabel"))
-                detail.configure(text=(self.openclaw_result + "  " if key == "openclaw" and self.openclaw_result else "")
-                                 + s.detail)
+                detail.configure(text=(result + "  " if result else "") + s.detail)
+            if key == "logseq" and fix is not None:
+                # Set up builds the plugin and makes its key; once it is built, the same button copies the key again.
+                fix.configure(text="Copy key" if s and s.state in ("Built", "Loaded in Logseq") else "Set up",
+                              state="disabled" if busy or not s else "normal")
+                continue
             if fix is not None:
                 # Shown while OpenClaw is installed but not gateway-only; a failure keeps it up so the owner can retry.
                 if self.openclaw_busy or (s and s.level in ("warn", "bad") and s.state != "Not checked"):
@@ -967,6 +981,50 @@ class TrayApp:
                 self._render_clients()
             self._on_ui(done)
         threading.Thread(target=run, daemon=True, name="openclaw-setup").start()
+
+    def logseq_action(self) -> None:
+        """Set up: build the Logseq refine plugin (npm, in the background), add REFINE_BEARER to .env and copy it.
+        Copy key: put the key on the clipboard again, for the plugin's settings."""
+        if self.logseq_busy:
+            return
+        s = self.client_status.get("logseq")
+        if s and s.state in ("Built", "Loaded in Logseq"):
+            from stacklib.dictation import ensure_refine_key
+
+            copied = logseq_plugin.copy_to_clipboard(ensure_refine_key())
+            self._clear_key_later(copied)
+            self.logseq_result = ("Key copied for 60 s: paste it into the plugin's settings in Logseq." if copied
+                                  else "Could not reach the clipboard; the key is REFINE_BEARER in .env.")
+            self._render_clients()
+            return
+        self.logseq_busy = True
+        self.logseq_result = ""
+        self._render_clients()
+
+        def run() -> None:
+            try:
+                copied = logseq_plugin.setup(lambda m: print(f"[tray] logseq plugin: {m}"))[1]
+                self._clear_key_later(copied)
+                result = "Built; the key is on the clipboard for 60 s." if copied else                     "Built; copy REFINE_BEARER from .env (the clipboard was not reachable)."
+            except Exception as e:  # noqa: BLE001 - shown on the row; the log has the trace
+                traceback.print_exc()
+                result = f"Set up failed: {e}"
+            status = self._check_clients()
+
+            def done() -> None:
+                self.logseq_busy = False
+                self.logseq_result = result
+                self.client_status = status
+                self._render_clients()
+            self._on_ui(done)
+        threading.Thread(target=run, daemon=True, name="logseq-plugin-setup").start()
+
+    def _clear_key_later(self, copied: int) -> None:
+        """The refine key should not stay on the clipboard: empty it after a minute unless something else was copied."""
+        if copied:
+            timer = threading.Timer(logseq_plugin.CLEAR_AFTER_S, logseq_plugin.clear_clipboard_if, args=(copied,))
+            timer.daemon = True
+            timer.start()
 
     def _render_loaded(self) -> None:
         for child in self.loaded_frame.winfo_children():

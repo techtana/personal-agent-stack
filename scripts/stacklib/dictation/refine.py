@@ -258,8 +258,10 @@ def split_space(text: str) -> tuple[str, str, str]:
     return lead, core, trail
 
 
-def refine_text(text: str, style: Style, *, base_url: str, api_key: str, model: str, timeout: float = 120.0) -> Result:
-    """Ask the gateway to rewrite `text` in `style`. Never raises for gateway or model trouble: the Result says why."""
+def refine_text(text: str, style: Style, *, base_url: str, api_key: str, model: str, timeout: float = 120.0,
+                user_agent: str = USER_AGENT) -> Result:
+    """Ask the gateway to rewrite `text` in `style`. Never raises for gateway or model trouble: the Result says why.
+    `user_agent` names the caller in the tray's Usage tab (the Logseq plugin's refines pass their own)."""
     lead, core, trail = split_space(text)
     if not core:
         return Result(text, False, "the selection is only whitespace")
@@ -268,7 +270,7 @@ def refine_text(text: str, style: Style, *, base_url: str, api_key: str, model: 
     req = urllib.request.Request(
         f"{base_url.rstrip('/')}/v1/chat/completions",
         data=json.dumps(request_body(plain, style, model)).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}", "User-Agent": USER_AGENT},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}", "User-Agent": user_agent},
     )
     t0 = time.monotonic()
     try:

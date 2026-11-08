@@ -359,6 +359,77 @@ Good to know:
   the pencil button shows. Every setting is under `refine:` in `machines/_defaults.yaml`. **Hide this button** in the
   pencil's menu keeps only the hotkey; **Show the refine button** in the mic button's menu brings it back.
 
+### Refine a Logseq block from its right-click menu
+
+Logseq can have the refine in its own right-click menu, through the plugin in `integrations\logseq-refine`. It refines
+a whole block without selecting its text, with the same styles, model and refine history as the pencil. It needs
+Logseq 2 (database graphs; tested with 2.0.2) and voice typing running, because the plugin hands the text to voice
+typing on this PC.
+
+Set it up once:
+
+1. In the tray, **Overview > Logseq refine plugin > Set up**. It builds the plugin (this needs Node.js, which the
+   OpenClaw step installs; `winget install OpenJS.NodeJS.LTS` otherwise), adds the plugin's key `REFINE_BEARER` to
+   `.env` and copies the key to the clipboard. Or run:
+
+   ```bash
+   uv run scripts/stack.py logseq-plugin
+   ```
+
+2. In Logseq, **Settings > Advanced**: turn on **Developer mode**.
+3. Open **Plugins** (the **...** menu at the top right, or **Settings > Plugins**), click **Load unpacked plugin** and
+   choose the folder `integrations\logseq-refine` inside the stack's folder (the one with `package.json`).
+4. Open the plugin's settings (the gear on its card, **Refine with the local AI**) and paste the key into **Refine key**.
+   **Copy key** on the tray row copies it again. Leave **Voice typing port** at 8790 unless you changed
+   `ports.dictation`.
+
+Use it: right-click a block's bullet (the dot left of the block).
+
+- **Refine with Polish** (or whatever your default style is) rewrites the block in that style.
+- **Refine with...** lists every style, your own from `refine.prompts` included. Up and Down move, Enter picks, Esc
+  closes.
+- **Put back the original (undo refine)** restores the block's text from before its newest refine. When you edited
+  the block after the refine, those edits go too, and the message says so.
+- In a block you are typing in, `/Refine this block` does the same as the first item.
+
+A Logseq message says what happened: refined, no changes needed, or why your text was kept.
+
+What it does, all on this PC:
+
+1. It sends the block's text as you see it, with links and tags by name, to voice typing on 127.0.0.1, with the key.
+2. Voice typing has the gateway's `refine.model` rewrite it, with the same instructions and checks as the pencil. Lines
+   that look like properties (`key:: value`) are not sent and stay as they were. Page links, tags, block references,
+   `{{embeds}}`, code and URLs must come back exactly as many times as they were; otherwise the suggestion is
+   rejected and your text stays.
+3. The plugin reads the block again. Only if it is unchanged does it ask voice typing to log the change, and only
+   after that does it write the block. If you edited the block while the model worked, your edit stays, and the
+   suggestion is logged as not replaced. So no block changes without an entry in the refine history.
+
+The entries are in the same `.run\dictation\refine-log.jsonl`, with app **logseq** and the page and graph as the window.
+**Refine history...** in the pencil's menu lists them next to the others, and **Copy original** works on them. To put a
+block back, use **Put back the original** in the block's menu.
+
+Good to know:
+
+- **Only the block's own text** is refined, not its child blocks.
+- **Menu labels** are set when the plugin starts. After you change the default style, or the **More styles in the
+  right-click menu** setting (style ids separated by commas, for example `concise, grammar`), reload the plugin: turn
+  it off and on in **Plugins**, or restart Logseq.
+- **Messages and their fixes.** "Voice typing is not running": start **Voice typing** on the tray's Overview tab. "The
+  refine key is missing or wrong": **Copy key** on the tray row, then paste it into the plugin's settings. "Kept your
+  text: the model changed Logseq markup": the model changed a link or tag. Try again or try another style; the
+  suggestion is in the history.
+- **The key** lets a program refine text and add refine history entries, nothing else. Voice typing still refuses every
+  request that comes from a web page. The plugin's requests come from Logseq itself.
+  - Other Logseq plugins can read this plugin's settings, so they can get the key; install only plugins you trust.
+    That is also why entries made from Logseq are undone only from Logseq, with **Put back the original**. The
+    pencil's Revert never pastes them into another app.
+  - **Copy key** keeps the key out of Windows' clipboard history, and the tray empties the clipboard a minute later
+    unless you copied something else meanwhile.
+- **Limits.** A block may have up to 8 stretches of text between property lines, and all of them together get
+  `refine.timeout_s`. While you type in a block, a refine that comes back for it is not written; it is kept in the
+  history.
+
 ## Working with the departments
 
 There are six department agents: `app-dev`, `testing`, `security`, `devops`, `code-review` and `docs`.

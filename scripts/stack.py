@@ -25,6 +25,8 @@ Commands
                 (--show, --foreground, --status, --stop, --install-startup, --remove-startup)
   dictate       voice typing in any app: install | run | start | stop | status | toggle | show | hide | reload |
                 check | transcribe FILE.wav (the live pipeline on a recording, with the cleanup)
+  logseq-plugin build the Logseq refine plugin (integrations/logseq-refine), add REFINE_BEARER to .env and copy it to
+                the clipboard (--rebuild, --status)
 """
 from __future__ import annotations
 
@@ -488,6 +490,19 @@ def cmd_dictate(a):
     raise SystemExit(subprocess.run(argv, cwd=REPO, env=env).returncode)
 
 
+def cmd_logseq_plugin(a):
+    from stacklib import logseq_plugin
+
+    if a.status:
+        s = logseq_plugin.status()
+        (info if s.level in ("ok", "off") else warn)(f"Logseq refine plugin: {s.state}. {s.detail}")
+        return
+    try:
+        info(logseq_plugin.setup(info, rebuild=a.rebuild)[0])
+    except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+        die(f"Logseq plugin setup failed: {e}")
+
+
 def cmd_whisper(a):
     from stacklib import whisper
 
@@ -553,6 +568,8 @@ def main(argv=None):
     s.add_argument("file", nargs="?"); s.add_argument("--style", choices=["verbatim", "clean", "concise"])
     s.add_argument("--mode", choices=["polish", "live"]); s.add_argument("--language"); s.add_argument("--device", choices=["auto", "cuda", "cpu"])
     s.add_argument("--vocabulary"); s.set_defaults(f=cmd_dictate)
+    s = sub.add_parser("logseq-plugin", help="build the Logseq refine plugin, add REFINE_BEARER to .env and copy it to the clipboard")
+    s.add_argument("--rebuild", action="store_true"); s.add_argument("--status", action="store_true"); s.set_defaults(f=cmd_logseq_plugin)
     s = sub.add_parser("whisper", help="local Whisper for recordings: install, register|unregister in Claude Desktop, entry")
     s.add_argument("action", choices=["install", "register", "unregister", "entry"]); s.set_defaults(f=cmd_whisper)
     s = sub.add_parser("retro"); s.add_argument("rest", nargs=argparse.REMAINDER); s.set_defaults(f=cmd_retro)

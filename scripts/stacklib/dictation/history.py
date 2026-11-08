@@ -14,6 +14,8 @@ import subprocess
 import tkinter as tk
 from pathlib import Path
 
+from .refinelog import revertable_in_app
+
 FONT = "Segoe UI" if os.name == "nt" else "TkDefaultFont"
 MONO = "Cascadia Mono" if os.name == "nt" else "TkFixedFont"
 # Same dark palette as the button's bubble; every text colour passes 4.5:1 on its background (WCAG AA).
@@ -194,7 +196,7 @@ class HistoryWindow:
         state = "normal" if e else "disabled"
         for b in (self.copy_before, self.copy_after):
             b.configure(state=state)
-        can_revert = bool(e and e.get("kind") == "refine" and e.get("status") in ("replaced", "copied"))
+        can_revert = bool(e and revertable_in_app(e))
         self.revert_button.configure(state="normal" if can_revert else "disabled")
         if not e:
             self.detail.configure(text="")
@@ -213,6 +215,8 @@ class HistoryWindow:
                         + (f", {e['seconds']} s" if e.get("seconds") else ""))
         if e.get("note"):
             bits.append(str(e["note"]))
+        if e.get("source") == "plugin" and e.get("kind") == "refine" and e.get("status") == "replaced":
+            bits.append("undo it in Logseq: right-click the block's bullet > Put back the original")
         self.detail.configure(text="  ·  ".join(b for b in bits if b))
 
     # ---------------------------------------------------------------- actions

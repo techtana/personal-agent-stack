@@ -1,0 +1,19 @@
+{
+  "name": "logseq-refine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Refine a Logseq block with the agent stack's local model, from the block's right-click menu",
+  "main": "dist/index.html",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node --test test/"
+  },
+  "logseq": {
+    "id": "agent-stack-refine",
+    "title": "Refine with the local AI",
+    "icon": "./icon.svg"
+  },
+  "devDependencies": {
+    "@logseq/libs": "0.3.3"
+  }
+}

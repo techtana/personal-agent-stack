@@ -28,6 +28,7 @@ from .. import profile as prof
 from . import (Config, cleanup, control, ensure_refine_section, hotkey, read_state, refine, save_setting, state_dir,
                transcriptions, write_state)
 from . import api_key as transcription_key
+from . import pluginapi, refine_key
 from .audio import RATE, Recorder, RecorderError
 from .engine import Engine
 from .refinelog import LOG_NAME, RefineLog
@@ -232,11 +233,15 @@ class App:
         self.refine_log = RefineLog(state_dir(profile) / LOG_NAME)
         self._esc_refine = False
         self._esc_lock = threading.Lock()
+        # The Logseq plugin's refines (pluginapi.py): same styles, model and log as the refine button, its own key.
+        self.plugin_api = pluginapi.PluginApi(cfg=self._refine_cfg, refine_fn=self._plugin_refine_fn,
+                                              log=self.refine_log, key=refine_key, logline=log)
         # Raises when another copy runs. Also serves Open WebUI's microphone (transcriptions.py) on the same Whisper,
         # for callers with DICTATION_BEARER, looked up on each request so a key added to .env later works at once.
         self.server = control.ControlServer(
             self.port, self.health, self.act, api_key=transcription_key, log=log,
-            transcribe=lambda data, **kw: transcriptions.transcribe_with(self.engine, data, **kw))
+            transcribe=lambda data, **kw: transcriptions.transcribe_with(self.engine, data, **kw),
+            plugin=self.plugin_api)
         state = read_state(profile)
         pos = (int(state["x"]), int(state["y"])) if "x" in state and "y" in state else None
         winsys.set_dpi_aware()
@@ -271,6 +276,7 @@ class App:
         self.overlay.run()
         self.hotkeys.stop()
         self.server.stop()
+        self.plugin_api.flush()  # suggestions the Logseq plugin had not committed yet go into the log as skipped
         return 0
 
     def ui(self, fn) -> None:
@@ -346,6 +352,7 @@ class App:
                            "button": bool(self.rcfg.button), "default": self.rcfg.default, "model": self.rcfg.model,
                            "busy": self.refiner.busy, "log": str(self.refine_log.path)},
                 "transcriptions": bool(transcription_key()),  # Open WebUI's microphone needs DICTATION_BEARER
+                "plugin": {"key": bool(refine_key()), "waiting": len(self.plugin_api.pending)},  # Logseq plugin
                 "pid": os.getpid()}
 
     def act(self, name: str) -> dict:
@@ -780,6 +787,10 @@ class App:
     def _refine_fn(self, text: str, style, *, model: str, timeout: float):
         return refine.refine_text(text, style, base_url=self.gateway, api_key=self.api_key, model=model,
                                   timeout=timeout)
+
+    def _plugin_refine_fn(self, text: str, style, *, model: str, timeout: float):
+        return refine.refine_text(text, style, base_url=self.gateway, api_key=self.api_key, model=model,
+                                  timeout=timeout, user_agent=pluginapi.USER_AGENT)
 
     def _refine_esc(self, on: bool) -> None:
         """Esc cancels a refine while the model works; it is only taken from other apps for that long. Never call

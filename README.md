@@ -111,7 +111,7 @@ Then:
 | `policy/privacy.yaml` | private-first policy: deployment location, `external.enabled` (off; the build refuses `true` until the privacy gate exists) |
 | `agents/<id>.yaml` | one department: prompt, tools, Claude Code model alias, routing tiers, evals |
 | `agents/_common.md` | working agreements appended to every department prompt |
-| `.env` | `LITELLM_MASTER_KEY`, `ORCHESTRATOR_BEARER`, `WEBUI_SECRET_KEY`, `ANTHROPIC_API_KEY` (unused until external models exist) |
+| `.env` | `LITELLM_MASTER_KEY`, `ORCHESTRATOR_BEARER`, `WEBUI_SECRET_KEY`, `DICTATION_BEARER`, `REFINE_BEARER`, `ANTHROPIC_API_KEY` (unused until external models exist) |
 | `.claude/settings.json` | hooks (trace capture), permissions, gateway hint headers |
 | `.claude/settings.local.json` | per-machine: MCP bearer env, `autoMemoryDirectory` -> `memory/claude/` |
 
@@ -139,6 +139,7 @@ uv run scripts/stack.py media check|install|provision          ComfyUI and image
 uv run scripts/stack.py media gpu chat|media                   hand the GPU to chat (free ComfyUI) or media (unload Ollama)
 uv run scripts/stack.py dictate install|start|stop|status|check voice typing in any app: Ctrl+Alt+D or the mic button; Ctrl+Alt+R or the pencil button refines selected text
 uv run scripts/stack.py dictate transcribe note.wav [--style concise]   the voice typing pipeline on a recording
+uv run scripts/stack.py logseq-plugin [--rebuild | --status]  build the Logseq refine plugin and copy its key (integrations/logseq-refine)
 uv run scripts/stack.py why-routed [--last n] [--days n]
 uv run scripts/stack.py retro -- --days 7 [--reflect local-small|none] [--pr]
 uv run scripts/stack.py skills-sync [--dry-run]                 copy your own skills into skills/ (rules: skills/sync.yaml)

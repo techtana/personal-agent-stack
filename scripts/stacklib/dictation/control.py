@@ -7,11 +7,15 @@ to text for Open WebUI's microphone.
     POST /show_refine|hide_refine
     POST /reload                    re-read the settings that apply without a restart (the cleanup prompt)
     POST /v1/audio/transcriptions   OpenAI-compatible, with a bearer key (transcriptions.py)
+    POST /plugin/styles|refine|revert|commit   refine a Logseq block for the Logseq plugin, with its own bearer key
+                                    (pluginapi.py)
 
 It listens on 127.0.0.1 only. A web page could still aim a request at 127.0.0.1 (cross-site request forgery, or DNS
 rebinding with its own host name), so requests with an Origin header or a Host other than this address are refused,
 and actions need POST. Local programs are trusted as much as any program that can already press keys; the
-transcription endpoint, which runs Whisper on whatever audio it is sent, also wants its own key (DICTATION_BEARER).
+transcription endpoint, which runs Whisper on whatever audio it is sent, also wants its own key (DICTATION_BEARER),
+and so do the plugin routes, whose entries feed Revert (REFINE_BEARER). The Logseq plugin's requests come from
+Logseq's main process and carry no Origin header, so the rule against web pages stays without exceptions.
 """
 from __future__ import annotations
 
@@ -29,6 +33,8 @@ from . import transcriptions
 
 ACTIONS = ("toggle", "start", "stop", "cancel", "show", "hide", "quit", "refine", "revert", "show_refine",
            "hide_refine", "reload")
+PLUGIN_PREFIX = "plugin/"           # pluginapi.PREFIX; not imported, so the tray's import of this module stays small
+PLUGIN_MAX_BODY = 256 * 1024        # pluginapi.MAX_BODY_BYTES
 LINGER_BYTES = 2 * transcriptions.MAX_BODY_BYTES  # what a refused upload may still send before the socket closes
 LINGER_S = 10.0
 
@@ -61,7 +67,7 @@ def check_request(method: str, path: str, headers: Mapping[str, str], port: int)
     name = path.split("?", 1)[0].strip("/")
     if name == "health":
         return None if method == "GET" else (405, "use GET")
-    if name in ACTIONS or name == transcriptions.ROUTE:
+    if name in ACTIONS or name == transcriptions.ROUTE or name.startswith(PLUGIN_PREFIX):
         return None if method == "POST" else (405, "use POST")
     return 404, "unknown path"
 
@@ -75,13 +81,14 @@ class _Server(ThreadingHTTPServer):
 
 class ControlServer:
     """`transcribe` (audio file bytes, language=, prompt=, client=) -> text serves /v1/audio/transcriptions for callers
-    with `api_key` (a string, or a function read on each request); without them that path answers 503."""
+    with `api_key` (a string, or a function read on each request); without them that path answers 503. `plugin` (a
+    pluginapi.PluginApi) serves /plugin/...; without it those paths answer 503."""
 
     def __init__(self, port: int, health: Callable[[], dict], act: Callable[[str], dict],
                  transcribe: transcriptions.Transcriber | None = None, api_key: str | Callable[[], str] = "",
-                 log: Callable[[str], None] = lambda m: None) -> None:
+                 log: Callable[[str], None] = lambda m: None, plugin=None) -> None:
         self.port = port
-        handler = _handler(port, health, act, transcribe, api_key, log)
+        handler = _handler(port, health, act, transcribe, api_key, log, plugin)
         self.httpd = _Server(("127.0.0.1", port), handler)
         self.thread = threading.Thread(target=self.httpd.serve_forever, name="dictation-control", daemon=True)
 
@@ -95,7 +102,7 @@ class ControlServer:
 
 def _handler(port: int, health: Callable[[], dict], act: Callable[[str], dict],
              transcribe: transcriptions.Transcriber | None, api_key: str | Callable[[], str],
-             log: Callable[[str], None]):
+             log: Callable[[str], None], plugin=None):
     class Handler(BaseHTTPRequestHandler):
         server_version = "agent-stack-voice-typing"
         timeout = 60  # seconds per socket read or write, so a client that stops sending frees its thread
@@ -132,10 +139,35 @@ def _handler(port: int, health: Callable[[], dict], act: Callable[[str], dict],
             if name == transcriptions.ROUTE:
                 self._answer_upload(*transcriptions.respond(self.headers, self.rfile, api_key, transcribe, log))
                 return
+            if name.startswith(PLUGIN_PREFIX):
+                self._plugin(name)
+                return
             try:
                 self._reply(200, health() if name == "health" else act(name))
             except Exception as e:  # noqa: BLE001 - report, never kill the server thread
                 self._reply(500, {"ok": False, "error": str(e)})
+
+        def _plugin(self, name: str) -> None:
+            if plugin is None:
+                self._reply(503, {"ok": False, "error": "this voice typing app has no plugin API"})
+                return
+            if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
+                self._answer_upload(411, "application/json", b'{"ok": false, "error": "send a Content-Length"}')
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = -1
+            if not 0 <= length <= PLUGIN_MAX_BODY:
+                body = json.dumps({"ok": False, "error": f"the body must be 0 to {PLUGIN_MAX_BODY} bytes"})
+                self._answer_upload(413, "application/json", body.encode("utf-8"))
+                return
+            try:
+                data = self.rfile.read(length) if length else b""
+            except OSError:
+                return  # the caller is gone
+            status, answer = plugin.respond(name, dict(self.headers.items()), data)
+            self._reply(status, answer)
 
         do_GET = _handle
         do_POST = _handle

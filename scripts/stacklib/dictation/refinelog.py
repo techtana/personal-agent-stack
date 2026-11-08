@@ -33,6 +33,14 @@ def normalise(text: str) -> str:
     return " ".join((text or "").split())
 
 
+def revertable_in_app(entry: dict) -> bool:
+    """A refine whose original Revert may paste over a selection in any app. Entries from an app plugin (the Logseq
+    plugin, `source: plugin`) are undone by that plugin, block by block: any program with the plugin's key can add
+    such entries, so their text is never pasted into another app."""
+    return (entry.get("kind") == "refine" and entry.get("status") in ("replaced", "copied") and bool(entry.get("after"))
+            and entry.get("source") != "plugin")
+
+
 def similarity(a: str, b: str) -> float:
     """1.0 for the same text up to whitespace; otherwise difflib's ratio on the normalised texts."""
     na, nb = normalise(a), normalise(b)
@@ -92,7 +100,7 @@ class RefineLog:
         that reached the document (replaced) or the clipboard (copied, which you may have pasted) count."""
         best: tuple[dict, float] | None = None
         for e in self.entries(scan):
-            if e.get("kind") != "refine" or e.get("status") not in ("replaced", "copied") or not e.get("after"):
+            if not revertable_in_app(e):
                 continue
             score = similarity(selected, e["after"])
             if score >= 1.0:
