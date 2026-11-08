@@ -252,6 +252,12 @@ class LinksStep(unittest.TestCase):
         self.assertEqual(servers["other"], {"command": "x"})
         self.assertIn("now records into this app", detail)
 
+    def test_entry_already_recording_into_the_app_is_left_alone(self):
+        mine = {"command": "my-own-python", "env": {"AGENT_STACK_USAGE_DIR": "app"}}
+        detail, servers, _ = self._run(mine)
+        self.assertEqual(servers["local-whisper"], mine)
+        self.assertIn("already records into this app", detail)
+
     def test_no_entry_is_left_alone(self):
         detail, servers, _ = self._run(None)
         self.assertNotIn("local-whisper", servers)
