@@ -201,8 +201,20 @@ def resolve_profile(name: str | None = None) -> dict:
         "catalog": defaults.get("model_catalog", {}),
         "media": resolve_media(defaults.get("media") or {}, m.get("media") or {}),
         "dictation": {**(defaults.get("dictation") or {}), **{k: v for k, v in (m.get("dictation") or {}).items() if v is not None}},
+        "refine": resolve_refine(defaults.get("refine") or {}, m.get("refine") or {}),
         "agent_access": {"allowed_roots": list(((m.get("agent_access") or {}).get("allowed_roots")) or [])},
     }
+
+
+def resolve_refine(defaults: dict, machine: dict) -> dict:
+    """The `refine:` section: machine keys over the defaults, and the machine's `prompts` added to the default ones
+    (an id in both takes the machine's text)."""
+    out = {**defaults, **{k: v for k, v in machine.items() if v is not None}}
+    prompts = {**(defaults.get("prompts") or {})}
+    if isinstance(machine.get("prompts"), dict):
+        prompts.update(machine["prompts"])
+    out["prompts"] = prompts
+    return out
 
 
 def resolve_media(defaults: dict, machine: dict) -> dict:

@@ -284,6 +284,81 @@ On the reference machine, adding `- Use American spelling and write every number
 took effect in 6 of 6 tries on the 9B, and the other rules still held (the self-correction "blue, no wait, green"
 became "green" every time).
 
+## Refine selected text
+
+Rewrite text you selected in any app (Word, Logseq, Notion, a browser field) with the local model, and put the
+original back whenever you want. It is part of the voice typing app, so it runs whenever voice typing runs.
+
+1. Select the text.
+2. Click the pencil button left of the mic button, or press **Ctrl+Alt+R**.
+3. The pencil turns blue while the model works (about 1 to 2 seconds for a paragraph). Then the selection is replaced
+   and the bubble shows the new text.
+
+To undo it right away, press **Ctrl+Z** in the app, as for any paste. To undo it later, select the refined text,
+right-click the pencil and choose **Revert selected text to the original**. **Refine history...** in the same menu lists
+every refine, newest first: the text before and after side by side, removed words struck through and added words
+underlined. **Copy original**, **Copy suggestion** and **Revert in the app** work on the entry you pick.
+
+Styles, all in the pencil's right-click menu: **Polish** (the default: fixes mistakes and smooths sentences), **Fix
+spelling and grammar only**, **Concise**, **Professional**, **Friendly**, **Plain language** and **Bullet points**.
+Clicking a style refines with it once; **Click and hotkey use** changes the default. To add your own styles, choose
+**Add or edit styles...**. It opens `machines/<HOST>.yaml` (adding an example `refine:` section if there is none):
+
+```yaml
+refine:
+  prompts:
+    my-voice: Rewrite in my voice. Short sentences, active verbs, no jargon.
+    email-reply:
+      name: Email reply
+      prompt: Turn my notes into a short, polite email reply. Keep every fact and date.
+```
+
+Save the file; the styles appear the next time you open the menu, no restart needed. An entry named like a built-in
+style (`polish`, `grammar`, `concise`, `professional`, `friendly`, `simple`, `bullets`) replaces that style's
+instructions.
+
+How it works, all on this PC:
+
+1. It presses Ctrl+C in the app to read the selection, then puts back what was on your clipboard.
+2. The gateway alias `refine.model` (`local-primary`, the 9B on the reference machine) rewrites the text. With the
+   style's instructions it gets fixed rules: keep the language; keep names, numbers, links, `[[page links]]`,
+   `#tags`, `((block references))` and markdown; never answer a question in the text, only rewrite it.
+3. The reply is checked. If it reads like an answer to you, grew or shrank far more than the style allows, or is empty,
+   your text stays as it was. The suggestion still goes into the history.
+4. It presses Ctrl+C once more. Only if the same text is still selected in the same window does it paste the new text
+   over it. If you clicked elsewhere or switched windows meanwhile, nothing changes and the new text goes to the
+   clipboard; the bubble says so.
+
+The log is `.run\dictation\refine-log.jsonl`, one line per refine: time, app, window title, style, model, the text
+before, the suggestion and what happened to it (replaced, rejected, copied, unchanged, cancelled). Unlike the voice
+typing log it holds your words; that is its job. It stays on this PC and is never trimmed. To forget entries, delete
+their lines or the file.
+
+Good to know:
+
+- **Right-click menus of other apps.** Windows has no shared right-click menu that a program can add to: Word, Logseq
+  and Notion each draw their own. Refine therefore lives on its own button, its hotkey and the button's menu.
+- **Formatting.** The new text is pasted as plain text and takes the formatting where it lands. Bold, italics or links
+  inside the selection are not kept. A selection with a picture or a table is refused, because pasting plain text
+  would delete them.
+- **Word.** Ctrl+Alt+R is Word's shortcut for the (R) sign; while voice typing runs, it refines instead. Choose another
+  **Refine hotkey** in the tray's Settings tab if you need it. Selected paragraph marks are kept.
+- **Logseq.** Select text inside the block you are editing (Ctrl+A selects the whole block). Selected blocks (Esc, then
+  Shift+click) are copied as a list and do not fit.
+- **Clipboard history.** Reading the selection uses the app's own copy, so the selected text shows up in Win+V history
+  if that is on. The new text and your restored clipboard stay out of it.
+- **Refused on purpose.** Terminals (Ctrl+C there could stop the running program), apps running as administrator
+  (Windows blocks simulated keys), and the whole-line copy that VS Code, Notepad++ and Visual Studio make when nothing
+  is selected. In VS Code, Cursor and JetBrains IDEs it copies with Ctrl+Insert, which cannot stop a program in their
+  terminal panel; still, do not refine text in a terminal panel, where the new text would land on the command line.
+- **Moving on.** If you switch to another app while the model works, it does not pull you back: the new text goes to
+  the clipboard instead.
+- **Limits.** Up to 10,000 characters at a time (`refine.max_chars`). Esc cancels while the model works; nothing is
+  replaced then.
+- **Settings.** The tray's Settings tab has a **Refine selected text** group: hotkey, default style, model and whether
+  the pencil button shows. Every setting is under `refine:` in `machines/_defaults.yaml`. **Hide this button** in the
+  pencil's menu keeps only the hotkey; **Show the refine button** in the mic button's menu brings it back.
+
 ## Working with the departments
 
 There are six department agents: `app-dev`, `testing`, `security`, `devops`, `code-review` and `docs`.

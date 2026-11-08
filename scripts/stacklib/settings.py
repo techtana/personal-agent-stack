@@ -17,8 +17,9 @@ from .yamledit import dump_scalar as _dump_scalar, set_key  # noqa: F401 - set_k
 
 CTX_CHOICES = ["8192", "16384", "32768", "65536"]
 from .dictation.cleanup import DEFAULT_PROMPT as CLEANUP_PROMPT  # noqa: E402
-from .dictation.hotkey import CHOICES as HOTKEY_CHOICES  # noqa: E402
+from .dictation.hotkey import CHOICES as HOTKEY_CHOICES, REFINE_CHOICES  # noqa: E402
 from .dictation.models import CHOICES as MODEL_CHOICES, LANGUAGES  # noqa: E402
+from .dictation.refine import BUILTIN as REFINE_STYLES  # noqa: E402
 
 
 @dataclass
@@ -92,6 +93,18 @@ SETTINGS = [
             "shorten, and the app adds the reply format (JSON). A reply much longer or shorter than the transcript is "
             "still refused, and the transcript is typed instead. Applies without restarting voice typing.",
             "dictation", advanced=True, default=CLEANUP_PROMPT),
+    Setting("refine", "hotkey", "Refine hotkey", "choice",
+            "Rewrites the selected text in any app with the default style. Esc cancels while the model works.",
+            "dictation", REFINE_CHOICES),
+    Setting("refine", "default", "Default refine style", "choice",
+            "What a click on the pencil button and the hotkey do. The button's right-click menu offers every style, "
+            "your own (refine.prompts) included.", "refine", [s.id for s in REFINE_STYLES]),
+    Setting("refine", "model", "Refine model", "choice",
+            "Private gateway alias that rewrites the text: local-primary (the main model) or local-small (quicker "
+            "where it is a smaller model).", "refine",
+            ["local-primary", "local-small"]),
+    Setting("refine", "button", "Show the refine button", "bool",
+            "The pencil button next to the mic; the hotkey works without it.", "dictation"),
     Setting("ollama_env", "OLLAMA_KEEP_ALIVE", "Keep models loaded for", "choice",
             "How long an idle chat model stays in memory, gateway requests included; -1 holds its VRAM until Ollama stops.", "ollama", ["5m", "30m", "1h", "4h", "-1"]),
     Setting("ollama_env", "OLLAMA_KV_CACHE_TYPE", "KV cache precision", "choice",
@@ -110,6 +123,7 @@ EFFECT_TEXT = {
     "comfyui": "start or stop ComfyUI and turn Open WebUI's image button on or off",
     "ollama": "update Ollama's environment and restart Ollama (interrupts running requests)",
     "dictation": "restart voice typing",
+    "refine": "nothing to restart (voice typing reads it at the next refine)",
 }
 
 
@@ -120,7 +134,7 @@ def setting_id(s: Setting) -> str:
 def effect_texts(todo: list[Setting]) -> list[str]:
     """What Apply will do for these changes, for the tray's line above the Apply button."""
     texts = {EFFECT_TEXT[s.effect] for s in todo}
-    if {s.key for s in todo if s.effect == "dictation"} <= LIVE_DICTATION_KEYS:
+    if {setting_id(s) for s in todo if s.effect == "dictation"} <= LIVE_DICTATION_IDS:
         texts.discard(EFFECT_TEXT["dictation"])
         if any(s.effect == "dictation" for s in todo):
             texts.add("update voice typing (no restart)")
@@ -147,6 +161,7 @@ def current_values(profile: dict) -> dict[str, object]:
         "services": profile["services"],
         "ollama_env": profile["ollama_env"],
         "dictation": profile.get("dictation") or {},
+        "refine": profile.get("refine") or {},
     }
     out: dict[str, object] = {}
     for s in SETTINGS:
@@ -217,23 +232,27 @@ def save(profile: dict, edits: dict[str, object]) -> list[Setting]:
     return todo
 
 
-LIVE_DICTATION_KEYS = {"button", "cleanup_prompt"}  # the running voice typing app takes these without a restart
+# The running voice typing app takes these without a restart: a button shown or hidden, or the cleanup prompt.
+LIVE_BUTTONS = {"dictation.button": ("dictation", "show", "hide", "Voice typing button"),
+                "refine.button": ("refine", "show_refine", "hide_refine", "Refine button")}
+LIVE_DICTATION_IDS = {*LIVE_BUTTONS, "dictation.cleanup_prompt"}
 
 
-def _update_dictation(profile: dict, keys: set[str], log) -> bool:
-    """Hand button and cleanup-prompt changes to the running voice typing app. True when nothing more is needed (it
-    took them, or it is not running and reads them when it starts); False when it must be restarted instead (an app
-    from before /reload existed answers 404)."""
+def _update_dictation(profile: dict, ids: set[str], log) -> bool:
+    """Hand button and cleanup-prompt changes (setting ids) to the running voice typing app. True when nothing more is
+    needed (it took them, or it is not running and reads them when it starts); False when it must be restarted
+    instead (an app from before /reload or the refine button existed answers 404)."""
     from .dictation import control
 
     port = int(profile["ports"]["dictation"])
     try:
-        if "button" in keys:
-            shown = bool(profile["dictation"].get("button"))
-            if not control.call(port, "show" if shown else "hide").get("ok"):
+        for sid in sorted(ids & set(LIVE_BUTTONS)):
+            section, show, hide, name = LIVE_BUTTONS[sid]
+            visible = bool((profile.get(section) or {}).get("button"))
+            if not control.call(port, show if visible else hide).get("ok"):
                 return False
-            log("Voice typing button " + ("shown" if shown else "hidden"))
-        if "cleanup_prompt" in keys:
+            log(f"{name} " + ("shown" if visible else "hidden"))
+        if "dictation.cleanup_prompt" in ids:
             if not control.call(port, "reload").get("ok"):
                 return False
             kind = "your own" if profile["dictation"].get("cleanup_prompt") else "the built-in"
@@ -285,10 +304,10 @@ def apply(old_profile: dict, edits: dict[str, object], log=print) -> dict:
             log("Restarting Open WebUI so the image button follows ComfyUI...")
             services.stop(profile, ["open_webui"])
             services.start(profile, ["open_webui"])
-    dictation_keys = {s.key for s in todo if s.effect == "dictation"}
-    if dictation_keys and dictation_keys <= LIVE_DICTATION_KEYS:
+    dictation_ids = {setting_id(s) for s in todo if s.effect == "dictation"}
+    if dictation_ids and dictation_ids <= LIVE_DICTATION_IDS:
         # Voice typing that is off reads them when it is turned on; a running app takes them without a restart.
-        if profile["services"].get("dictation") != "native" or _update_dictation(profile, dictation_keys, log):
+        if profile["services"].get("dictation") != "native" or _update_dictation(profile, dictation_ids, log):
             effects.discard("dictation")
     if "dictation" in effects:
         services.stop(old_profile, ["dictation"])

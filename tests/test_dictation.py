@@ -553,14 +553,14 @@ class CleanupPromptSetting(unittest.TestCase):
         p = {**self.p, "ports": {"dictation": port}, "dictation": {"cleanup_prompt": "Mine."}}
         logs: list[str] = []
         try:
-            self.assertTrue(settings._update_dictation(p, {"cleanup_prompt"}, logs.append))
+            self.assertTrue(settings._update_dictation(p, {"dictation.cleanup_prompt"}, logs.append))
             with mock.patch.object(control, "ACTIONS", ("toggle", "show", "hide")):  # an app from before /reload
-                self.assertFalse(settings._update_dictation(p, {"cleanup_prompt"}, logs.append))
+                self.assertFalse(settings._update_dictation(p, {"dictation.cleanup_prompt"}, logs.append))
         finally:
             server.stop()
         self.assertEqual(acted, ["reload"])
         self.assertEqual(logs, ["Voice typing uses your own cleanup prompt from the next dictation"])
-        self.assertTrue(settings._update_dictation(p, {"cleanup_prompt"}, logs.append))  # not running: read at start
+        self.assertTrue(settings._update_dictation(p, {"dictation.cleanup_prompt"}, logs.append))  # not running: read at start
         style = next(s for s in settings.SETTINGS if settings.setting_id(s) == "dictation.style")
         self.assertEqual(settings.effect_texts([self.s]), ["update voice typing (no restart)"])
         self.assertEqual(settings.effect_texts([self.s, style]), ["restart voice typing"])
