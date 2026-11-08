@@ -1,6 +1,6 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-08 (the installer makes an app apart from the repository; open item 32). Before that, the same day (the installer asks which features to install, with their load on this PC, and the tray's Features card; open item 30). Before that, 2026-11-08 (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+Updated: 2026-11-08 (voice typing history kept for dictation.keep_minutes; open item 35). Before that, the same day (the installer makes an app apart from the repository; open item 32). Before that, the same day (the installer asks which features to install, with their load on this PC, and the tray's Features card; open item 30). Before that, 2026-11-08 (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
@@ -571,6 +571,16 @@ once across a session restart.
    Verified: unit tests (tests/test_ollama_location.py and the full suite); on this PC, read-only, the status reads
    Installed with the override note and the installer's default is D:\ollama\models. Not run: the installer itself.
    This PC's profile still says ~\.ollama\models: rerun install.cmd (it now offers D:) or set the folder in Settings.
+35. Voice typing history (2026-11-08, branch claude/voice-typing-history-edd081). Each dictation that produced text
+   goes to `.run/dictation/voice-history.jsonl` (stacklib/dictation/voicelog.py, the refine log's store): app, window,
+   the transcript as heard, the text typed, status, seconds of speech. Entries expire after `dictation.keep_minutes`
+   (30; tray: Keep voice typing history for, applied through `POST /reload` without a restart) and are pruned at
+   start, before each entry and every minute, like the refine log. The mic menu's **Voice typing history...** opens
+   a window (history.VoiceHistoryWindow: heard vs typed, Copy, Type again in the app); Paste last text again and Copy
+   last text now read the newest kept entry instead of an in-memory list of 10, so they grey out on expiry.
+   Verified: unit tests (tests/test_voice_history.py, the hidden window included); `_remember`, `copy_last` and the
+   prune run in the voice typing venv against a stub app. Not verified: the live app, a real dictation, the window's
+   look. The live app runs the new code only after a restart from the main checkout (or the installed app).
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

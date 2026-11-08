@@ -1,6 +1,8 @@
-"""The refine history window: the entries the refine log still keeps (refine.keep_minutes), newest first, with the
-text before and after side by side (removed words struck through in red, added words underlined in green). Copy either version, or select the
-refined text in its app and click Revert to put the original back.
+"""The history windows. Refine history: the entries the refine log still keeps (refine.keep_minutes), newest first, with
+the text before and after side by side (removed words struck through in red, added words underlined in green). Copy
+either version, or select the refined text in its app and click Revert to put the original back. Voice typing history
+(VoiceHistoryWindow): what you dictated in the last dictation.keep_minutes, as Whisper heard it and as it was typed;
+copy either, or type it again into the app you came from.
 
 A normal window that takes the keyboard focus (unlike the buttons): Up and Down move through the list, Tab reaches the
 buttons, Esc closes. It reads the log again whenever it comes back to the front, so a revert shows up at once.
@@ -22,6 +24,7 @@ SELECT_BG, DEL_BG, INS_BG = "#0f6cbd", "#5c2b29", "#1e4620"
 STATUS = {"replaced": "replaced", "copied": "on clipboard", "rejected": "rejected", "unchanged": "no change",
           "cancelled": "cancelled", "failed": "failed", "skipped": "not replaced"}
 _TOKEN = re.compile(r"\s+|\w+|[^\w\s]")
+VOICE_STATUS = {"inserted": "typed", "copied": "on clipboard", "failed": "failed"}
 TICK_MS = 30_000   # how often an open window re-reads the log (entries expire after refine.keep_minutes)
 
 
@@ -54,17 +57,19 @@ def row_text(e: dict, reverted: set) -> str:
 
 
 class HistoryWindow:
-    _open: "HistoryWindow | None" = None
+    _open: "HistoryWindow | None" = None   # one window per class
+    TITLE = "Refine history"
 
     def __init__(self, master: tk.Misc, app) -> None:
-        old = HistoryWindow._open
+        cls = type(self)
+        old = cls._open
         if old is not None and old.alive():
             old.reload()
             old.win.deiconify()
             old.win.lift()
             old.win.focus_force()
             return
-        HistoryWindow._open = self
+        cls._open = self
         self.app = app
         self.entries: list[dict] = []
         self.mtime = 0.0
@@ -72,7 +77,7 @@ class HistoryWindow:
         pad = int(10 * scale)
 
         self.win = tk.Toplevel(master, bg=BG)
-        self.win.title("Refine history")
+        self.win.title(self.TITLE)
         sw, sh = self.win.winfo_screenwidth(), self.win.winfo_screenheight()
         w, h = min(int(1040 * scale), sw - 40), min(int(660 * scale), sh - 80)
         self.win.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 3}")
@@ -82,10 +87,8 @@ class HistoryWindow:
 
         top = tk.Frame(self.win, bg=BG, padx=pad, pady=pad)
         top.pack(fill="both", expand=True)
-        tk.Label(top, text="Refine history", bg=BG, fg=FG, font=(FONT, 11, "bold"), anchor="w").pack(fill="x")
-        tk.Label(top, text=f"Suggestions are kept for {app.refine_keep_text()} in {app.refine_log.path}, then deleted. "
-                           "To put an original back, select the refined text in its app, pick the entry here and "
-                           "click Revert in the app.",
+        tk.Label(top, text=self.TITLE, bg=BG, fg=FG, font=(FONT, 11, "bold"), anchor="w").pack(fill="x")
+        tk.Label(top, text=self.intro(),
                  bg=BG, fg=MUTED, font=(FONT, 9), anchor="w", justify="left", wraplength=w - 3 * pad).pack(fill="x", pady=(2, 8))
 
         box = tk.Frame(top, bg=BG)
@@ -119,9 +122,7 @@ class HistoryWindow:
         self.detail.pack(fill="x", pady=(6, 0))
         buttons = tk.Frame(top, bg=BG)
         buttons.pack(fill="x", pady=(8, 0))
-        self.copy_before = self._button(buttons, "Copy original", lambda: self._copy("before"))
-        self.copy_after = self._button(buttons, "Copy suggestion", lambda: self._copy("after"))
-        self.revert_button = self._button(buttons, "Revert in the app", self._revert)
+        self.make_buttons(buttons)
         self._button(buttons, "Open log folder", self._open_folder)
         self._button(buttons, "Close", self.close, side="right")
 
@@ -135,6 +136,39 @@ class HistoryWindow:
         self.win.focus_force()
         self.list.focus_set()
         self.win.after(TICK_MS, self._tick)
+
+    # ---------------------------------------------------------------- what differs between the two windows
+
+    def log(self):
+        return self.app.refine_log
+
+    def intro(self) -> str:
+        return (f"Suggestions are kept for {self.app.refine_keep_text()} in {self.log().path}, then deleted. To put an "
+                "original back, select the refined text in its app, pick the entry here and click Revert in the app.")
+
+    def empty_text(self) -> str:
+        return (f"  Nothing refined in the last {self.app.refine_keep_text()}. Select text in any app and click the "
+                "refine button.")
+
+    def row(self, e: dict, entries: list[dict]) -> str:
+        return row_text(e, self.log().reverted_ids(entries))
+
+    def make_buttons(self, frame) -> None:
+        self.copy_before = self._button(frame, "Copy original", lambda: self._copy("before"))
+        self.copy_after = self._button(frame, "Copy suggestion", lambda: self._copy("after"))
+        self.revert_button = self._button(frame, "Revert in the app", self._revert)
+
+    def update_buttons(self, e: dict | None) -> None:
+        can_revert = bool(e and e.get("kind") == "refine" and e.get("status") in ("replaced", "copied"))
+        self.revert_button.configure(state="normal" if can_revert else "disabled")
+
+    def labels(self, e: dict) -> tuple[str, str]:
+        if e.get("kind") == "revert":
+            return "Selected (refined text)", "Put back (original)"
+        return "Before (your text)", "After (suggestion)" if e.get("status") != "replaced" else "After (pasted)"
+
+    def copied_text(self, field: str) -> str:
+        return ("Original" if field == "before" else "Suggestion") + " copied to the clipboard."
 
     # ---------------------------------------------------------------- widgets
 
@@ -170,7 +204,7 @@ class HistoryWindow:
         self.win.after(TICK_MS, self._tick)
 
     def reload(self, force: bool = False) -> None:
-        path = self.app.refine_log.path
+        path = self.log().path
         try:
             mtime = path.stat().st_mtime
         except OSError:
@@ -179,17 +213,15 @@ class HistoryWindow:
             return
         self.mtime = mtime
         keep = self._selected()
-        fresh = self.app.refine_log.entries(limit=1000)
+        fresh = self.log().entries(limit=1000)
         if force and self.entries and [e.get("id") for e in fresh] == [e.get("id") for e in self.entries]:
             return  # nothing expired or arrived: leave the list and the selection as they are
         self.entries = fresh
-        reverted = self.app.refine_log.reverted_ids(self.entries)
         self.list.delete(0, "end")
         for e in self.entries:
-            self.list.insert("end", row_text(e, reverted))
+            self.list.insert("end", self.row(e, self.entries))
         if not self.entries:
-            self.list.insert("end", f"  Nothing refined in the last {self.app.refine_keep_text()}. Select text in "
-                                    "any app and click the refine button.")
+            self.list.insert("end", self.empty_text())
         index = next((i for i, e in enumerate(self.entries) if keep and e.get("id") == keep.get("id")), 0)
         if self.entries:
             self.list.selection_set(index)
@@ -208,15 +240,13 @@ class HistoryWindow:
         state = "normal" if e else "disabled"
         for b in (self.copy_before, self.copy_after):
             b.configure(state=state)
-        can_revert = bool(e and e.get("kind") == "refine" and e.get("status") in ("replaced", "copied"))
-        self.revert_button.configure(state="normal" if can_revert else "disabled")
+        self.update_buttons(e)
         if not e:
             self.detail.configure(text="")
             return
-        revert = e.get("kind") == "revert"
-        self.before_label.configure(text="Selected (refined text)" if revert else "Before (your text)")
-        self.after_label.configure(text="Put back (original)" if revert else
-                                   ("After (suggestion)" if e.get("status") != "replaced" else "After (pasted)"))
+        before, after = self.labels(e)
+        self.before_label.configure(text=before)
+        self.after_label.configure(text=after)
         left, right = diff_spans(e.get("before") or "", e.get("after") or "")
         for widget, spans in ((self.before, left), (self.after, right)):
             for text, changed in spans:
@@ -225,6 +255,10 @@ class HistoryWindow:
         if e.get("model"):
             bits.append(f"{e['model']}" + (f" ({e['served']})" if e.get("served") and e["served"] != e["model"] else "")
                         + (f", {e['seconds']} s" if e.get("seconds") else ""))
+        elif e.get("kind") == "dictation":
+            bits.append(f"{e.get('seconds') or 0} s of speech" + (f", {e['style']} cleanup" if e.get("mode") == "polish"
+                                                                   and e.get("style") else ", typed as you spoke"
+                                                                   if e.get("mode") == "live" else ""))
         if e.get("note"):
             bits.append(str(e["note"]))
         self.detail.configure(text="  ·  ".join(b for b in bits if b))
@@ -235,7 +269,7 @@ class HistoryWindow:
         e = self._selected()
         if e and e.get(field):
             self.app.copy_text(str(e[field]).strip())
-            self.detail.configure(text=("Original" if field == "before" else "Suggestion") + " copied to the clipboard.")
+            self.detail.configure(text=self.copied_text(field))
 
     def _revert(self) -> None:
         e = self._selected()
@@ -243,7 +277,7 @@ class HistoryWindow:
             self.app.refine_revert(e.get("id") or "")
 
     def _open_folder(self) -> None:
-        path: Path = self.app.refine_log.path
+        path: Path = self.log().path
         try:
             if os.name == "nt":
                 if path.exists():
@@ -255,8 +289,56 @@ class HistoryWindow:
             self.detail.configure(text=f"Could not open the folder: {e}")
 
     def close(self) -> None:
-        HistoryWindow._open = None
+        type(self)._open = None
         try:
             self.win.destroy()
         except tk.TclError:
             pass
+
+
+def voice_row_text(e: dict) -> str:
+    when = str(e.get("time") or "")[5:16].replace("T", " ")
+    app = (e.get("app") or "").removesuffix(".exe")
+    status = VOICE_STATUS.get(e.get("status"), e.get("status") or "")
+    words = " ".join(str(e.get("after") or e.get("before") or "").split())
+    return f"{when}   {app[:12]:<12}  {status:<14}  {words[:90]}"
+
+
+class VoiceHistoryWindow(HistoryWindow):
+    """What you dictated in the last dictation.keep_minutes: the transcript as heard next to the text typed (the
+    cleanup's changes marked), with Copy and Type again."""
+    _open: "VoiceHistoryWindow | None" = None
+    TITLE = "Voice typing history"
+
+    def log(self):
+        return self.app.voice_log
+
+    def intro(self) -> str:
+        return (f"What you dictated is kept for {self.app.voice_keep_text()} in {self.log().path}, then deleted. "
+                "Type again puts the typed text into the app you were in before this window.")
+
+    def empty_text(self) -> str:
+        return f"  Nothing dictated in the last {self.app.voice_keep_text()}. Click the mic or press its hotkey."
+
+    def row(self, e: dict, entries: list[dict]) -> str:
+        return voice_row_text(e)
+
+    def make_buttons(self, frame) -> None:
+        self.copy_before = self._button(frame, "Copy transcript", lambda: self._copy("before"))
+        self.copy_after = self._button(frame, "Copy typed text", lambda: self._copy("after"))
+        self.again_button = self._button(frame, "Type again in the app", self._again)
+
+    def update_buttons(self, e: dict | None) -> None:
+        self.again_button.configure(state="normal" if e and e.get("after") else "disabled")
+
+    def labels(self, e: dict) -> tuple[str, str]:
+        return "Heard (Whisper)", "Typed" if e.get("status") == "inserted" else "Text (not typed)"
+
+    def copied_text(self, field: str) -> str:
+        return ("Transcript" if field == "before" else "Typed text") + " copied to the clipboard."
+
+    def _again(self) -> None:
+        e = self._selected()
+        if e and e.get("after"):
+            self.app.paste_text(str(e["after"]))
+            self.detail.configure(text="Typing it into the app you came from.")

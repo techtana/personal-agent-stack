@@ -241,7 +241,15 @@ Good to know:
   program, so their text goes to the clipboard too. In live mode with the hotkey held down, the phrases are typed when
   you let go (keys still held would turn Ctrl+V into Ctrl+Alt+V).
 - **Privacy.** The microphone is open only while the button is red (Windows shows its microphone icon in the taskbar
-  then). Audio stays in memory and is never saved; the log keeps lengths and timings, not words.
+  then). Audio stays in memory and is never saved; the app log keeps lengths and timings, not words. Your words
+  are kept only in the voice typing history, for 30 minutes (below).
+- **History.** **Voice typing history...** in the button's right-click menu lists what you dictated in the last
+  30 minutes, newest first: what Whisper heard next to what was typed, with the cleanup's changes marked. **Copy
+  transcript**, **Copy typed text**, or **Type again in the app** to put it into the window you were in. **Paste last
+  text again** and **Copy last text** in the same menu use the newest entry. The file is
+  `.run\dictation\voice-history.jsonl`; an entry is deleted 30 minutes after it was made (`dictation.keep_minutes`,
+  or **Keep voice typing history for** in the tray's Settings tab, which applies without a restart). The app checks
+  once a minute, and the file goes with its last entry. Delete the file to forget everything at once.
 - **Names and jargon.** Add words Whisper should expect to `dictation.vocabulary` in `machines/<HOST>.yaml`, for
   example `vocabulary: 'Logseq, LiteLLM, Ollama'`. In a test, "Logseq" came out as "Logsake" without it.
 - **Language.** It is detected from your first phrase. If short phrases come out in the wrong language, set one:
