@@ -1,6 +1,6 @@
 ---
 name: claude-security-audit
-description: Audit this machine's Claude Code and Claude Desktop setup for confidentiality and safety, and remove the owner's identity from what Claude writes. Checks installed Claude Code versions against OSV advisories and the changelog; telemetry, feedback uploads and connectors; transcript retention; permission and secret-file deny rules; MCP servers, plugins and hooks; drift since the last audit; new settings and environment variables in Claude Code's docs; and the owner's email, name, user name, GitHub account name or API contact address in repositories, CLAUDE.md, memory, skills and scheduled tasks, which it replaces with placeholders. Use it for the weekly scheduled audit, and whenever the owner asks whether their Claude setup is private or safe, which new privacy or security settings exist, whether Claude Code needs an update, or how to find or remove their email, name, user name or GitHub account name from files, scripts, memory or commits, even if they never say "audit".
+description: Audit this machine's Claude Code and Claude Desktop setup for confidentiality and safety, and remove the owner's identity from what Claude writes. Checks installed Claude Code versions against OSV advisories and the changelog; telemetry, feedback uploads and connectors; transcript retention; permission, secret-file and blocked-site deny rules; protective DNS; MCP servers, plugins and hooks; drift since the last audit; new settings and environment variables in Claude Code's docs; and the owner's email, name, user name, GitHub account name or API contact address in repositories, CLAUDE.md, memory, skills and scheduled tasks, which it replaces with placeholders. Use it for the weekly scheduled audit, and whenever the owner asks whether their Claude setup is private or safe, which new privacy or security settings exist, whether Claude Code needs an update, or how to find or remove their email, name, user name or GitHub account name from files, scripts, memory or commits, even if they never say "audit".
 ---
 
 # Claude security and confidentiality audit
@@ -28,7 +28,9 @@ unless you pass `--repo`.
    and mention it.
 5. **Say what this cannot do.** It doesn't stop Claude Code or Claude Desktop from sending prompts, files and account
    details to Anthropic. Only managed settings, the sandbox (WSL2 on Windows) or the local-only profile B enforce
-   anything.
+   anything. The web-filter checks (`WEB-*`) only report too: which sites on the stack's blocked list Claude Code's
+   WebFetch can still reach, whether this PC uses a protective DNS resolver, and that Claude Desktop's web search and
+   fetch run on Anthropic's servers, where nothing on this PC can filter them.
 
 ## Interactive run
 
@@ -121,6 +123,9 @@ personal-agent-stack repository. Follow the interactive steps, except:
   - `identity.local.json`: `{"emails": [...], "names": [...], "logins": [...]}`, extra identifiers to search for. The script never
     writes this file.
   - `config.json`: `{"repos": [...], "keep": [globs]}`.
+
+  personal-agent-stack writes `blocked-sites.txt` there (one domain per line, `#` for comments; a domain covers its
+  subdomains) for the WEB-BLOCKLIST-RULES check. Without it that check is skipped with an info line.
 - **First run**: drift and docs changes start from the second run; the first records the baseline.
 
 ## Reference files

@@ -43,6 +43,7 @@ class Setting:
     # saves '', so the built-in text stays in the code and later improvements to it still apply.
     default: str = ""
     show_code: bool = True  # "search" settings: the picker shows each value's code beside its name (languages)
+    lines: int = 12         # "text" settings: the box's height in lines
 
 
 SETTINGS = [
@@ -167,6 +168,36 @@ SETTINGS = [
             "fp32: the full model (326 MB). int8: smaller (92 MB) and as fast on this kind of CPU. off: Windows voices "
             "only. A change downloads the new weights at the next reading.", "read_aloud", list(KOKORO_CHOICES),
             advanced=True),
+    Setting("web_filter", "enabled", "Block unsafe sites", "bool",
+            "Keeps Open WebUI's web search and page fetches away from the sites below: results from them are dropped "
+            "and their pages are not opened. Claude Desktop and Claude Code are outside the stack; the Claude security "
+            "audit reports what covers them.", "web_filter"),
+    Setting("web_filter", "block", "Your blocked sites", "text",
+            "One site per line (a site covers its subdomains; # starts a comment). They come first, so they are "
+            "always in both of Open WebUI's filters.", "web_filter", lines=5),
+    Setting("web_filter", "allow", "Never block", "text",
+            "Sites a list names that you still want, one per line. A site whose parent domain is blocked stays "
+            "blocked: Open WebUI has no exceptions, so unblock the parent instead.", "web_filter", lines=3),
+    Setting("web_filter", "exfiltration", "Request catchers and tunnels", "bool",
+            "Services that log every request sent to them (webhook.site, ngrok, interact.sh...). A page with hidden "
+            "instructions can tell a model to send your data to one; this list ships with the stack.", "web_filter"),
+    Setting("web_filter", "data_brokers", "People-search and data broker sites", "bool",
+            "Sites that collect and sell personal data (Spokeo, Whitepages...), so models do not gather it from "
+            "search results; ships with the stack.", "web_filter"),
+    Setting("web_filter", "phishing", "Phishing sites (Phishing Army)", "bool",
+            "Pages that copy a sign-in or payment page; downloaded from phishing.army and refreshed daily.",
+            "web_filter"),
+    Setting("web_filter", "threats", "Malware and scam sites (Hagezi, ~190,000)", "bool",
+            "Downloaded from Hagezi. It is larger than the web search filter's limit below, so only its first sites "
+            "fit after the other lists. Protective DNS (Quad9, Cloudflare 1.1.1.2) covers all of it, for every app.",
+            "web_filter"),
+    Setting("web_filter", "max_sites", "Most sites in the web search filter", "choice",
+            "Open WebUI compares every search result with every site in turn: about 0.2 s per 10,000 sites per "
+            "search on the reference PC. Your sites and the shipped lists come first.", "web_filter",
+            ["10000", "25000", "50000", "100000", "200000"], advanced=True),
+    Setting("web_filter", "refresh_hours", "Download the lists again every (hours)", "choice",
+            "A failed download keeps the last copy and is tried again an hour later.", "web_filter",
+            ["6", "12", "24", "72", "168"], advanced=True),
     Setting("ollama_env", "OLLAMA_KEEP_ALIVE", "Keep models loaded for", "choice",
             "How long an idle chat model stays in memory, gateway requests included; -1 holds its VRAM until Ollama stops.", "ollama", ["5m", "30m", "1h", "4h", "-1"]),
     Setting("ollama_env", "OLLAMA_KV_CACHE_TYPE", "KV cache precision", "choice",
@@ -187,6 +218,7 @@ EFFECT_TEXT = {
     "dictation": "restart voice typing",
     "refine": "nothing to restart (voice typing reads it at the next refine)",
     "read_aloud": "nothing to restart (voice typing reads it at the next reading)",
+    "web_filter": "update the blocked sites (Open WebUI restarts when its page-fetch list changes)",
 }
 
 
@@ -244,6 +276,7 @@ def current_values(profile: dict) -> dict[str, object]:
         "dictation": profile.get("dictation") or {},
         "refine": profile.get("refine") or {},
         "read_aloud": profile.get("read_aloud") or {},
+        "web_filter": profile.get("web_filter") or {},
     }
     out: dict[str, object] = {}
     for s in SETTINGS:
@@ -281,6 +314,8 @@ def _to_file_value(s: Setting, ui_value: object) -> object:
     if s.section == "dictation" and s.key.endswith("_s"):
         return float(ui_value)
     if s.section in ("refine", "dictation") and s.key == "keep_minutes":
+        return int(float(ui_value))
+    if s.section == "web_filter" and s.key in ("max_sites", "refresh_hours"):
         return int(float(ui_value))
     if s.section == "read_aloud" and s.key == "speed":
         return float(ui_value)
@@ -411,6 +446,18 @@ def apply(old_profile: dict, edits: dict[str, object], log=print) -> dict:
             log(f"Voice typing did not start: {problems['dictation']}" if problems.get("dictation") else "Voice typing restarted")
         else:
             log("Voice typing stopped")
+    if "web_filter" in effects:
+        from . import webfilter
+
+        before = webfilter.openwebui_env(old_profile).get(webfilter.FETCH_ENV, "")
+        for r in webfilter.maintain(profile):
+            log(r.text)
+        log(f"Blocked sites: {webfilter.summary(profile)}")
+        after = webfilter.openwebui_env(profile).get(webfilter.FETCH_ENV, "")
+        if before != after and "open_webui" not in effects and profile["services"].get("open_webui") == "native":
+            log("Restarting Open WebUI so its page fetches use the new list...")
+            services.stop(profile, ["open_webui"])
+            services.start(profile, ["open_webui"])
     if "open_webui" in effects:
         if profile["services"].get("open_webui") == "native":
             services.start(profile, ["open_webui"])

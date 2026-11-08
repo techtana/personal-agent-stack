@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,6 +52,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("chat", "Chat in the browser (Open WebUI)", "Open WebUI",
             "Chat with the department models at http://127.0.0.1:3000, with documents, the agents' tools and the "
             "image button.", services=("open_webui",)),
+    Feature("web_filter", "Blocked sites (web filter)", "blocked sites",
+            "Keeps Open WebUI's web search and page fetches away from sites that catch requests, sell personal data "
+            "or phish. Your own sites go in the tray's Settings."),
     Feature("tracing", "Trace viewer (Phoenix)", "Phoenix",
             "Shows the steps of each request, for debugging. The tray's Usage tab works without it.",
             services=("phoenix",)),
@@ -87,6 +91,7 @@ SWITCHES = {
     "images": ("services", "comfyui", "native", "off"),
     "voice_typing": ("services", "dictation", "native", "off"),
     "read_aloud": ("read_aloud", "enabled", True, False),
+    "web_filter": ("web_filter", "enabled", True, False),
 }
 
 
@@ -497,6 +502,19 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
             basis=f"Measured on the reference PC's 6-core Ryzen 5 5500: {ram:.1f} GB of RAM with the {name} weights, "
                   "a short sentence ready in 0.8 s, 17 s of speech in 5 s. Faster or slower CPUs scale it." + zh_note,
             note="Windows' own voices (any language with a Windows voice installed) work too, at once.")
+    if fid == "web_filter":
+        from . import webfilter
+
+        per_search = webfilter.max_sites(profile) / 10000 * 0.2
+        return Estimate(
+            disk_gb=fp["disk_gb"], ram_gb=fp["ram_gb"],
+            gpu="none",
+            cpu=f"none of its own; each web search in Open WebUI takes up to about {per_search:.1f} s longer",
+            held="nothing runs: Open WebUI checks the lists, and the tray downloads them again once a day",
+            basis="Measured on the reference PC: Open WebUI 0.12.3 compares each search result with every blocked site "
+                  "in turn, about 0.5 s per 100,000 sites per result.",
+            note="Claude Desktop and Claude Code are outside the stack: the Claude security audit reports what covers "
+                 "them, and protective DNS (Quad9, Cloudflare for Families) covers every app.")
     if fid == "openclaw":
         return Estimate(
             disk_gb=fp["disk_gb"], ram_gb=fp["ram_gb"], cpu_threads=0.3,
@@ -972,7 +990,31 @@ def _status_openclaw(profile: dict, openclaw=None, **_) -> Status:
     return Status(True, False, s.state, s.detail, s.level)
 
 
+def _status_web_filter(profile: dict, **_) -> Status:
+    from . import webfilter
+
+    on = switch_on("web_filter", profile)
+    downloaded = [lst for lst in webfilter.chosen(profile) if lst.url]
+    installed = all(webfilter.cached(profile, lst.id) for lst in downloaded)
+    if not on:
+        return _switch(installed, False, "The web filter", "", "Block unsafe sites")
+    detail = webfilter.summary(profile)
+    if (profile.get("services") or {}).get("open_webui") != "native":
+        detail += " Open WebUI is off, so nothing in the stack reads the web now."
+    if not installed:
+        return Status(False, True, "Lists missing", detail + " Run the installer again, or `uv run scripts/stack.py "
+                                                             "web-filter refresh`.", "warn")
+    old = [lst.title for lst in downloaded
+           if time.time() - float(webfilter.meta(profile, lst.id).get("fetched_at") or 0)
+           > 3 * webfilter.refresh_hours(profile) * 3600]
+    if old:
+        return Status(True, True, "Lists out of date", f"{', '.join(old)} not updated for a while (the tray tries "
+                                                       f"again every hour). {detail}", "warn")
+    return Status(True, True, "Installed", detail)
+
+
 _STATUS = {"models": _status_models, "gateway": _status_gateway, "chat": _status_chat, "tracing": _status_tracing,
+           "web_filter": _status_web_filter,
            "images": _status_images, "voice_typing": _status_voice_typing, "read_aloud": _status_read_aloud,
            "recordings": _status_recordings,
            "openclaw": _status_openclaw}
@@ -1020,6 +1062,7 @@ def service_installed(svc: str, status: dict[str, Status]) -> bool | None:
 
 RECOMMENDED = {
     "chat": lambda hw: True,
+    "web_filter": lambda hw: True,                    # a few MB of lists; nothing runs
     "tracing": lambda hw: not hw.smart_app_control,   # Smart App Control blocked Phoenix on the reference PC
     "images": lambda hw: hw.vram_gb >= 10,            # Z-Image-Turbo int8 peaks at 10.5 GB; smaller cards offload
     "voice_typing": lambda hw: False,                 # holds a hotkey and 1.2 GB of GPU memory: only when asked for

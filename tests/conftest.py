@@ -25,3 +25,17 @@ def _no_live_ollama(monkeypatch):
 
     monkeypatch.setattr(features, "ollama_models", lambda profile: None)
     monkeypatch.setattr(features, "app_model_store", lambda: "")
+
+
+@pytest.fixture(autouse=True)
+def _no_live_web_filter(monkeypatch, tmp_path):
+    """The web filter downloads lists, reads this PC's DNS servers and writes the Claude security audit's list under
+    %LOCALAPPDATA%. Keep tests off all three: no network, no DNS servers, and the audit's folder in a temp dir."""
+    from stacklib import webfilter
+
+    def no_download(url, timeout=60):
+        raise OSError(f"tests do not download ({url})")
+
+    monkeypatch.setattr(webfilter, "download", no_download)
+    monkeypatch.setattr(webfilter, "dns_servers", lambda: [])
+    monkeypatch.setattr(webfilter, "audit_dir", lambda: tmp_path / "claude-security-audit")
