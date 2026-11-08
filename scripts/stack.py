@@ -36,7 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stacklib import REPO, die, info, warn, which  # noqa: E402
-from stacklib import agents_build, claude_env, litellm_build, ollama, services, smoke, tasks, traces, winget_build  # noqa: E402
+from stacklib import agents_build, claude_env, litellm_build, ollama, services, smoke, tasks, traces, usage_log, winget_build  # noqa: E402
 from stacklib import profile as prof  # noqa: E402
 
 
@@ -93,6 +93,9 @@ def cmd_setup(a):
     store = p["ollama_env"].get("OLLAMA_MODELS") or p["model_store"] or str(Path.home() / ".ollama" / "models")
     if not install.drive_present(store):
         die(f"the models folder {store} is on a drive that is not connected; run `uv run scripts/stack.py install` to choose another")
+    behind = install.checkout_behind()
+    if behind:
+        warn(behind)
     plan = install.Plan(model_store=store, pull=not a.no_pull, restart_ollama=not a.no_restart)
     if not install.run(plan):
         die("setup finished with problems (see the failed steps above)")
@@ -130,6 +133,11 @@ def install_in_terminal():
         prof.write_profile()
         p = prof.resolve_profile()
         d = install.defaults(p)
+        behind = install.checkout_behind()
+        if behind:
+            warn(behind)
+            if not input("Install this older version anyway? [y/N]: ").strip().lower().startswith("y"):
+                return
         if d["model_note"]:
             warn(d["model_note"])
 
@@ -233,6 +241,8 @@ def cmd_pull(a):
 
 def cmd_up(a):
     p = prof.resolve_profile()
+    usage_log.configure(p)
+    usage_log.sync_switch(p)
     svcs = a.services or None
     services.start(p, svcs)
     names = svcs or [s for s in services.SERVICE_ORDER if s in services.commands(p)]
@@ -279,6 +289,7 @@ def cmd_tasks(a):
 
 def cmd_bench(a):
     p = prof.resolve_profile()
+    usage_log.configure(p)
     base = f"http://127.0.0.1:{p['ports']['ollama']}"
     m = p["models"]
     for model in a.model or [m.get("primary")]:
@@ -312,6 +323,36 @@ def cmd_claude_env(a):
 def cmd_why_routed(a):
     rows = traces.litellm_rows(days=a.days)
     print(traces.format_routed(rows[-a.last :]))
+
+
+def cmd_usage(a):
+    """The tray's Usage tab as text: every model the stack ran, gateway or not."""
+    from stacklib import usage
+
+    p = prof.resolve_profile()
+    data = usage.summarize(a.days, {"model": "served", "alias": "alias", "client": "client"}[a.by])
+    first = {"model": "Model", "alias": "Alias or service", "client": "Client"}[a.by]
+    print(f"{first:<36}{'Requests':>9}{'Errors':>7}{'Input':>11}{'Output':>11}{'Avg time':>9}{'Speed':>12}"
+          f"{'Overall':>12}{'Cost':>9}")
+
+    def line(m: dict, indent: str) -> str:
+        c = usage.cells(m)
+        where = "" if m["location"] == "local" else f"  ({usage.LOCATION_NAMES[m['location']]})"
+        cost = f"${m['cost']:.4f}" if m["cost"] else "-"
+        return (f"{(indent + m['model'] + where)[:35]:<36}{m['requests']:>9,}{m['errors'] or '':>7}{c['input']:>11}"
+                f"{c['output']:>11}{m['avg_latency_ms'] / 1000:>8.1f}s{c['speed']:>12}{c['overall']:>12}{cost:>9}")
+
+    for m in data["models"]:
+        print(line(m, ""))
+        if a.clients:
+            for c in m["clients"]:
+                print(line(c, "    "))
+    if not data["models"]:
+        print("(no model was used in this period)")
+    print()
+    print(usage.breakdown_text(data["totals"], "All models"))
+    for note in usage.uncounted(p):
+        print(f"Not counted: {note}.")
 
 
 def cmd_tray(a):
@@ -373,8 +414,26 @@ def cmd_media(a):
         info(media.install_comfyui(p, info))
         info(media.install_models(p, p["media"].get("image_workflow") or "z_image_turbo", lambda d=None, f=None: info(d) if d else None))
     if a.action in ("install", "provision"):
-        keys = media.provision_openwebui(media.openwebui_db(p), media.image_settings(p))
-        info(f"Open WebUI: {len(keys)} settings changed" + ("; restart it (`stack.py down open_webui` then `up open_webui`)" if keys else ""))
+        # Images through ComfyUI, document embeddings through the gateway, and the chat box's microphone through voice
+        # typing's Whisper (all counted in the tray's Usage tab). One transaction, after one backup.
+        embed = services.openwebui_embedding_settings(p)
+        if not embed and p["models"].get("embed"):
+            warn("LITELLM_MASTER_KEY is empty: Open WebUI's document embeddings stay on Ollama, outside the Usage tab")
+        stt = {}
+        if p["services"].get("dictation") == "native":
+            from stacklib import dictation
+
+            try:  # voice typing's own key for Open WebUI's requests, added to .env the first time
+                stt = services.openwebui_stt_settings(p, dictation.ensure_api_key())
+            except OSError as e:
+                warn(f"could not add {dictation.KEY_NAME} to .env ({e}); Open WebUI's microphone stays on its own "
+                     "Whisper, outside the Usage tab")
+        keys = media.provision_openwebui(media.openwebui_db(p), {**embed, **stt, **media.image_settings(p)})
+        # Open WebUI reads its speech-to-text rows on every request; the embedding function needs a restart.
+        restart = [k for k in keys if not k.startswith("audio.stt.")]
+        info(f"Open WebUI: {len(keys)} settings changed" + (
+            "; restart it (`stack.py down open_webui` then `up open_webui`)" if restart
+            else "; its microphone uses voice typing's Whisper from the next recording" if keys else ""))
     if a.action == "gpu":
         info(media.gpu_mode(p, a.mode))
 
@@ -433,6 +492,10 @@ def cmd_whisper(a):
     from stacklib import whisper
 
     p = prof.resolve_profile()
+    if a.action in ("install", "register") and (REPO / ".git").is_file():
+        warn("this checkout is a git worktree: the recordings server would write its usage records into this "
+             "worktree's traces/usage, which the tray in the main checkout does not read. Run this from the main "
+             "checkout to count recordings in the Usage tab.")
     if a.action == "install":
         info(whisper.install(p, info))
     if a.action in ("install", "register"):
@@ -477,9 +540,12 @@ def main(argv=None):
     s.add_argument("--media-only", action="store_true", help="only the media checks"); s.set_defaults(f=cmd_smoke)
     s = sub.add_parser("claude-env"); s.add_argument("--shell", choices=["powershell", "bash"], default="bash"); s.set_defaults(f=cmd_claude_env)
     s = sub.add_parser("why-routed"); s.add_argument("--last", type=int, default=10); s.add_argument("--days", type=int, default=7); s.set_defaults(f=cmd_why_routed)
+    s = sub.add_parser("usage", help="every model the stack ran (gateway, Whisper, ComfyUI, direct Ollama): the tray's Usage tab as text")
+    s.add_argument("--days", type=int, default=7); s.add_argument("--by", choices=["model", "alias", "client"], default="model")
+    s.add_argument("--clients", action="store_true", help="also list each row's clients (aliases with --by client)"); s.set_defaults(f=cmd_usage)
     s = sub.add_parser("skills-sync", help="copy new or changed personal skills into skills/ (rules: skills/sync.yaml)")
     s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_skills_sync)
-    s = sub.add_parser("media", help="ComfyUI and media models under media.root: check, install, provision, gpu chat|media")
+    s = sub.add_parser("media", help="ComfyUI and media models under media.root: check, install, provision (Open WebUI's image, embedding and microphone settings), gpu chat|media")
     s.add_argument("action", choices=["check", "install", "provision", "gpu"]); s.add_argument("mode", nargs="?", choices=["chat", "media"])
     s.set_defaults(f=cmd_media)
     s = sub.add_parser("dictate", help="voice typing in any app: install, run, start/stop, status, transcribe a WAV")

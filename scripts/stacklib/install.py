@@ -140,6 +140,37 @@ def current_tool_dir() -> str:
     return str(d) if d else ""
 
 
+def _git(*args: str, timeout: float = 10) -> str | None:
+    """Output of a git command in the repository, or None when git is missing, fails or times out."""
+    git = which("git")
+    if not git:
+        return None
+    try:
+        r = subprocess.run([git, "-C", str(REPO), *args], capture_output=True, text=True, timeout=timeout,
+                           creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def checkout_behind(fetch: bool = True) -> str:
+    """A warning when this checkout lacks commits of origin's default branch, else "".
+
+    An old checkout installs an old stack: on 2026-11-07 a reinstall from a checkout 10 commits behind origin/main
+    had no voice typing step and no Start menu entry, with nothing to say why."""
+    if _git("rev-parse", "--is-inside-work-tree") != "true":
+        return ""
+    ref = (_git("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD") or "origin/main")
+    fetched = not fetch or _git("fetch", "--quiet", "origin", ref.split("/", 1)[1], timeout=20) is not None
+    count = _git("rev-list", "--count", f"HEAD..{ref}")
+    if not count or not count.isdigit() or int(count) == 0:
+        return ""
+    n = int(count)
+    stale = "" if fetched else " (as of the last fetch; GitHub could not be reached)"
+    return (f"This folder is {n} commit{'s' if n != 1 else ''} behind {ref}{stale}, so setup would install an older "
+            f"stack and miss newer steps. Close the installer, run `git pull` in {REPO}, then start install.cmd again.")
+
+
 def defaults(profile: dict) -> dict:
     """What the installer offers first, and why."""
     configured = profile["ollama_env"].get("OLLAMA_MODELS") or profile["model_store"] or ""
@@ -320,6 +351,7 @@ def ensure_env_file() -> dict[str, str]:
         ("LITELLM_MASTER_KEY", lambda: "sk-" + secrets.token_hex(24)),
         ("ORCHESTRATOR_BEARER", lambda: secrets.token_urlsafe(32)),
         ("WEBUI_SECRET_KEY", lambda: secrets.token_hex(32)),
+        ("DICTATION_BEARER", lambda: secrets.token_urlsafe(32)),  # Open WebUI's microphone -> voice typing
     )
     for k, gen in generators:
         if not env.get(k):

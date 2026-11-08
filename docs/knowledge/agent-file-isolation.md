@@ -18,7 +18,7 @@ are not the block.
 Think of a building with many rooms, a guest list and keys. A Windows computer is the building. Every request to
 open a file comes from some **account**, and Windows asks, for each request, "is this account on the list for this
 room?" An account is a **security principal**: something Windows can name and give or refuse rights. Principals are
-users (the owner's account), groups of users (`AI-Agents`) and a few built-in ones (`SYSTEM`, `Administrators`, `Everyone`).
+users (`%USERNAME%`), groups of users (`AI-Agents`) and a few built-in ones (`SYSTEM`, `Administrators`, `Everyone`).
 Internally each has a long id called a **SID**.
 
 Every program runs as the account that started it, with that account's keys. That is the key point: a program is
@@ -77,13 +77,13 @@ If the owner's files carry ACLs that exclude the agent's account, every program 
 matter what it is told. The setup in the plan:
 
 ```
-owner account (admin today)               agent account "ai-agent" (standard user, group AI-Agents)
+owner account "%USERNAME%" (admin today)       agent account "ai-agent" (standard user, group AI-Agents)
   personal files: Deny AI-Agents  <-X-     Claude Code, Gemini CLI, Copilot CLI, OpenCode, Codex
   browser profile with sign-ins   <-X-     desktop agent apps, in their own sign-in session
                                   --->     C:\AgentWork: Modify for AI-Agents
 ```
 
-Under `C:\Users\<owner>` Windows already allows only the owner, `SYSTEM` and `Administrators` (per the V-F1 ACL listing; not tested with a second account). The
+Under `%USERPROFILE%` Windows already allows only `%USERNAME%`, `SYSTEM` and `Administrators` (per the V-F1 ACL listing; not tested with a second account). The
 explicit deny ACE for the `AI-Agents` group on each personal root is a second lock for later mistakes. A group is
 used so that other agent identities can join later. Agents get a work folder, `C:\AgentWork`, with Modify rights.
 The agent signs in separately to each tool, so the owner's tokens are not reachable either.
@@ -190,11 +190,11 @@ V-F1 ran on 2026-10-30 as a read-only check on the reference machine:
 - **`D:` is exFAT.** Any account can read all of it, including `shows`, `songs`, `mem`, loose photos at the root,
   `keycloak` and `ollama`. The plan's lock means nothing there until personal data moves off `D:` or the drive is
   reformatted to NTFS, keeping `D:\ollama`.
-- **`C:\Users\<owner>`** grants full control to `SYSTEM`, `Administrators` and the owner; one AppContainer capability SID
+- **`%USERPROFILE%`** grants full control to `SYSTEM`, `Administrators` and `%USERNAME%`; one AppContainer capability SID
   has traverse only. The listed ACL leaves other standard users out (not tested with a second account).
-- **Accounts.** Only the owner's account is enabled, and it is an administrator (the built-in Administrator is disabled). No agent
+- **Accounts.** Only `%USERNAME%` is enabled, and it is an administrator (the built-in Administrator is disabled). No agent
   account exists. Every agent today runs with admin-capable rights.
-- **Redirected folders.** Documents, Desktop and Pictures sit under `C:\Users\<owner>\OneDrive\...`, so they are
+- **Redirected folders.** Documents, Desktop and Pictures sit under `%USERPROFILE%\OneDrive\...`, so they are
   covered locally but also reachable through the Microsoft account.
 - **Other personal roots** in the profile: `logseq`, `JoplinBackup`, `StudioProjects`, `ansel`, `Downloads`, `Music`,
   `Videos`. Not yet checked: the ACL on `C:\Code` and other folders outside the profile.

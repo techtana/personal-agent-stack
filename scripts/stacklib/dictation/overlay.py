@@ -2,7 +2,8 @@
 
 Button states: idle (grey mic), listening (red, with a level bar), working (blue, with a spinner), done (green check),
 error (red "!"). The bubble above the button shows what is happening, the words as Whisper hears them, and the text
-that was typed. Left click: start or stop. Drag: move (the position is remembered). Right click: options.
+that was typed. Left click: start or stop. Drag: move (the position is remembered). Right click: options (the menu
+closes half a second after the pointer leaves it).
 All Tk calls happen on the main thread; other threads hand work over with post().
 """
 from __future__ import annotations
@@ -24,6 +25,8 @@ STATE_FILL = {"idle": "#2d2d2d", "listening": "#c42b1c", "working": "#0f6cbd", "
 STATE_INK = {"idle": FG, "listening": "#ff9a8f", "working": "#8cc8ff", "done": "#7fd67f", "error": "#ff9a8f"}
 GLYPHS = {"mic": "", "check": "", "error": ""}
 FALLBACK_GLYPHS = {"mic": "●", "check": "✓", "error": "!"}
+MENU_POLL_MS = 100    # how often the open right-click menu checks the pointer
+MENU_LEAVE_MS = 500   # the menu closes after the pointer has been off it (and off the button) this long
 
 
 class Overlay:
@@ -46,6 +49,7 @@ class Overlay:
         self.dragged = False
         self.show_button = show_button
         self.bubble_owner = ""   # "hover" while the hover hint is up, else the state that opened it
+        self.menu_open: tk.Menu | None = None
 
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
@@ -330,10 +334,57 @@ class Overlay:
         m.add_command(label="Quit voice typing", command=app.quit)
         # Keep references alive while the menu is open (Tk variables die with their Python objects).
         m._vars = (mode, style, insert)  # type: ignore[attr-defined]
+        self.menu_open = m
+        self.root.after(MENU_POLL_MS, self._watch_menu, m, 0)
         try:
-            m.tk_popup(e.x_root, e.y_root)
+            m.tk_popup(e.x_root, e.y_root)  # on Windows this blocks in the native menu loop; Tk timers still run
         finally:
             m.grab_release()
+            if IS_WINDOWS:
+                self.menu_open = None
+
+    def _menu_rects(self, m: tk.Menu) -> list[tuple[int, int, int, int]]:
+        """Where the pointer may be while the menu should stay open: the button and every open (sub)menu."""
+        rects = [(self.root.winfo_rootx(), self.root.winfo_rooty(),
+                  self.root.winfo_rootx() + self.size, self.root.winfo_rooty() + self.size)] if self.show_button else []
+        if IS_WINDOWS:
+            from . import winsys
+
+            return rects + winsys.popup_menu_rects()
+        for w in [m, *(m.nametowidget(c) for c in m.winfo_children())]:
+            if w.winfo_ismapped():
+                x, y = w.winfo_rootx(), w.winfo_rooty()
+                rects.append((x, y, x + w.winfo_width(), y + w.winfo_height()))
+        return rects
+
+    def _watch_menu(self, m: tk.Menu, outside_ms: int) -> None:
+        """Close the right-click menu once the pointer has been off it (and off the button) for MENU_LEAVE_MS."""
+        if self.menu_open is not m:
+            return
+        try:
+            if not IS_WINDOWS and not m.winfo_ismapped():
+                self.menu_open = None
+                return
+            if IS_WINDOWS:
+                from . import winsys
+
+                point = winsys.cursor_pos()
+            else:
+                point = self.root.winfo_pointerxy()
+            rects = self._menu_rects(m)
+        except (tk.TclError, OSError):
+            return
+        outside_ms = 0 if pointer_inside(point, rects) else outside_ms + MENU_POLL_MS
+        if outside_ms >= MENU_LEAVE_MS:
+            self.menu_open = None
+            if IS_WINDOWS:
+                from . import winsys
+
+                winsys.end_menu()
+            else:
+                m.unpost()
+            return
+        self.root.after(MENU_POLL_MS, self._watch_menu, m, outside_ms)
 
     def pick_language(self) -> None:
         """The search picker above the button (or where the button would be when it is hidden)."""
@@ -348,6 +399,13 @@ class Overlay:
         Picker(self.root, languages_for(self.app.cfg.model), self.app.cfg.language,
                lambda code: self.app.set_option("language", code), search, title="Dictation language",
                anchor=anchor, above=True)
+
+
+def pointer_inside(point: tuple[int, int], rects: list[tuple[int, int, int, int]], margin: int = 4) -> bool:
+    """True if the point is within any (left, top, right, bottom) rectangle, grown by a few pixels so the gap
+    between a menu and its submenu, or the button's edge, does not count as leaving."""
+    x, y = point
+    return any(l - margin <= x < r + margin and t - margin <= y < b + margin for l, t, r, b in rects)
 
 
 def _tail(text: str, limit: int) -> str:

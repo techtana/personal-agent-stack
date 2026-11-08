@@ -2,7 +2,7 @@
 
 Copies of the owner's own agent skills (folders with a `SKILL.md`), kept here so they are versioned and can be
 reused by the stack's other clients. The repo's own Claude Code skills (`/retro`, `/why-routed`, `/brainstorm`,
-`/harden`) stay in `.claude/skills/`; this folder is the collected library.
+`/harden`, `/claude-security-audit`) stay in `.claude/skills/`; this folder is the collected library.
 
 ## How skills get here
 

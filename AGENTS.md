@@ -38,12 +38,22 @@ is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `
 9. Private first: never put an external model in a router tier, fallback, default, task or embedding alias; external
    models are explicit aliases behind the privacy gate (`docs/plans/SHARED-COMPONENTS.md` section 2). Do not build
    privacy skills, hooks or MCP add-ons for clients outside the privacy boundary (Claude Code profile A, Claude
-   Desktop): they can only advise and would imply enforcement that does not exist.
-10. The repository is public. Never write a person's name, an email address, a computer or account name, a home
-   folder path or a secret into a tracked file, a commit message or a pull request. Write "the owner" and "the
-   reference machine", and placeholders such as `machines/<HOST>.yaml` and `C:\Users\<owner>`. Values that differ per
-   machine are set during install and stay in the local profile or `.env`. `tests/test_personal_info.py` fails when
-   this machine's own names appear in a file git would publish; add other private words to `.personal-terms`.
+   Desktop): they can only advise and would imply enforcement that does not exist. The exception is an audit that
+   only reports and says plainly what it cannot enforce (`/claude-security-audit`).
+10. The repository is public. Never write the owner's identity (a person's name, an email address, account IDs, a
+   computer or account name, the OS user name in paths or prose), guesses about the owner or a secret into a
+   tracked file, a commit message, a pull request, memory or a request. Write "the owner" and "the reference
+   machine", and placeholders such as `machines/<HOST>.yaml`, `%USERPROFILE%` or `~` (or `C:\Users\<owner>`),
+   `%USERNAME%`, `you@example.com` and `Your Name`. Values that differ per machine are set during install and stay
+   in the local profile or `.env`. `tests/test_personal_info.py` fails when this machine's own names appear in a
+   file git would publish (add other private words to `.personal-terms`); `/claude-security-audit` finds and
+   replaces leftovers.
+11. Everything the stack adds shows in the tray (`scripts/tray.py`). A new service gets its `LABELS` and `ROLES` row
+   and a place in `services.SERVICE_ORDER`; a new profile section gets Settings entries (`stacklib/settings.py`) or
+   a reason in `tests/test_tray_coverage.py`. Every model call is counted in the Usage tab: through the gateway with
+   `User-Agent: agent-stack-<id>` (id in `stacklib/usage.py` COMPONENTS), or recorded with
+   `stacklib.usage_log.record(<source>, ...)` (source in SOURCES); say in SERVICE_MODELS how a new service's model
+   use is counted, and put use that cannot be counted yet in UNCOUNTED. `tests/test_tray_coverage.py` checks this.
 
 ## Everyday commands
 
@@ -54,6 +64,7 @@ uv run scripts/stack.py tasks install|status|stop # edge mode: one Task Schedule
 uv run scripts/stack.py smoke                     # gateway + MCP end-to-end checks
 uv run scripts/stack.py bench                     # tok/s and GPU/CPU split of the primary local model
 uv run scripts/stack.py why-routed --last 20      # routing decisions from traces
+uv run scripts/stack.py usage --days 7            # every model the stack ran (the tray's Usage tab as text)
 uv run scripts/stack.py retro --days 7            # retrospective report (then /retro in Claude Code)
 uv run scripts/stack.py dictate install|start|transcribe f.wav  # voice typing in any app (Whisper, Ctrl+Alt+D)
 scripts/claude-local.ps1 | .sh                    # Claude Code on the local gateway (profile B)
