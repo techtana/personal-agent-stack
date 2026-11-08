@@ -186,6 +186,33 @@ def waited(seconds: float | None) -> str:
     return f"... {int(seconds)} s" if seconds and seconds >= 1 else "..."
 
 
+class TextVar:
+    """The get/set of a tk variable for a Text widget (which has none), so the Settings tab treats a text box like
+    every other control."""
+
+    def __init__(self, widget: tk.Text) -> None:
+        self.widget = widget
+
+    def get(self) -> str:
+        return self.widget.get("1.0", "end-1c")
+
+    def set(self, value: str) -> None:
+        self.widget.delete("1.0", "end")
+        self.widget.insert("1.0", value)
+        self.widget.edit_reset()           # Ctrl+Z must not take the box back past what was loaded
+        self.widget.edit_modified(False)   # a load is not an edit (see TrayApp._text_edited)
+
+    def replace(self, value: str) -> None:
+        """Set the text as one edit, which Ctrl+Z takes back whole (Restore default)."""
+        w = self.widget
+        w.configure(autoseparators=False)
+        w.edit_separator()
+        w.delete("1.0", "end")
+        w.insert("1.0", value)
+        w.edit_separator()
+        w.configure(autoseparators=True)
+
+
 class TrayApp:
     def __init__(self, autostart: bool = True) -> None:
         self.profile = prof.resolve_profile()
@@ -690,6 +717,9 @@ class TrayApp:
             # Tk's own TCombobox binding steps a read-only box to the next value; scroll the tab instead and stop
             # there, so the "all" binding above does not scroll a second time.
             self.root.bind_class("TCombobox", seq, lambda e: (self._wheel(e), "break")[1])
+            # A settings text box scrolls its own text first (Tk's Text binding); the tab scrolls only while the
+            # whole text is in view, so the wheel never moves both at once.
+            self.root.bind_class("SettingText", seq, lambda e: "break" if e.widget.yview() != (0.0, 1.0) else None)
         self._build_overview(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
         self._build_usage(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
         self._build_settings(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
@@ -1260,9 +1290,11 @@ class TrayApp:
 
         groups = [("Models", "models"), ("Tracing and services", ("observability", "services")),
                   ("Voice typing", "dictation"), ("Ollama runtime", "ollama_env")]
-        self.setting_vars: dict[str, tk.Variable] = {}
+        self.setting_vars: dict[str, tk.Variable | TextVar] = {}
         self.model_boxes: list[ttk.Combobox] = []
         self.changed_marks: dict[str, ttk.Label] = {}
+        self.default_buttons: dict[str, tuple[ttk.Button, object]] = {}  # "text" settings: Restore default
+        self.advanced_parts: list[dict] = []
         row = 0
         for title, sections in groups:
             ttk.Label(form, text=title, style="Card.Title.TLabel").grid(row=row, column=0, columnspan=3, sticky="w", pady=(8 if row else 0, 4))
@@ -1271,35 +1303,12 @@ class TrayApp:
                 ttk.Label(form, text="Applying any of these restarts Ollama, which interrupts requests in progress.",
                           style="Card.Muted.TLabel").grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 6))
                 row += 1
-            for s in cfg.SETTINGS:
-                if s.section not in (sections if isinstance(sections, tuple) else (sections,)):
-                    continue
-                sid = cfg.setting_id(s)
-                ttk.Label(form, text=s.label, style="Card.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 24), pady=(6, 0))
-                if s.kind == "bool":
-                    var: tk.Variable = tk.BooleanVar()
-                    widget = ttk.Checkbutton(form, variable=var, text="On", command=self._settings_dirty)
-                elif s.kind == "search":
-                    # Too many values for a drop-down (100 languages): a button that opens the search picker.
-                    var = tk.StringVar()
-                    widget = ttk.Button(form, width=30)
-                    widget.configure(command=lambda s=s, v=var, b=widget: self._pick_setting(s, v, b))
-                    var.trace_add("write", lambda *_a, s=s, v=var, b=widget: b.configure(
-                        text=f"{s.labels.get(v.get(), v.get())}  ▾"))
-                else:
-                    var = tk.StringVar()
-                    widget = ttk.Combobox(form, textvariable=var, values=s.choices, state="readonly", width=30)
-                    widget.bind("<<ComboboxSelected>>", lambda _e: self._settings_dirty())
-                    if s.kind == "model":
-                        self.model_boxes.append(widget)
-                widget.grid(row=row, column=1, sticky="w", pady=(6, 0))
-                mark = ttk.Label(form, text="", style="Warn.TLabel")
-                mark.grid(row=row, column=2, sticky="e", pady=(6, 0))
-                self.changed_marks[sid] = mark
-                self.setting_vars[sid] = var
-                ttk.Label(form, text=s.help, style="Card.Muted.TLabel", wraplength=560, justify="left").grid(
-                    row=row + 1, column=0, columnspan=2, sticky="w", pady=(0, 4))
-                row += 2
+            in_group = [s for s in cfg.SETTINGS if s.section in (sections if isinstance(sections, tuple) else (sections,))]
+            for s in in_group:
+                if not s.advanced:
+                    row = self._add_setting(form, s, row)
+            if any(s.advanced for s in in_group):
+                row = self._build_advanced(form, row, [s for s in in_group if s.advanced])
             if title == "Models":
                 self.cloud_label = ttk.Label(form, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
                 self.cloud_label.grid(row=row, column=0, columnspan=3, sticky="w", pady=(4, 0))
@@ -1320,6 +1329,112 @@ class TrayApp:
         self.apply_log = ttk.Label(bar, text="", style="HeadSub.TLabel", wraplength=820, justify="left")
         self.apply_log.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
         self._load_settings()
+
+    def _add_setting(self, parent, s, row: int) -> int:
+        """One setting from grid row `row`: label, control and "changed" mark, then its help. Returns the next free row.
+        A "text" setting puts its help under the label and its box across the whole width below."""
+        sid = cfg.setting_id(s)
+        ttk.Label(parent, text=s.label, style="Card.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 24), pady=(6, 0))
+        mark = ttk.Label(parent, text="", style="Warn.TLabel")
+        mark.grid(row=row, column=2, sticky="e", pady=(6, 0))
+        self.changed_marks[sid] = mark
+        if s.kind == "text":
+            ttk.Label(parent, text=s.help, style="Card.Muted.TLabel", wraplength=640, justify="left").grid(
+                row=row + 1, column=0, columnspan=3, sticky="w", pady=(0, 4))
+            var, box = self._text_box(parent, s)
+            box.grid(row=row + 2, column=0, columnspan=3, sticky="we", pady=(2, 6))
+            self.setting_vars[sid] = var
+            return row + 3
+        if s.kind == "bool":
+            var: tk.Variable = tk.BooleanVar()
+            widget = ttk.Checkbutton(parent, variable=var, text="On", command=self._settings_dirty)
+        elif s.kind == "search":
+            # Too many values for a drop-down (100 languages): a button that opens the search picker.
+            var = tk.StringVar()
+            widget = ttk.Button(parent, width=30)
+            widget.configure(command=lambda s=s, v=var, b=widget: self._pick_setting(s, v, b))
+            var.trace_add("write", lambda *_a, s=s, v=var, b=widget: b.configure(
+                text=f"{s.labels.get(v.get(), v.get())}  ▾"))
+        else:
+            var = tk.StringVar()
+            widget = ttk.Combobox(parent, textvariable=var, values=s.choices, state="readonly", width=30)
+            widget.bind("<<ComboboxSelected>>", lambda _e: self._settings_dirty())
+            if s.kind == "model":
+                self.model_boxes.append(widget)
+        widget.grid(row=row, column=1, sticky="w", pady=(6, 0))
+        self.setting_vars[sid] = var
+        ttk.Label(parent, text=s.help, style="Card.Muted.TLabel", wraplength=560, justify="left").grid(
+            row=row + 1, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        return row + 2
+
+    def _text_box(self, parent, s) -> tuple["TextVar", ttk.Frame]:
+        """A setting of several lines (voice typing's cleanup prompt): a text box, and Restore default under it."""
+        t = self.t
+        frame = ttk.Frame(parent, style="Card.TFrame")
+        frame.columnconfigure(0, weight=1)
+        box = tk.Text(frame, height=12, width=72, wrap="word", undo=True, maxundo=-1, font=(FONT, 10),
+                      bg=t["page"], fg=t["ink"], insertbackground=t["ink"], selectbackground=t["select"],
+                      selectforeground=t["ink"], inactiveselectbackground=t["select"], relief="flat", borderwidth=0,
+                      padx=8, pady=6, highlightthickness=2, highlightbackground=t["border"], highlightcolor=t["accent"])
+        box.grid(row=0, column=0, sticky="we")
+        # After Tk's own Text bindings: stop the wheel from also scrolling the tab while the box scrolls its text.
+        box.bindtags((str(box), "Text", "SettingText", *box.bindtags()[2:]))
+        box.bind("<<Modified>>", lambda _e: self._text_edited(box))
+        box.bind("<Tab>", lambda _e: self._focus_step(box, 1))      # Tk would type a tab character; move on instead
+        box.bind("<Shift-Tab>", lambda _e: self._focus_step(box, -1))
+        var = TextVar(box)
+        reset = ttk.Button(frame, text="Restore default",
+                           command=lambda: (var.replace(s.default), self._settings_dirty(), box.focus_set()))
+        reset.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.default_buttons[cfg.setting_id(s)] = (reset, s)
+        return var, frame
+
+    def _text_edited(self, box: tk.Text) -> None:
+        """<<Modified>> fires once per change of the box's modified flag: clear it so the next keystroke fires again."""
+        if box.edit_modified():
+            box.edit_modified(False)
+            self._settings_dirty()
+
+    @staticmethod
+    def _focus_step(widget, step: int) -> str:
+        target = widget.tk_focusNext() if step > 0 else widget.tk_focusPrev()
+        if target is not None:
+            target.focus_set()
+        return "break"
+
+    def _build_advanced(self, form, row: int, items: list) -> int:
+        """A group's rarely changed settings behind Show advanced, closed until opened. A note beside the button says
+        when one of them is not the built-in value, so a closed part never hides a change from you."""
+        head = ttk.Frame(form, style="Card.TFrame")
+        head.grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 2))
+        part = {"items": items, "open": False, "button": ttk.Button(head),
+                "note": ttk.Label(head, text="", style="Card.Muted.TLabel")}
+        part["button"].configure(command=lambda: self._toggle_advanced(part))
+        part["button"].pack(side="left")
+        part["note"].pack(side="left", padx=(10, 0))
+        before = set(form.grid_slaves())
+        row += 1
+        for s in items:
+            row = self._add_setting(form, s, row)
+        part["widgets"] = [w for w in form.grid_slaves() if w not in before]
+        self.advanced_parts.append(part)
+        self._toggle_advanced(part, False)
+        return row
+
+    def _toggle_advanced(self, part: dict, show: bool | None = None) -> None:
+        part["open"] = not part["open"] if show is None else show
+        for w in part["widgets"]:
+            if part["open"]:
+                w.grid()
+            else:
+                w.grid_remove()
+        part["button"].configure(text=("Hide advanced  ▴" if part["open"] else "Show advanced  ▾"))
+
+    def _note_advanced(self, part: dict) -> None:
+        values = cfg.current_values(self.profile)
+        own = [s.label.lower() for s in part["items"]
+               if s.kind == "text" and values[cfg.setting_id(s)] != cfg.tidy_text(s.default)]
+        part["note"].configure(text=f"Your own {' and '.join(own)} is in use." if own else "")
 
     def _pick_setting(self, s, var: tk.StringVar, button: ttk.Button) -> None:
         """Open the type-to-search picker under a "search" setting's button (voice typing's 100 languages)."""
@@ -1353,6 +1468,8 @@ class TrayApp:
         self.cloud_label.configure(text=(
             "External models: off. Every tier runs on local models, whatever .env holds; external models wait for "
             "the privacy gate and external.enabled in policy/privacy.yaml (docs/plans/)."))
+        for part in self.advanced_parts:
+            self._note_advanced(part)
         self._settings_dirty()
 
     def _edits(self) -> dict[str, object]:
@@ -1370,8 +1487,10 @@ class TrayApp:
         if not edits["observability.jsonl_traces"]:
             warn = (warn + " " if warn else "") + "With usage traces off, the Usage tab and the retrospective get no new data."
         self.settings_warning.configure(text=warn)
+        for sid, (button, s) in self.default_buttons.items():
+            button.configure(state="normal" if cfg.tidy_text(edits[sid]) != cfg.tidy_text(s.default) else "disabled")
         if todo:
-            effects = sorted({cfg.EFFECT_TEXT[s.effect] for s in todo})
+            effects = cfg.effect_texts(todo)
             self.pending_label.configure(text=f"{len(todo)} unsaved change{'s' if len(todo) > 1 else ''}. Apply will: " + "; ".join(effects) + ".")
         else:
             self.pending_label.configure(text=f"Saved in machines/{self.profile['name']}.yaml. Defaults come from machines/_defaults.yaml.")

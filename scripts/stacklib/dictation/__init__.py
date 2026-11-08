@@ -56,6 +56,7 @@ class Config:
     max_minutes: float = 10.0
     insert: str = "paste"
     cleanup_model: str = "local-small"
+    cleanup_prompt: str = ""      # '' = cleanup.DEFAULT_PROMPT
     vocabulary: str = ""
     mic: str = ""
     unload_after_min: float = 30.0

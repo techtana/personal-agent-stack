@@ -1,6 +1,6 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-07 (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+Updated: 2026-11-07 late evening (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
@@ -248,6 +248,16 @@ once across a session restart.
    Also verified: cancel, a second instance, hold-to-talk with injected Ctrl+Alt+D (live text typed at release). A
    code review's eight findings and its clipboard-owner risk were fixed (owner window per clipboard operation; restore
    after 1 s). At the end of the session the app was left running from the worktree (pid file in the worktree's .run).
+   2026-11-07 late evening (branch claude/voice-typing-cleanup-config-d44300): the cleanup prompt is a setting,
+   `dictation.cleanup_prompt` (`''` = the built-in text, which is unchanged), edited in the tray under Settings > Voice
+   typing > Show advanced. Apply hands it to the running app (`POST /reload`, also `stack.py dictate reload`) instead
+   of restarting it. The concise rule, the JSON reply format and the reply checks stay in code. yamledit now writes
+   multi-line text as a literal block and replaces a multi-line value whole. Verified: unit tests (`uv run --with
+   pytest pytest -q`); a render harness of the Settings tab (dark and light, closed and open, edit, save, Restore
+   default, Ctrl+Z, Tab) against a temp copy of the machine file; the app's reload in the voice typing venv; both
+   prompts on qwen3.5:9b through Ollama directly (LiteLLM was down): a custom spelling-and-digits rule held 6/6 and the
+   self-correction 6/6. Not verified: the live tray and app (they run the new code only after a restart from the main
+   checkout), and a dictation through LiteLLM with a custom prompt. At 23:00 only Ollama was up (the 9B loaded).
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

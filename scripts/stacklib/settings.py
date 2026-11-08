@@ -16,6 +16,7 @@ from . import profile as prof
 from .yamledit import dump_scalar as _dump_scalar, set_key  # noqa: F401 - set_key is imported from here by install.py
 
 CTX_CHOICES = ["8192", "16384", "32768", "65536"]
+from .dictation.cleanup import DEFAULT_PROMPT as CLEANUP_PROMPT  # noqa: E402
 from .dictation.hotkey import CHOICES as HOTKEY_CHOICES  # noqa: E402
 from .dictation.models import CHOICES as MODEL_CHOICES, LANGUAGES  # noqa: E402
 
@@ -26,12 +27,17 @@ class Setting:
     key: str
     label: str
     kind: str             # "model" | "choice" | "bool" | "search" (a long list: the tray opens a search picker)
+                          # | "text" (several lines: the tray shows a text box)
     help: str
     effect: str           # "gateway" | "phoenix" | "open_webui" | "ollama"
     choices: list[str] = field(default_factory=list)
     # bool settings store these values for on / off
     on_off: tuple = (True, False)
     labels: dict = field(default_factory=dict)  # "search" settings: the name shown for each stored value
+    advanced: bool = False  # the tray keeps it in its group's "Advanced" part, closed until you open it
+    # "text" settings: the built-in value. The box shows it while the file holds ''; a box holding it (or nothing)
+    # saves '', so the built-in text stays in the code and later improvements to it still apply.
+    default: str = ""
 
 
 SETTINGS = [
@@ -81,6 +87,11 @@ SETTINGS = [
             "dictation", ["paste", "type"]),
     Setting("dictation", "button", "Show the mic button", "bool",
             "The floating button; the hotkey works without it.", "dictation"),
+    Setting("dictation", "cleanup_prompt", "Cleanup prompt", "text",
+            "What the local model is told to do with each transcript (Clean and Concise). Concise adds a rule to "
+            "shorten, and the app adds the reply format (JSON). A reply much longer or shorter than the transcript is "
+            "still refused, and the transcript is typed instead. Applies without restarting voice typing.",
+            "dictation", advanced=True, default=CLEANUP_PROMPT),
     Setting("ollama_env", "OLLAMA_KEEP_ALIVE", "Keep models loaded for", "choice",
             "How long an idle chat model stays in memory, gateway requests included; -1 holds its VRAM until Ollama stops.", "ollama", ["5m", "30m", "1h", "4h", "-1"]),
     Setting("ollama_env", "OLLAMA_KV_CACHE_TYPE", "KV cache precision", "choice",
@@ -106,6 +117,27 @@ def setting_id(s: Setting) -> str:
     return f"{s.section}.{s.key}"
 
 
+def effect_texts(todo: list[Setting]) -> list[str]:
+    """What Apply will do for these changes, for the tray's line above the Apply button."""
+    texts = {EFFECT_TEXT[s.effect] for s in todo}
+    if {s.key for s in todo if s.effect == "dictation"} <= LIVE_DICTATION_KEYS:
+        texts.discard(EFFECT_TEXT["dictation"])
+        if any(s.effect == "dictation" for s in todo):
+            texts.add("update voice typing (no restart)")
+    return sorted(texts)
+
+
+def tidy_text(value: object) -> str:
+    """A "text" setting as it is saved: Unix line ends, no spaces at line ends, no blank lines around it."""
+    lines = str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    return "\n".join(line.rstrip() for line in lines).strip()
+
+
+def text_value(s: Setting, value: object) -> str:
+    """What a "text" setting amounts to: its built-in default when empty."""
+    return tidy_text(value) or tidy_text(s.default)
+
+
 def current_values(profile: dict) -> dict[str, object]:
     """Effective value of every setting (machine file merged over defaults), in the form the UI edits."""
     m = profile["models"]
@@ -124,6 +156,8 @@ def current_values(profile: dict) -> dict[str, object]:
                 out[setting_id(s)] = bool((v or {}).get("use_mmap"))
             else:
                 out[setting_id(s)] = v == s.on_off[0] or v is True
+        elif s.kind == "text":
+            out[setting_id(s)] = text_value(s, v)
         else:
             out[setting_id(s)] = "" if v is None else str(v)
     return out
@@ -142,6 +176,9 @@ def installed_models(profile: dict) -> list[str]:
 def _to_file_value(s: Setting, ui_value: object) -> object:
     if s.kind == "bool":
         return s.on_off[0] if ui_value else s.on_off[1]
+    if s.kind == "text":
+        text = text_value(s, ui_value)
+        return "" if text == tidy_text(s.default) else text
     if s.section == "models" and s.key.endswith("num_ctx"):
         return int(ui_value)
     if s.section == "dictation" and s.key.endswith("_s"):
@@ -151,7 +188,15 @@ def _to_file_value(s: Setting, ui_value: object) -> object:
 
 def changed(profile: dict, edits: dict[str, object]) -> list[Setting]:
     cur = current_values(profile)
-    return [s for s in SETTINGS if setting_id(s) in edits and edits[setting_id(s)] != cur[setting_id(s)]]
+    out = []
+    for s in SETTINGS:
+        sid = setting_id(s)
+        if sid not in edits:
+            continue
+        edit = text_value(s, edits[sid]) if s.kind == "text" else edits[sid]  # spaces and blank lines do not count
+        if edit != cur[sid]:
+            out.append(s)
+    return out
 
 
 def save(profile: dict, edits: dict[str, object]) -> list[Setting]:
@@ -170,6 +215,32 @@ def save(profile: dict, edits: dict[str, object]) -> list[Setting]:
             raise ValueError(f"could not write {setting_id(s)} safely; edit {path.name} by hand")
     path.write_text(text, encoding="utf-8", newline="\n")
     return todo
+
+
+LIVE_DICTATION_KEYS = {"button", "cleanup_prompt"}  # the running voice typing app takes these without a restart
+
+
+def _update_dictation(profile: dict, keys: set[str], log) -> bool:
+    """Hand button and cleanup-prompt changes to the running voice typing app. True when nothing more is needed (it
+    took them, or it is not running and reads them when it starts); False when it must be restarted instead (an app
+    from before /reload existed answers 404)."""
+    from .dictation import control
+
+    port = int(profile["ports"]["dictation"])
+    try:
+        if "button" in keys:
+            shown = bool(profile["dictation"].get("button"))
+            if not control.call(port, "show" if shown else "hide").get("ok"):
+                return False
+            log("Voice typing button " + ("shown" if shown else "hidden"))
+        if "cleanup_prompt" in keys:
+            if not control.call(port, "reload").get("ok"):
+                return False
+            kind = "your own" if profile["dictation"].get("cleanup_prompt") else "the built-in"
+            log(f"Voice typing uses {kind} cleanup prompt from the next dictation")
+    except OSError:
+        pass  # not running: it reads the saved values when it starts
+    return True
 
 
 def rebuild(profile: dict) -> None:
@@ -215,16 +286,9 @@ def apply(old_profile: dict, edits: dict[str, object], log=print) -> dict:
             services.stop(profile, ["open_webui"])
             services.start(profile, ["open_webui"])
     dictation_keys = {s.key for s in todo if s.effect == "dictation"}
-    if dictation_keys == {"button"} and profile["services"].get("dictation") == "native":
-        # Only the button's visibility changed: tell the running app instead of restarting it.
-        from .dictation import control
-
-        try:
-            control.call(int(profile["ports"]["dictation"]), "show" if profile["dictation"].get("button") else "hide")
-            log("Voice typing button " + ("shown" if profile["dictation"].get("button") else "hidden"))
-            effects.discard("dictation")
-        except OSError:
-            pass  # not running: the saved value applies when it starts
+    if dictation_keys and dictation_keys <= LIVE_DICTATION_KEYS:
+        # Voice typing that is off reads them when it is turned on; a running app takes them without a restart.
+        if profile["services"].get("dictation") != "native" or _update_dictation(profile, dictation_keys, log):
             effects.discard("dictation")
     if "dictation" in effects:
         services.stop(old_profile, ["dictation"])
