@@ -198,8 +198,8 @@ reformatting erases the drive.
 
 ## OpenClaw
 
-The installer's option **Install OpenClaw with npm and point it at this stack's gateway** (on by default when OpenClaw
-is not installed) runs the step **Install OpenClaw**:
+The installer's feature **OpenClaw** (ticked by default when OpenClaw is not installed) runs the step **Install
+OpenClaw**:
 
 1. Checks the Node.js version. OpenClaw 2026.10.9 needs Node.js 24.22.1 or later in the 24 line, or 26.12.1 or later.
 2. If Node.js is older, runs `winget install --id OpenJS.NodeJS.LTS`, which upgrades it to the current LTS (26.13.0 on
@@ -219,13 +219,14 @@ is not installed) runs the step **Install OpenClaw**:
    - Writes the gateway key (`LITELLM_MASTER_KEY` from `.env`) to `~/.openclaw/.env`, which OpenClaw reads.
      `openclaw.json` refers to the key by name only.
 
-If OpenClaw is already installed, the installer offers only step 4, and only when OpenClaw sends prompts somewhere
-other than the gateway.
+If OpenClaw is already installed, the installer runs only step 4, and only when OpenClaw sends prompts somewhere other
+than the gateway: its row then reads `Bypasses the gateway` (or `Not set up`), ticked; untick it to leave OpenClaw as
+it is.
 
 Afterwards, open OpenClaw with `openclaw dashboard` (in the browser) or `openclaw chat` (in the terminal). Inside a chat,
 `/model` switches between departments.
 
-**Checking it later.** The tray's Overview tab has an OpenClaw row:
+**Checking it later.** The Features card on the tray's Overview tab has an OpenClaw row:
 
 - **Gateway only** (green): every model OpenClaw calls goes through the gateway.
 - **Not set up** (amber): OpenClaw is installed but has not been onboarded yet.

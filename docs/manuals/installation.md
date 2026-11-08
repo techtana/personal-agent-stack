@@ -63,25 +63,73 @@ winget configure --file winget\configuration.winget --accept-configuration-agree
 On Windows, double-click `install.cmd` in the repository root, or run `.\scripts\setup.ps1`. On Linux, macOS, WSL
 or Git Bash, run `./scripts/setup.sh`.
 
-The installer first asks two questions, in a window (or in the terminal when there is no display, or with `--no-gui`):
+The installer has two pages, in a window (or the same questions in the terminal when there is no display, or with
+`--no-gui`).
+
+**Page 1: Which features do you want?** One row per feature. Two are required and always installed; the others are
+your choice:
+
+| Feature | Required | What you get |
+|---|---|---|
+| Local models (Ollama) | yes | Ollama and the chat model every other feature talks to. |
+| Gateway and agent tools | yes | LiteLLM with the privacy rules, the orchestrator for the departments, and the tray app. |
+| Chat in the browser (Open WebUI) | no | Chat at http://127.0.0.1:3000, with documents, the agents' tools and the image button. |
+| Trace viewer (Phoenix) | no | Each request's steps, for debugging. The tray's Usage tab works without it. |
+| Image generation (ComfyUI) | no | ComfyUI with Z-Image-Turbo for the chat's image button. Needs the media folder. |
+| Voice typing (Whisper) | no | A hotkey and a mic button that type what you say into any app ([details](user-guide.md#voice-typing)). |
+| Recordings in Claude Desktop (Whisper) | no | A local Whisper server that Claude Desktop uses to transcribe audio files. Needs the media folder. |
+| OpenClaw | no | An agent app set up to use only the gateway ([details](choosing-drives.md#openclaw)). |
+
+Each row shows what that feature takes on this PC: **Disk GB**, **GPU memory GB** (held while loaded; a range such as
+`0.4 to 10.5` means idle and while working), **GPU work** (how long the GPU is busy, such as `~11 s per image`), **CPU
+while busy** (logical processors, such as `~1 of 12`) and **RAM GB**. Point at a row, or tab to its checkbox, and the
+box under the table explains it: when the memory is held, what keeps the GPU busy, and where each figure comes from.
+Figures marked *measured* come from the reference PC (an RTX 3060 12 GB, a Ryzen 5 5500, 32 GB of DDR4); the chat
+model's GPU memory is read from Ollama when the model is loaded; the rest are estimates and say so.
+
+The box **Your choice on this PC** adds up what you ticked and says what does not fit, for example:
+
+- how much setup downloads (installed features count nothing; the Whisper model that voice typing and recordings
+  share counts once);
+- the GPU memory with everything loaded at once, against what the card has free after Windows;
+- whether an image job fits next to the chat model, or needs **Media** on the tray's GPU card first;
+- the system memory the stack takes, idle and after an image job, against the RAM in this PC;
+- the CPU, and a warning when there is no NVIDIA GPU or Smart App Control may block Phoenix.
+
+Features that are installed and turned on are ticked and cannot be unticked: the installer only adds features. To turn
+one off, use **Settings** in the tray (Open WebUI, Phoenix, ComfyUI, voice typing). A feature that is installed but
+off is unticked; ticking it turns it back on. A feature your profile turns on whose program or model is missing is
+ticked, so setup repairs it. When a check fails (`Not checked`, for example because `uv` did not answer), the installer
+leaves that feature exactly as it is. To add features later, run the installer again (`install.cmd`, or
+**Add features...** in the tray); it starts on this page with what you have.
+
+`uv run scripts/stack.py features` prints the same table, each feature's status and the total for what is installed
+(`--details` adds the explanations).
+
+**Page 2: Where should Agent Stack put its files?**
 
 - **Models folder**: where Ollama keeps downloaded models (`OLLAMA_MODELS`). Needs about 8 GB for the core models.
   If the folder in your machine profile is on a drive that is not connected, the installer says so and offers
   Ollama's default, `%USERPROFILE%\.ollama\models`. If models already exist in the old folder, it offers to move them.
-- **Python tools folder**: where uv puts LiteLLM, Phoenix and Open WebUI (`UV_TOOL_DIR`, about 3 GB). Keep the path
-  short; deep Python packages break past Windows' 260-character limit.
+- **Python tools folder**: where uv puts LiteLLM and, when chosen, Open WebUI and Phoenix (`UV_TOOL_DIR`, 0.6 GB for
+  LiteLLM, 1.9 GB for Open WebUI, 0.5 GB for Phoenix). Keep the path short; deep Python packages break past Windows'
+  260-character limit.
+- **Media folder**, only when you chose images or recordings: ComfyUI, Whisper and their models (about 17 GB for
+  images, 4 GB for recordings). Agent sessions and media tools may use only this folder.
 
 Which drive to pick for each: [choosing-drives.md](choosing-drives.md). In short, models and the Hugging Face cache
 can go on a second or USB drive that reads at 200 MB/s or more; the Python tools stay on the internal drive.
 
-Under **Options** you can also choose to check each drive's speed, put the Hugging Face cache next to the models, and
-install OpenClaw and point it at the gateway. All three are on by default. When OpenClaw is already installed, the
-OpenClaw option appears only if it still sends prompts somewhere other than the gateway, and then it offers to fix that.
+Under **Options** you can also choose to download the models now, check each drive's speed and put the Hugging Face
+cache next to the models (all on by default). When models already sit in another folder, it offers to move them.
 
-Under each folder it shows the free space on that drive; **Install** stays disabled until both folders are usable.
-It writes the models folder into `machines/<HOST>.yaml` (`model_store` and `ollama_env.OLLAMA_MODELS`), then starts
-setup as a background process. You can close the window: setup keeps going, and opening the installer again (or
-`uv run scripts/stack.py install --status`) shows each step's progress. The log is `.run/install/install.log`.
+Under each folder it shows the free space on that drive and what the chosen features need there; **Install** stays
+disabled until every folder is usable. **Back** returns to the features with your ticks kept. **Install** writes the
+models folder (`model_store` and `ollama_env.OLLAMA_MODELS`) and the chosen features (`services.open_webui`,
+`services.comfyui`, `services.dictation`, `observability.phoenix`, and `media.root` when needed) into
+`machines/<HOST>.yaml`, keeping your comments, then starts setup as a background process. You can close the window:
+setup keeps going, and opening the installer again (or `uv run scripts/stack.py install --status`) shows each step's
+progress. The log is `.run/install/install.log`.
 
 Setup does the following, in this order:
 
@@ -92,7 +140,7 @@ Setup does the following, in this order:
    Then **Check drive speed** measures every local drive and warns about slow ones; a warning shows as an amber **!**
    and does not stop setup ([choosing-drives.md](choosing-drives.md#check-a-drives-speed)).
 4. Sets the Ollama user environment variables and restarts the Ollama app if they changed.
-5. Installs LiteLLM, Phoenix and Open WebUI as `uv tool`s.
+5. Installs LiteLLM, and Open WebUI and Phoenix when chosen, as `uv tool`s.
 6. Generates the configs (`stack.py build`).
 7. Writes `.claude/settings.local.json`, which holds the MCP bearer and the memory directory.
 8. Pulls the core models. This can take a long time on a slow disk or a slow connection.
@@ -102,12 +150,20 @@ Setup does the following, in this order:
 10. **Install OpenClaw**: upgrades Node.js with winget if it is older than OpenClaw needs (Windows asks for
     administrator approval), runs `npm install -g openclaw@latest`, then sets OpenClaw up with the gateway as its only
     model provider ([details](choosing-drives.md#openclaw)).
-11. **Install voice typing (Whisper)**: only when voice typing is turned on (`services.dictation: native`); it builds
-    its environment under the media folder and fetches the Whisper model. Turn it on with
+11. **Install voice typing (Whisper)**: only when voice typing is chosen (`services.dictation: native`); it builds
+    its environment under the media folder and fetches the Whisper model. Without the installer:
     `uv run scripts/stack.py dictate install` ([details](user-guide.md#voice-typing)).
+12. **Install recordings for Claude Desktop (Whisper)**: only when chosen; it builds Whisper's environment under the
+    media folder, fetches the model (shared with voice typing) and registers the server `local-whisper` in Claude
+    Desktop's config, after a backup. Quit Claude Desktop from its tray icon and reopen it to load the server. An
+    entry Claude Desktop already has is left as it is, and an installer run from a git worktree adds none (the server
+    would count its usage in the worktree); `uv run scripts/stack.py whisper install` from the main checkout updates
+    or adds it on purpose.
+
+The images step (ComfyUI) runs only when images are chosen, and OpenClaw's only when OpenClaw is.
 
 A failed step does not stop the others; the window marks it with a cross and Ollama's or uv's message, and
-**Change folders and run again** goes back to the questions. Steps that already ran are quick the second time.
+**Change choices and run again** goes back to the features page. Steps that already ran are quick the second time.
 
 Unattended setup (no questions; uses the folders already in the profile): `uv run scripts/stack.py setup`, or on
 Windows `.\scripts\setup.ps1 -Args @('--no-pull')`. `--no-pull` skips the model downloads and `--no-restart` leaves
@@ -214,9 +270,10 @@ SEKAIHOME.
 
 ### 6b. Images (optional)
 
-The installer has a **Media** folder field and an option **Install ComfyUI and the image model** (about 16 GB:
-ComfyUI, PyTorch with CUDA and Z-Image-Turbo). The folder is written to `machines/<HOST>.yaml` as `media.root` and
-added to `agent_access.allowed_roots`, the list of folders media tools and agent sessions may use. Setup then:
+Tick **Image generation (ComfyUI)** on the installer's features page (about 17 GB: ComfyUI, PyTorch with CUDA and
+Z-Image-Turbo); page 2 then asks for the **Media** folder. The folder is written to `machines/<HOST>.yaml` as
+`media.root` and added to `agent_access.allowed_roots`, the list of folders media tools and agent sessions may use.
+Setup then:
 
 - clones ComfyUI into `<media.root>\comfyui` and builds its Python environment from the python.org Python (its
   signed launchers pass Smart App Control), with the uv download cache in `<media.root>\.uv-cache`;

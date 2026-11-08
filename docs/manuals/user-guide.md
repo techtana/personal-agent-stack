@@ -23,7 +23,8 @@ Hover over the icon to see `Agent Stack: N/M up`. The tray checks the services e
 
 - **Show status**: opens the status window on the Overview tab (a left-click does the same).
 - **Usage by model**, **Settings**: open the window on that tab.
-- One line for each service: `● up` or `○ down`.
+- **Add features...**: opens the installer on its features page (see *Features* below).
+- One line for each service: `● up`, `○ down`, `not installed` (its feature was not installed) or `not available yet`.
 - **Open chat (Open WebUI)**, **Open traces (Phoenix)**, **Open gateway admin (LiteLLM)**: open each one in your browser.
 - **Start all services**, **Stop all services**.
 - **Open logs folder**: opens `.run/logs`.
@@ -39,11 +40,27 @@ primary model and its context size, and `cloud tiers on` or `local only`. The pi
 
 *Overview*
 
-- **Services**: one row per service with its role, port and state: `Running (pid N)`, `Stopped`, or
-  `Off in settings` (turned off in the Settings tab). Open WebUI, Phoenix and LiteLLM have an **Open** button. Every
-  service except Ollama has **Start**/**Stop**; the Ollama app runs Ollama.
+- **Services**: one row per service with its role, port and state: `Running (pid N)`, `Stopped`,
+  `Off in settings` (turned off in the Settings tab), `Not installed` (its feature was not installed; **Start** is
+  greyed out, amber when the profile still has it turned on) or `Not available yet` (Kokoro, which has no installer
+  yet). Open WebUI, Phoenix and LiteLLM have an **Open** button. Every service except Ollama has **Start**/**Stop**;
+  the Ollama app runs Ollama.
 - **Loaded in Ollama**: each loaded model with **Size**, **On GPU** (share of the model in VRAM), **Context** and
   **Unloads** (when Ollama will drop it). "No model is loaded" is normal: the first request loads one.
+- **Features**: one row per feature the installer offers, checked once a minute. Each row shows what the feature
+  takes on this PC (`GPU 1.2 GB · RAM 0.4 GB · disk 0.3 GB · ~0.6 s per phrase`; the same figures as the installer)
+  and its state:
+  - `Installed` (green), or `Linked` for recordings (Claude Desktop starts the Whisper server) and `Gateway only`
+    for OpenClaw;
+  - `Installed, off` (grey): turned off in Settings;
+  - `Not installed` (grey), or amber when the profile turns it on but its program is missing: run the installer again;
+  - `Models missing` or `Model missing` (amber): the program is there, a model is not;
+  - for OpenClaw, `Not set up`, `Bypasses the gateway` or `Uses an outside model`, with a **Use gateway** button that
+    makes the gateway its only model provider ([details](choosing-drives.md#openclaw)).
+
+  Under the rows, **Add features...** opens the installer, which starts on its features page with what you have. It
+  reads **Open installer...** when everything is installed; the installer then checks and repairs what is there.
+- **Hugging Face cache**: where `HF_HOME` points and how much it holds.
 - At the bottom: **Open chat**, **Start all**, **Stop all**, **Logs** and the **Start at login** checkbox.
 
 *Usage*

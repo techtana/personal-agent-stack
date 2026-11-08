@@ -3,9 +3,10 @@
 
 It lives in the notification area (on Windows it starts among the hidden icons). Left-click or "Show status" opens a
 window with three tabs:
-  Overview  each service's health with start/stop and links into the UIs, the models loaded in Ollama, and the
-            Hugging Face cache and OpenClaw (where the cache is; whether OpenClaw uses only the gateway, with a
-            Use gateway button that makes it so)
+  Overview  each service's health with start/stop and links into the UIs ("Not installed" when its feature is not),
+            the models loaded in Ollama, the features the installer offers (installed, on or off, linked to the
+            stack; what each takes on this PC; Add features opens the installer; OpenClaw's Use gateway button), and
+            where the Hugging Face cache is
   Usage     every model the stack ran (gateway, Whisper, ComfyUI, direct Ollama calls): requests, tokens, audio,
             images, speed and cost per model, service or client, with a per-day chart
   Settings  models, context sizes, tracing and Ollama runtime options; Apply writes machines/<HOST>.yaml,
@@ -88,10 +89,10 @@ from PIL import Image, ImageDraw  # noqa: E402
 
 from stacklib import IS_WINDOWS, clients, media, ollama, process_metrics, profile as prof, services  # noqa: E402
 from stacklib import settings as cfg  # noqa: E402
-from stacklib import comfy_usage, startup, usage, usage_log  # noqa: E402
+from stacklib import comfy_usage, features, startup, usage, usage_log  # noqa: E402
 
 POLL_SECONDS = 10
-CLIENT_SECONDS = 60  # between Hugging Face / OpenClaw checks: measuring the cache walks every file in it
+CLIENT_SECONDS = 60  # between feature and Hugging Face checks: measuring the cache walks every file in it
 START_TIMEOUT = 180  # seconds a started service gets to answer its health check
 RESOURCE_SECONDS = 5  # pause between process samples while the Resources tab is on screen
 RESOURCES_TAB = 3
@@ -115,8 +116,7 @@ ROLES = {
     "kokoro": "text to speech",
     "dictation": "speak into any app (Whisper)",
 }
-CLIENTS = (("huggingface", "Hugging Face cache", "model weights for Python tools"),
-           ("openclaw", "OpenClaw", "agent client; private only through the gateway"))
+CLIENTS = (("huggingface", "Hugging Face cache", "model weights for Python tools"),)
 COLORS = {"ok": "#2e9d57", "warn": "#d99a1e", "bad": "#c94a3d", "idle": "#8a8f98"}  # tray icon fills
 FONT = "Segoe UI" if IS_WINDOWS else "TkDefaultFont"
 
@@ -199,6 +199,11 @@ class TrayApp:
         self.loaded: list[dict] = []
         self.client_status: dict[str, clients.ClientStatus] = {}
         self.clients_checked = 0.0  # monotonic; 0 = never
+        self.hardware = features.hardware(self.profile)
+        self.feature_status: dict[str, features.Status] = {}  # empty until the first check: service rows as before
+        self.feature_est = features.estimates(self.profile, self.hardware)
+        self.installer: tuple[int, str | None] | None = None  # (pid, start time) of the installer window we opened
+        self.installer_note = ""  # what the last Add features click did, shown under the Features card
         self.openclaw_busy = False
         self.openclaw_result = ""  # why the last Use gateway click failed, shown until the next click
         self.dictation_button: bool | None = None  # floating mic button visible? None while voice typing is down
@@ -246,6 +251,7 @@ class TrayApp:
         if checked - self.clients_checked >= CLIENT_SECONDS or not self.clients_checked:
             self.clients_checked = checked
             self.client_status = self._check_clients()
+            self._check_features()
         self.checked_at = datetime.now().strftime("%H:%M:%S")
         # Refreshes come from the poller and from start/stop threads; pystray's Windows backend frees the old icon
         # handle on every swap, so two concurrent swaps fail with WinError 1402. Serialise, and swap only on change.
@@ -301,6 +307,15 @@ class TrayApp:
             except Exception as e:  # noqa: BLE001 - a bad config file must not stop the poller
                 out[key] = clients.ClientStatus("warn", "Not checked", str(e) or type(e).__name__)
         return out
+
+    def _check_features(self) -> None:
+        """What is installed, on and linked (stacklib/features.py), and what each feature takes with the models that
+        are loaded now. Reuses the OpenClaw check _check_clients just made."""
+        try:
+            self.feature_status = features.statuses(self.profile, openclaw=self.client_status.get("openclaw"))
+            self.feature_est = features.estimates(self.profile, self.hardware, self.loaded)
+        except Exception as e:  # noqa: BLE001 - the poller must go on; the card keeps its last reading
+            print(f"[tray] feature check failed: {e}")
 
     def _store_rows(self, rows: list[dict], checked: float) -> None:
         """Keep each service's newest reading, so a slow poll that began before an action finished cannot undo it."""
@@ -490,8 +505,14 @@ class TrayApp:
                 mark = "starting..." if pending[0] == "start" else "stopping..."
             elif row and row["state"] == "starting":
                 mark = "◐ starting"
+            elif row and row["healthy"]:
+                mark = "● up"
+            elif features.service_installed(svc, self.feature_status) is False:
+                mark = "not installed"
+            elif svc in features.NOT_INSTALLABLE and svc not in self.managed:
+                mark = "not available yet"
             else:
-                mark = "● up" if row and row["healthy"] else "○ down"
+                mark = "○ down"
             return f"{LABELS[svc]}: {mark}"
 
         return text
@@ -502,6 +523,7 @@ class TrayApp:
             pystray.MenuItem("Show status", lambda *_: self.ui_queue.put(lambda: self.show_window(0)), default=True),
             pystray.MenuItem("Usage by model", lambda *_: self.ui_queue.put(lambda: self.show_window(1))),
             pystray.MenuItem("Settings", lambda *_: self.ui_queue.put(lambda: self.show_window(2))),
+            pystray.MenuItem("Add features...", self.open_installer),
             pystray.Menu.SEPARATOR,
             *[pystray.MenuItem(self._status_text(s), None, enabled=False) for s in ["ollama", *services.SERVICE_ORDER]],
             pystray.Menu.SEPARATOR,
@@ -541,6 +563,31 @@ class TrayApp:
             self.refresh_soon()
 
         threading.Thread(target=run, daemon=True).start()
+
+    def open_installer(self, *_) -> None:
+        """Add features: open the installer window in its own process (stacklib/install.launch_window), unless the one
+        opened last is still open. Its features page shows what is installed and what each feature costs."""
+        def run() -> None:
+            from stacklib import install
+
+            pid, started = self.installer or (0, None)
+            if started is not None and services._proc_info(pid)[1] == started:   # same process, not a reused pid
+                note = "The installer is already open; it may be behind another window."
+            else:
+                try:
+                    pid = install.launch_window()
+                    self.installer = (pid, services._proc_info(pid)[1])
+                    note = "Opening the installer; this card updates once setup has run."
+                except OSError as e:
+                    note = f"Could not open the installer: {e}. Run install.cmd instead."
+            print(f"[tray] {note}")
+
+            def show() -> None:
+                self.installer_note = note
+                self._render_features()
+            self.ui_queue.put(show)
+
+        threading.Thread(target=run, daemon=True, name="open-installer").start()
 
     def _toggle_startup(self) -> None:
         startup.remove() if startup.is_installed() else startup.install()
@@ -671,7 +718,7 @@ class TrayApp:
         t = self.t
         w = tk.Toplevel(self.root, bg=t["page"])
         w.title("Agent Stack")
-        w.geometry(f"940x{min(900, w.winfo_screenheight() - 80)}")  # Overview: services, GPU and loaded models, HF and OpenClaw, action bar
+        w.geometry(f"940x{min(900, w.winfo_screenheight() - 80)}")  # Overview scrolls: services, GPU, features, HF cache
         w.minsize(760, 560)
         w.protocol("WM_DELETE_WINDOW", w.withdraw)  # closing hides it; the tray keeps running
         if IS_WINDOWS and system_theme() == "dark":
@@ -774,7 +821,38 @@ class TrayApp:
         ttk.Button(gbtn, text="Chat", width=7, command=lambda: self.set_gpu_mode("chat")).pack(side="left", padx=2)
         ttk.Button(gbtn, text="Media", width=7, command=lambda: self.set_gpu_mode("media")).pack(side="left", padx=2)
 
-        extras = self._card(body, "Hugging Face and OpenClaw", row=2, column=0, pady=(12, 0))
+        # The installer's features: installed, on or off, linked to the stack, and what each takes on this PC.
+        feats = self._card(body, "Features", row=2, column=0, pady=(12, 0))
+        feats.columnconfigure(1, weight=1)
+        self.feature_widgets: dict[str, tuple] = {}
+        for n, f in enumerate(features.FEATURES):
+            i = 2 * n + 1
+            dot = tk.Label(feats, text="●", font=(FONT, 12), bg=self.t["card"], fg=self.t["muted"])
+            dot.grid(row=i, column=0, padx=(0, 10), pady=(5, 0), sticky="n")
+            names = ttk.Frame(feats, style="Card.TFrame")
+            names.grid(row=i, column=1, sticky="w")
+            ttk.Label(names, text=f.title, style="Card.TLabel", font=(FONT, 10, "bold")).pack(anchor="w")
+            load = ttk.Label(names, text="", style="Card.Muted.TLabel")
+            load.pack(anchor="w")
+            state = ttk.Label(feats, text="Checking...", style="Card.Sub.TLabel", width=-18)
+            state.grid(row=i, column=2, sticky="w", padx=8)
+            detail = ttk.Label(feats, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
+            detail.grid(row=i + 1, column=1, columnspan=2, sticky="w", pady=(0, 6))
+            fix = None
+            if f.id == "openclaw":
+                fix = ttk.Button(feats, text="Use gateway", command=self.openclaw_use_gateway)
+                fix.grid(row=i, column=3, sticky="e", padx=2)
+                fix.grid_remove()
+            self.feature_widgets[f.id] = (dot, load, state, detail, fix)
+        foot = ttk.Frame(feats, style="Card.TFrame")
+        foot.grid(row=2 * len(features.FEATURES) + 1, column=0, columnspan=4, sticky="we", pady=(4, 0))
+        foot.columnconfigure(0, weight=1)
+        self.features_note = ttk.Label(foot, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
+        self.features_note.grid(row=0, column=0, sticky="w")
+        self.add_features_btn = ttk.Button(foot, text="Add features...", command=self.open_installer)
+        self.add_features_btn.grid(row=0, column=1, sticky="e", padx=(8, 2))
+
+        extras = self._card(body, "Hugging Face cache", row=3, column=0, pady=(12, 0))
         extras.columnconfigure(1, weight=1)
         self.client_widgets: dict[str, tuple] = {}
         for n, (key, label, role) in enumerate(CLIENTS):
@@ -789,12 +867,7 @@ class TrayApp:
             state.grid(row=i, column=2, sticky="w", padx=8)
             detail = ttk.Label(extras, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
             detail.grid(row=i + 1, column=1, columnspan=2, sticky="w", pady=(0, 6))
-            fix = None
-            if key == "openclaw":
-                fix = ttk.Button(extras, text="Use gateway", command=self.openclaw_use_gateway)
-                fix.grid(row=i, column=3, sticky="e", padx=2)
-                fix.grid_remove()
-            self.client_widgets[key] = (dot, state, detail, fix)
+            self.client_widgets[key] = (dot, state, detail)
 
         bar = ttk.Frame(tab, padding=(0, 12, 0, 0))
         bar.grid(row=1, column=0, sticky="we")
@@ -830,6 +903,7 @@ class TrayApp:
         self.startup_var.set(startup.is_installed())
         self._render_loaded()
         self._render_clients()
+        self._render_features()
         if any(r["state"] == "starting" for r in self.rows.values()):
             self._tick_soon()
 
@@ -847,6 +921,7 @@ class TrayApp:
             up += healthy and enabled
             pid = row.get("pid")
             pending = self.pending.get(svc)
+            installed = features.service_installed(svc, self.feature_status)  # None until the first feature check
             if pending:
                 dot.configure(fg=t["warn"])
                 verb = "Starting" if pending[0] == "start" else "Stopping"
@@ -858,15 +933,22 @@ class TrayApp:
                 created = self._created(pid)
                 dot.configure(fg=t["warn"])
                 state.configure(text="Starting" + waited(created and time.time() - created), style="Warn.TLabel")
+            elif installed is False:  # its feature was not installed: Start would only fail
+                dot.configure(fg=t["warn"] if enabled else t["muted"])
+                state.configure(text="Not installed", style="Warn.TLabel" if enabled else "Card.Sub.TLabel")
             elif enabled:
                 dot.configure(fg=t["bad"])
                 state.configure(text="Stopped", style="Card.Sub.TLabel")
+            elif svc in features.NOT_INSTALLABLE:
+                dot.configure(fg=t["muted"])
+                state.configure(text="Not available yet", style="Card.Sub.TLabel")
             else:
                 dot.configure(fg=t["muted"])
                 state.configure(text="Off in settings", style="Card.Sub.TLabel")
             stopping = bool(pending) and pending[0] == "stop"
+            startable = (enabled and installed is not False) or healthy or self._running(svc)
             toggle.configure(text="Stop" if self._running(svc) else "Start",
-                             state="disabled" if self.busy or stopping or not (enabled or healthy) else "normal")
+                             state="disabled" if self.busy or stopping or not startable else "normal")
             problem = self.problems.get(svc)
             if problem and (problem[0] == "start") == healthy:
                 del self.problems[svc]  # it came up (or went down) after all
@@ -895,27 +977,56 @@ class TrayApp:
         self.start_btn.configure(state="normal" if can_start and not self.busy else "disabled")
         self.stop_btn.configure(state="normal" if can_stop and not self.busy else "disabled")
 
-    def _render_clients(self) -> None:
+    def _level_look(self, level: str) -> tuple[str, str]:
+        """(dot colour, state label style) for a status level: ok, warn, bad or off."""
         t = self.t
-        colour = {"ok": t["good"], "warn": t["warn"], "bad": t["bad"], "off": t["muted"]}
-        style = {"warn": "Warn.TLabel", "bad": "Bad.TLabel"}
-        for key, (dot, state, detail, fix) in self.client_widgets.items():
+        return ({"ok": t["good"], "warn": t["warn"], "bad": t["bad"]}.get(level, t["muted"]),
+                {"warn": "Warn.TLabel", "bad": "Bad.TLabel"}.get(level, "Card.Sub.TLabel"))
+
+    def _render_clients(self) -> None:
+        for key, (dot, state, detail) in self.client_widgets.items():
             s = self.client_status.get(key)
-            if key == "openclaw" and self.openclaw_busy:
-                dot.configure(fg=t["warn"])
+            if s:
+                fg, style = self._level_look(s.level)
+                dot.configure(fg=fg)
+                state.configure(text=s.state, style=style)
+                detail.configure(text=s.detail)
+
+    def _render_features(self) -> None:
+        """The Features card, from the last feature check (once a minute) and OpenClaw's Use gateway state."""
+        if not self._window_built() or not hasattr(self, "feature_widgets"):
+            return
+        status = self.feature_status
+        for fid, (dot, load, state, detail, fix) in self.feature_widgets.items():
+            f, s, e = features.BY_ID[fid], status.get(fid), self.feature_est.get(fid)
+            if e:
+                load.configure(text=("Required  ·  " if f.required else "") + features.brief(e))
+            if fid == "openclaw" and self.openclaw_busy:
+                dot.configure(fg=self.t["warn"])
                 state.configure(text="Setting up...", style="Warn.TLabel")
             elif s:
-                dot.configure(fg=colour.get(s.level, t["muted"]))
-                state.configure(text=s.state, style=style.get(s.level, "Card.Sub.TLabel"))
-                detail.configure(text=(self.openclaw_result + "  " if key == "openclaw" and self.openclaw_result else "")
+                fg, style = self._level_look(s.level)
+                dot.configure(fg=fg)
+                state.configure(text=s.state, style=style)
+                detail.configure(text=(self.openclaw_result + "  " if fid == "openclaw" and self.openclaw_result else "")
                                  + s.detail)
             if fix is not None:
                 # Shown while OpenClaw is installed but not gateway-only; a failure keeps it up so the owner can retry.
-                if self.openclaw_busy or (s and s.level in ("warn", "bad") and s.state != "Not checked"):
+                if self.openclaw_busy or (s and s.installed and not s.on and s.state != "Not checked"):
                     fix.configure(state="disabled" if self.openclaw_busy else "normal")
                     fix.grid()
                 else:
                     fix.grid_remove()
+        missing = [features.BY_ID[fid].short for fid in features.not_installed(status)]
+        if not status:
+            note = "Checking which features are installed..."
+        elif missing:
+            note = (f"Not installed: {', '.join(missing)}. Add features opens the installer, which shows what each one "
+                    "takes on this PC; installed features stay as they are.")
+        else:
+            note = "Every feature is installed. The installer checks and repairs them; Settings turns them off."
+        self.features_note.configure(text=f"{self.installer_note}  {note}" if self.installer_note else note)
+        self.add_features_btn.configure(text="Add features..." if missing or not status else "Open installer...")
 
     def openclaw_use_gateway(self) -> None:
         """Onboard OpenClaw if needed and make the gateway its only model endpoint (clients.setup_openclaw). No
@@ -924,7 +1035,7 @@ class TrayApp:
             return
         self.openclaw_busy = True
         self.openclaw_result = ""
-        self._render_clients()
+        self._render_features()
 
         def run() -> None:
             try:
@@ -932,13 +1043,14 @@ class TrayApp:
             except Exception as e:  # noqa: BLE001 - shown on the row; the log has the trace
                 traceback.print_exc()
                 result = f"Use gateway failed: {e}"
-            status = self._check_clients()
+            self.client_status = self._check_clients()
+            self._check_features()
 
             def done() -> None:
                 self.openclaw_busy = False
                 self.openclaw_result = result if result.startswith("Use gateway failed") else ""
-                self.client_status = status
                 self._render_clients()
+                self._render_features()
             self._on_ui(done)
         threading.Thread(target=run, daemon=True, name="openclaw-setup").start()
 
@@ -1454,6 +1566,7 @@ class TrayApp:
                 log(f"Failed: {e}")
             finally:
                 self.busy = ""
+                self.clients_checked = 0.0  # a service turned on or off changes the Features card: check again now
                 self.ui_queue.put(self._load_settings)
                 self.refresh_soon()
 

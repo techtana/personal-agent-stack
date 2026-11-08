@@ -1,6 +1,6 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+Updated: 2026-11-07 night (the installer asks which features to install, with their load on this PC, and the tray's Features card; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
@@ -322,6 +322,63 @@ once across a session restart.
    - run `stack.py whisper install` and restart Claude Desktop (recordings);
    - run `stack.py media provision` and restart Open WebUI (embeddings);
    - restart the orchestrator (its name in the traces).
+26. Installer features and the tray's Features card (2026-11-07, branch claude/installer-features-resources-0e9481).
+   - `stacklib/features.py` holds the catalog, the load estimates, the fit check and each feature's status, read from
+     the system. Required: local models, gateway. Optional: Open WebUI, Phoenix, images, voice typing, recordings in
+     Claude Desktop, OpenClaw.
+   - The installer's page 1 is "Which features do you want?": one row per feature with disk, GPU memory, GPU work,
+     CPU and RAM on this PC, and a box that adds up the choice. Page 2 holds the folders; the media folder shows only
+     for images or recordings.
+   - `install.save_features` writes services.open_webui, comfyui and dictation, observability.phoenix and media.root.
+     It never turns off a feature that is installed and on.
+   - New setup step `recordings`: Whisper for Claude Desktop, registered after a backup of its config.
+   - The tray's Overview has a Features card. A service row says "Not installed" when its program is missing. **Add
+     features...** (card and menu) opens the installer.
+   - `stack.py features [--details]` prints the same.
+
+   Measured for the estimates on this box (2026-11-07):
+   - uv tool environments: litellm 0.57 GB, arize-phoenix 0.54 GB, open-webui 1.94 GB;
+   - ComfyUI 16.8 GB (venv 4.5 GB, models 12.2 GB);
+   - Whisper environments: voice typing 0.25 GB, recordings 2.38 GB; large-v3-turbo is 1.62 GB in the HF cache;
+   - OpenClaw 0.50 GB;
+   - a running LiteLLM: 0.3 GB working set;
+   - qwen3.5:9b at 32k: 6,166,413,310 bytes on the GPU (5.7 GB of 2**30).
+
+   Not measured (estimates in the code): the memory of Open WebUI, Phoenix, ComfyUI (idle and after a job), voice
+   typing, the recordings server, OpenClaw, the orchestrator and the tray. Only Ollama was running that night, and
+   another LiteLLM process was up, so no service was started to measure them.
+
+   Verified:
+   - unit tests (322 passed);
+   - the installer window built hidden in tests: locked rows, the summary following the ticks, Back and Next keeping
+     the ticks, Install writing the choice and starting the plan (mocks);
+   - renders of both installer pages and the tray's Overview from this worktree, with this PC's real status and with
+     a fake fresh PC. A 700 px screen scrolls the features page and keeps the buttons in view; the scrollbar is
+     mapped (geometry checked) but does not show in the capture;
+   - `stack.py features --details` on this PC;
+   - the terminal feature question, with scripted answers and every write stubbed.
+
+   A code review's findings were fixed:
+   - a recordings entry already in Claude Desktop is never rewritten;
+   - a worktree adds none;
+   - a failed check ("Not checked") leaves the feature's switch as it is;
+   - a feature that is on but broken is ticked for repair;
+   - the page scrolls on short screens;
+   - the terminal installer re-asks after a typo;
+   - the orchestrator's row never reads "Not installed";
+   - a failed `uv tool dir` is retried;
+   - Claude Desktop's config is read even with a byte order mark;
+   - doctor's GPU baseline is capped at 2.5 GB;
+   - images with only a model missing count only that model.
+
+   Not verified:
+   - a real install run with the new page (a fresh PC, or adding a feature here);
+   - the recordings step for real (Claude Desktop's config);
+   - Add features from the live tray, which runs the main checkout's code;
+   - the terminal installer's feature question, typed by hand;
+   - Linux and macOS.
+
+   After merging, restart the tray from the main checkout.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

@@ -9,6 +9,26 @@ entry stays and gets a "Done <date>" note.
 
 ## 2026-11-07
 
+- **Pending: the installer asks which features to install, shows what each takes on this PC, and the tray shows what
+  is installed.** Asked by the owner: choose the features, with the required ones fixed; see each one's CPU and GPU
+  load while choosing; see in the tray what is installed and linked to the stack; run the installer again for more.
+  - One catalog, `stacklib/features.py`, for the installer's first page, the tray's Features card and
+    `stack.py features`. Required: the local models and the gateway (with the orchestrator and the tray). Optional:
+    Open WebUI, Phoenix, images, voice typing, recordings in Claude Desktop, OpenClaw.
+  - The installer adds features and never turns one off. Installed features that are on are ticked and locked;
+    Settings in the tray turns them off. A second run cannot remove anything by accident.
+  - Status is read from the system every time (tool environments, files under the media folder, the profile's
+    switches, Claude Desktop's and OpenClaw's configs), never from a stored list of what the installer chose, which
+    would drift after changes by hand.
+  - Estimates: the reference PC's measurements (memory/state.md) and the install sizes measured on 2026-11-07, the
+    chat model's GPU memory from Ollama when it is loaded, the rest marked as estimates. A fit check adds up the choice
+    against this PC's GPU, RAM and processors.
+  - First ticks: Open WebUI and OpenClaw on, images on a card with 10 GB or more, Phoenix off under Smart App Control,
+    voice typing and recordings off (a global hotkey; a change to Claude Desktop's config).
+  - Rejected: uninstalling from the installer (deleting a feature's files is a separate decision); a stored record of
+    installed features; benchmarking each feature during setup (minutes of downloads and GPU work before anything is
+    chosen).
+
 - **Pending: a weekly security and confidentiality audit of the Claude setup (`/claude-security-audit`).** Asked by
   the owner: regularly look for vulnerabilities and for new Claude settings that improve confidentiality and safety,
   and always replace the owner's identity with placeholders where it is written down. The skill reports on settings
