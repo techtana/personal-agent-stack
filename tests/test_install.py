@@ -179,5 +179,58 @@ class PullStream(unittest.TestCase):
             ollama.pull_stream(base, "m")
 
 
+def _git(cwd, *args):
+    import subprocess
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "init.defaultBranch=main",
+                    *args], cwd=cwd, check=True, capture_output=True)
+
+
+@unittest.skipUnless(install.which("git"), "git is not installed")
+class CheckoutBehind(unittest.TestCase):
+    """Real throwaway repositories: an origin, a clone of it, and commits the clone has not pulled yet."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.origin, self.clone = Path(tmp.name) / "origin", Path(tmp.name) / "clone"
+        self.origin.mkdir()
+        _git(self.origin, "init", "-q")
+        self.commit("one")
+        _git(tmp.name, "clone", "-q", str(self.origin), str(self.clone))
+        patcher = mock.patch.object(install, "REPO", self.clone)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def commit(self, msg):
+        _git(self.origin, "commit", "-q", "--allow-empty", "-m", msg)
+
+    def test_up_to_date_says_nothing(self):
+        self.assertEqual(install.checkout_behind(), "")
+
+    def test_behind_after_fetch_names_the_count_and_the_fix(self):
+        self.commit("two")
+        self.commit("three")
+        msg = install.checkout_behind()
+        self.assertIn("2 commits behind origin/main", msg)
+        self.assertIn("git pull", msg)
+        self.assertNotIn("could not be reached", msg)
+
+    def test_local_commits_ahead_do_not_warn(self):
+        _git(self.clone, "commit", "-q", "--allow-empty", "-m", "mine")
+        self.assertEqual(install.checkout_behind(), "")
+
+    def test_unreachable_origin_falls_back_to_the_last_fetch(self):
+        self.commit("two")
+        _git(self.clone, "fetch", "-q")
+        _git(self.clone, "remote", "set-url", "origin", str(self.origin.parent / "gone"))
+        msg = install.checkout_behind()
+        self.assertIn("1 commit behind", msg)
+        self.assertIn("could not be reached", msg)
+
+    def test_not_a_git_checkout_says_nothing(self):
+        with tempfile.TemporaryDirectory() as plain, mock.patch.object(install, "REPO", Path(plain)):
+            self.assertEqual(install.checkout_behind(), "")
+
+
 if __name__ == "__main__":
     unittest.main()

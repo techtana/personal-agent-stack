@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -68,6 +69,9 @@ class Installer:
         ttk.Label(f, text="Where should Agent Stack put its files?", font=("Segoe UI", 13, "bold")).grid(sticky="w")
         ttk.Label(f, wraplength=640, text="Choose the folders, then Install. Setup runs in the background: you can "
                   "close this window while it works and open the installer again to check on it.").grid(sticky="w", pady=(4, 12))
+        self.behind = ttk.Label(f, text="", foreground=WARN_FG, wraplength=640)
+        self.behind.grid(sticky="w")
+        self._check_checkout()
 
         self.store = tk.StringVar(value=d["model_store"])
         self.tools = tk.StringVar(value=d["tool_dir"])
@@ -128,6 +132,19 @@ class Installer:
         for v in (self.store, self.tools, self.media_root):
             v.trace_add("write", lambda *_: self.validate())
         self.validate()
+
+    def _check_checkout(self):
+        """Fetch in a thread (it can take seconds, or time out offline) and show the warning when it is back."""
+        result: list[str] = []
+        threading.Thread(target=lambda: result.append(install.checkout_behind()), daemon=True).start()
+
+        def done():
+            if not result:
+                self.root.after(POLL_MS, done)
+            elif result[0] and self.behind.winfo_exists():
+                self.behind.configure(text=result[0])
+                self.behind.grid_configure(pady=(0, 12))
+        self.root.after(POLL_MS, done)
 
     def _folder(self, parent, title, hint, var, note=""):
         ttk = self.ttk

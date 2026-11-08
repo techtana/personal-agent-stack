@@ -93,6 +93,9 @@ def cmd_setup(a):
     store = p["ollama_env"].get("OLLAMA_MODELS") or p["model_store"] or str(Path.home() / ".ollama" / "models")
     if not install.drive_present(store):
         die(f"the models folder {store} is on a drive that is not connected; run `uv run scripts/stack.py install` to choose another")
+    behind = install.checkout_behind()
+    if behind:
+        warn(behind)
     plan = install.Plan(model_store=store, pull=not a.no_pull, restart_ollama=not a.no_restart)
     if not install.run(plan):
         die("setup finished with problems (see the failed steps above)")
@@ -130,6 +133,11 @@ def install_in_terminal():
         prof.write_profile()
         p = prof.resolve_profile()
         d = install.defaults(p)
+        behind = install.checkout_behind()
+        if behind:
+            warn(behind)
+            if not input("Install this older version anyway? [y/N]: ").strip().lower().startswith("y"):
+                return
         if d["model_note"]:
             warn(d["model_note"])
 
