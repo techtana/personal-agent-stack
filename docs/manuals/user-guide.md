@@ -320,9 +320,9 @@ instructions.
 How it works, all on this PC:
 
 1. It presses Ctrl+C in the app to read the selection, then puts back what was on your clipboard.
-2. The gateway alias `refine.model` (`local-primary`, the 9B on SEKAIHOME) rewrites the text. With the style's
-   instructions it gets fixed rules: keep the language; keep names, numbers, links, `[[page links]]`, `#tags`,
-   `((block references))` and markdown; never answer a question in the text, only rewrite it.
+2. The gateway alias `refine.model` (`local-primary`, the 9B on the reference machine) rewrites the text. With the
+   style's instructions it gets fixed rules: keep the language; keep names, numbers, links, `[[page links]]`,
+   `#tags`, `((block references))` and markdown; never answer a question in the text, only rewrite it.
 3. The reply is checked. If it reads like an answer to you, grew or shrank far more than the style allows, or is empty,
    your text stays as it was. The suggestion still goes into the history.
 4. It presses Ctrl+C once more. Only if the same text is still selected in the same window does it paste the new text
