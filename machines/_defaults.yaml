@@ -183,6 +183,21 @@ read_aloud:
   break_ms: 1500             # how long that break is
   unload_after_min: 30       # free Kokoro's memory after this many idle minutes (0 = never)
 
+web_filter:
+  # Blocked sites (policy/web-filter.yaml; docs/manuals/user-guide.md "Blocked sites"): sites with security problems or
+  # that take data from users, kept away from Open WebUI's web search and page fetches, the stack's one web reader.
+  # Claude Desktop and Claude Code are outside the stack: /claude-security-audit reports what covers them there.
+  enabled: true
+  block: ''                  # your own sites, one per line (a site covers its subdomains; # starts a comment)
+  allow: ''                  # sites never blocked, even when a list names them
+  exfiltration: true         # request catchers and tunnels (ships with the stack)
+  data_brokers: true         # people-search and data broker sites (ships with the stack)
+  phishing: true             # Phishing Army, downloaded
+  threats: false             # Hagezi TIF mini (~190,000 sites), downloaded; slows each web search by seconds
+  refresh_hours: 24          # how often the downloaded lists are fetched again
+  max_sites: 25000           # most sites in Open WebUI's web search filter, which checks them one by one: about
+                             # 0.2 s per 10,000 sites per search. Your own sites and the shipped lists come first
+
 agent_access:
   # Folders agent sessions and media tools may use (decision D-M6). Empty means "ask the owner": every media path
   # is refused until the machine file lists it.

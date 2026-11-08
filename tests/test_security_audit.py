@@ -43,6 +43,7 @@ def make_ctx(tmp: str, system: str = "windows", cwd=None, offline: bool = True) 
            "APPDATA": str(home / "AppData" / "Roaming"), "LOCALAPPDATA": str(home / "AppData" / "Local"),
            "PROGRAMFILES": str(Path(tmp) / "ProgramFiles"), "GIT_CONFIG_GLOBAL": str(gitcfg), "GIT_CONFIG_NOSYSTEM": "1",
            "NPM_CONFIG_USERCONFIG": str(npmrc), "AUDIT_NO_REGISTRY": "1", "AUDIT_NO_GH": "1",
+           "AUDIT_NO_DNS": "1",  # never ask this PC's DNS settings (WebFilter tests stub `run` instead)
            "GIT_CEILING_DIRECTORIES": str(Path(tmp).resolve().parent),  # never find a real repository above
            "COMPUTERNAME": "BUILDBOX"}
     return audit.Ctx(home=home, state=Path(tmp) / "state", cwd=cwd or tmp, offline=offline, environ=env, system=system)
@@ -371,6 +372,9 @@ class ScanAndScrub(unittest.TestCase):
     def test_collect_report_state_and_drift(self):
         r = audit.collect(self.ctx, [], include_projects=False, include_versions=False)
         self.assertTrue(r["first_run"])
+        ids = {f["id"] for f in r["findings"]}
+        self.assertTrue({"WEB-BLOCKLIST-MISSING", "WEB-SERVER-SIDE"} <= ids, ids)  # no list in the state folder
+        self.assertNotIn("WEB-DNS", ids)  # AUDIT_NO_DNS: this PC's DNS is never read in tests
         report, last = audit.write_outputs(self.ctx, r)
         for path in (report, last):
             self.assertTrue(identity_free(path.read_text(encoding="utf-8")), path.name)
@@ -512,6 +516,166 @@ class GitHubLogin(unittest.TestCase):
                  f"[pr3]: {lab}/pull/3": f"[pr3]: {lab}/pull/3"}  # a link definition is left to the <owner> rule
         for before, after in cases.items():
             self.assertEqual(audit.own_links(before, LOGIN, "widget-lab", rx)[0], after, before)
+
+
+class WebFilter(unittest.TestCase):
+    """Report-only web-filter checks: the stack's blocked-sites.txt against WebFetch deny rules, protective DNS (from
+    canned command output; `run` is stubbed, so no real PowerShell), and what runs on Anthropic's servers."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.ctx = make_ctx(self.tmp.name)
+        self.ctx.state.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_list(self, text: str) -> None:
+        (self.ctx.state / audit.BLOCKLIST_FILE).write_text(text, encoding="utf-8")
+
+    def user(self, deny=(), scope="user"):
+        return audit.Layer(scope, self.ctx.home / ".claude" / "settings.json", {"permissions": {"deny": list(deny)}})
+
+    def dns(self, output: str, code: int = 0, system: str = "windows"):
+        from unittest import mock
+        self.ctx.system = system
+        self.ctx.environ.pop("AUDIT_NO_DNS", None)
+        calls = []
+
+        def fake(ctx, cmd, cwd=None, timeout=30):
+            calls.append([str(c) for c in cmd])
+            return code, output
+        with mock.patch.object(audit, "run", side_effect=fake):
+            out = audit.check_web_dns(self.ctx)
+        return out, calls
+
+    def test_rule_matching_follows_the_docs(self):
+        m = audit.webfetch_domain_matches
+        self.assertTrue(m("example.com", "example.com"))
+        self.assertTrue(m("Example.COM.", "example.com"))
+        self.assertFalse(m("example.com", "api.example.com"))  # the plain form matches that host only
+        self.assertTrue(m("*.example.com", "a.b.example.com"))
+        self.assertFalse(m("*.example.com", "example.com"))
+        self.assertTrue(m("example.*", "example.org"))
+        self.assertFalse(m("example.*", "example.evil.com"))   # a `*` elsewhere stays inside one label
+        self.assertTrue(m("*", "anything.test"))
+        self.assertEqual(audit.webfetch_missing(["*.wild.example"], "x.wild.example"), [])
+        self.assertEqual(audit.webfetch_missing(["*.*.wild.example"], "wild.example"),
+                         ["WebFetch(domain:wild.example)", "WebFetch(domain:*.wild.example)"])
+
+    def test_list_parsing(self):
+        self.write_list("\ufeff# request catchers\nCatcher.Example.\n\nsub.catcher.example  # covered by its parent\n"
+                        "catcher.example\nbroker.example # people search\n*.tunnel.example\nnot a domain\n"
+                        "b\u00fccher.example\n")  # a byte order mark first, an international name last
+        domains, bad = audit.blocked_sites(self.ctx)
+        self.assertEqual(domains, ["catcher.example", "broker.example", "tunnel.example", "xn--bcher-kva.example"])
+        self.assertEqual(bad, 1)
+
+    def test_missing_list_gives_info_and_no_rules_finding(self):
+        out = audit.check_web_filter(self.ctx, [self.user()])
+        ids = {f["id"]: f for f in out}
+        self.assertEqual(set(ids), {"WEB-BLOCKLIST-MISSING", "WEB-SERVER-SIDE"})
+        self.assertEqual(ids["WEB-BLOCKLIST-MISSING"]["severity"], "info")
+        self.assertIn("web-filter export", ids["WEB-BLOCKLIST-MISSING"]["fix"])
+
+    def test_domains_without_rules_are_medium_with_exact_rules(self):
+        self.write_list("covered.example\nhalf.example\nlocal.example\nfresh.example\nx.wild.example\n")
+        layers = [self.user(["WebFetch(domain:covered.example)", "WebFetch(domain:*.covered.example)",
+                             "WebFetch(domain:half.example)", "WebFetch(domain:*.wild.example)", "Read(~/.ssh/**)"]),
+                  self.user(["WebFetch(domain:local.example)", "WebFetch(domain:*.local.example)"],
+                            scope="project-local")]
+        out = audit.check_web_blocklist(self.ctx, layers, {"cli": "2.1.150"})
+        self.assertEqual(len(out), 1)
+        f = out[0]
+        self.assertEqual((f["id"], f["severity"], f["area"]), ("WEB-BLOCKLIST-RULES", "medium", "web"))
+        self.assertIn("3 of the 5 domains", f["detail"])
+        self.assertIn("1 of them are denied only in the current project's settings", f["detail"])
+        rules = json.loads(f["fix"][f["fix"].index("["):f["fix"].index("]") + 1])
+        self.assertEqual(rules, ["WebFetch(domain:*.half.example)", "WebFetch(domain:local.example)",
+                                 "WebFetch(domain:*.local.example)", "WebFetch(domain:fresh.example)",
+                                 "WebFetch(domain:*.fresh.example)"])
+        self.assertIn("~/.claude/settings.json", f["fix"])
+        self.assertIn("managed-settings.json", f["fix"])
+        self.assertIn("update first (cli 2.1.150 installed)", f["fix"])
+
+    def test_long_lists_keep_the_fix_short(self):
+        self.write_list("".join(f"site{i}.example\n" for i in range(15)))
+        f = audit.check_web_blocklist(self.ctx, [self.user()])[0]
+        self.assertIn("15 sites", f["title"])
+        self.assertIn("and 5 more.", f["detail"])
+        rules = json.loads(f["fix"][f["fix"].index("["):f["fix"].index("]") + 1])
+        self.assertEqual(len(rules), 20)  # two rules for each of the first 10 domains
+        self.assertIn("web-filter export", f["fix"])
+        self.assertIn("all 15", f["fix"])
+
+    def test_webfetch_denied_outright_gives_no_finding(self):
+        self.write_list("catcher.example\n")
+        for rule in ("WebFetch", "WebFetch(domain:*)"):
+            self.assertEqual(audit.check_web_blocklist(self.ctx, [self.user([rule])]), [], rule)
+        (self.ctx.state / audit.BLOCKLIST_FILE).unlink()
+        self.assertEqual(audit.check_web_blocklist(self.ctx, [self.user(["WebFetch"])]), [])
+
+    def test_protective_dns_found(self):
+        out, calls = self.dns("DNS|Wi-Fi|9.9.9.9,149.112.112.112\nDNS|Wi-Fi|2620:fe::fe,fec0:0:0:ffff::1\n")
+        self.assertEqual(calls[0][0], "powershell")
+        self.assertIn("Get-DnsClientServerAddress", calls[0][-1])
+        self.assertEqual(len(out), 1)
+        self.assertEqual((out[0]["id"], out[0]["severity"]), ("WEB-DNS", "info"))
+        self.assertIn("Quad9", out[0]["title"])
+        self.assertNotIn("fec0", out[0]["detail"])  # Windows' placeholder servers are left out
+        out, _ = self.dns("DNS|Wi-Fi|45.90.28.123\n")
+        self.assertEqual(out[0]["severity"], "info")
+        self.assertIn("filtering depends on your profile", out[0]["title"])
+        self.assertEqual(audit.protective_provider("76.76.2.1"), "Control D")
+        for unfiltered in ("76.76.2.0", "76.76.2.22", "1.1.1.1", "9.9.9.10"):
+            self.assertIsNone(audit.protective_provider(unfiltered), unfiltered)
+
+    def test_protective_dns_not_found(self):
+        out, _ = self.dns(f"DNS|Ethernet|192.168.1.1\nDNS|{USER} phone|1.1.1.1,76.76.2.0\n")
+        f = out[0]
+        self.assertEqual((f["id"], f["severity"]), ("WEB-DNS", "low"))
+        self.assertIn("No protective DNS", f["title"])
+        self.assertIn("Cloudflare without filtering", f["detail"])
+        self.assertIn("Control D unfiltered", f["detail"])
+        self.assertIn("hint, not proof", f["detail"])
+        self.assertIn("DNS server assignment", f["fix"])
+        audit.set_identity(self.ctx, audit.discover_identity(self.ctx))
+        out, _ = self.dns(f"DNS|{USER} phone|1.1.1.1\n")
+        self.assertTrue(identity_free(json.dumps(out)), out)  # a connection's name goes through the Redactor
+        out, _ = self.dns("DNS|Wi-Fi|9.9.9.9,192.168.1.1\n")
+        self.assertEqual(out[0]["severity"], "low")
+        self.assertIn("only some", out[0]["title"])
+
+    def test_dns_unreadable_is_a_skipped_check(self):
+        out, _ = self.dns("", code=1)
+        self.assertEqual(out, [])
+        self.assertTrue(any("DNS servers" in e for e in self.ctx.errors))
+
+    def test_dns_on_linux_and_mac(self):
+        from unittest import mock
+        resolv = Path(self.tmp.name) / "resolv.conf"
+        resolv.write_text("# stub\nnameserver 127.0.0.53\noptions edns0\n", encoding="utf-8")
+        with mock.patch.object(audit, "RESOLV_CONF", resolv):
+            out, calls = self.dns("Global: 9.9.9.9#dns.quad9.net\nLink 2 (eth0): 149.112.112.112\n", system="linux")
+        self.assertEqual(calls[0][:2], ["resolvectl", "dns"])
+        self.assertEqual(out[0]["severity"], "info")
+        resolv.write_text("nameserver 192.168.1.1\n", encoding="utf-8")
+        with mock.patch.object(audit, "RESOLV_CONF", resolv):
+            out, calls = self.dns("", system="linux")
+        self.assertEqual((calls, out[0]["severity"]), ([], "low"))
+        out, calls = self.dns("resolver #1\n  nameserver[0] : 1.1.1.2\n  nameserver[1] : 1.0.0.2\n", system="mac")
+        self.assertEqual(calls[0], ["scutil", "--dns"])
+        self.assertIn("Cloudflare for Families", out[0]["title"])
+
+    def test_server_side_is_always_reported(self):
+        for deny in ((), ("WebFetch", "WebSearch")):
+            ids = {f["id"]: f for f in audit.check_web_filter(self.ctx, [self.user(deny)])}
+            f = ids["WEB-SERVER-SIDE"]
+            self.assertEqual(f["severity"], "info")
+            self.assertIn("Anthropic's servers", f["detail"])
+            self.assertIn("URLBlocklist", f["fix"])
+            self.assertIn("web-filter export", f["fix"])
+        self.assertIn("WebSearch is denied in user settings", f["detail"])
 
 
 class SkillFiles(unittest.TestCase):

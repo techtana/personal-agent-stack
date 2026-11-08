@@ -1,0 +1,167 @@
+# Blocked sites (scripts/stacklib/webfilter.py; docs/manuals/user-guide.md "Blocked sites").
+# Sites with security problems or that take data from users, kept away from the stack's web reader (Open WebUI's web
+# search and page fetches). Each list is switched on or off in machines/<HOST>.yaml `web_filter:` (tray: Settings >
+# Blocked sites); your own sites go there too. A site covers its subdomains: webhook.site also blocks x.webhook.site.
+#
+# Lists with `sites` ship in this file. Lists with `url` are downloaded at run time into .run/webfilter (never
+# committed), refreshed every web_filter.refresh_hours, and kept when a download fails. The order below is the order
+# the sites fill Open WebUI's lists when they hold fewer sites than all lists together (web_filter.max_sites): your
+# own sites first, then these, top to bottom.
+
+# Shared platforms that downloaded lists sometimes name whole (Phishing Army listed docs.google.com, which would block
+# every Google Doc). An entry from a downloaded list that is exactly one of these is dropped; the list's entries for
+# their subdomains (evil.weebly.com) stay. Your own sites (web_filter.block) can still block them.
+keep:
+  - google.com
+  - docs.google.com
+  - drive.google.com
+  - sites.google.com
+  - forms.gle
+  - storage.googleapis.com
+  - github.com
+  - github.io
+  - raw.githubusercontent.com
+  - gitlab.io
+  - microsoft.com
+  - sharepoint.com
+  - onedrive.live.com
+  - 1drv.ms
+  - dropbox.com
+  - amazonaws.com
+  - s3.amazonaws.com
+  - cloudfront.net
+  - azurewebsites.net
+  - blob.core.windows.net
+  - web.core.windows.net
+  - firebaseapp.com
+  - web.app
+  - vercel.app
+  - netlify.app
+  - pages.dev
+  - workers.dev
+  - r2.dev
+  - herokuapp.com
+  - weebly.com
+  - wixsite.com
+  - blogspot.com
+  - wordpress.com
+  - medium.com
+  - notion.site
+  - ipfs.io
+  - translate.goog
+  - linkedin.com
+  - facebook.com
+  - youtube.com
+  - wikipedia.org
+
+lists:
+  exfiltration:
+    title: Request catchers and tunnels
+    why: >-
+      Services that log every request sent to them, or put a private server on a public address. A page with hidden
+      instructions can tell a model to fetch https://<catcher>/?q=<your data>; blocking them stops that kind of leak.
+    sites:
+      # request catchers
+      - webhook.site
+      - requestbin.com
+      - requestbin.net
+      - pipedream.net
+      - requestcatcher.com
+      - beeceptor.com
+      - hookbin.com
+      - postb.in
+      - ptsv2.com
+      - ptsv3.com
+      - requestinspector.com
+      - requestrepo.com
+      - mockbin.org
+      - mockbin.io
+      - smee.io
+      # out-of-band interaction servers (security testing tools, also used by attackers)
+      - interact.sh
+      - oast.fun
+      - oast.live
+      - oast.me
+      - oast.online
+      - oast.pro
+      - oast.site
+      - oastify.com
+      - burpcollaborator.net
+      - dnslog.cn
+      - ceye.io
+      # tunnels to a private machine
+      - ngrok.io
+      - ngrok.app
+      - ngrok.dev
+      - ngrok-free.app
+      - ngrok-free.dev
+      - trycloudflare.com
+      - loca.lt
+      - localtunnel.me
+      - serveo.net
+      - localhost.run
+      - lhr.life
+      - pagekite.me
+      - bore.pub
+      - pinggy.link
+  data_brokers:
+    title: People-search and data broker sites
+    why: >-
+      Sites that collect and sell personal data (names, addresses, phone numbers, relatives). Blocking them keeps
+      models from gathering personal data about people, you included, from search results.
+    sites:
+      - spokeo.com
+      - whitepages.com
+      - beenverified.com
+      - intelius.com
+      - mylife.com
+      - radaris.com
+      - peoplefinders.com
+      - truepeoplesearch.com
+      - fastpeoplesearch.com
+      - instantcheckmate.com
+      - truthfinder.com
+      - peoplelooker.com
+      - peekyou.com
+      - zabasearch.com
+      - ussearch.com
+      - pipl.com
+      - thatsthem.com
+      - clustrmaps.com
+      - nuwber.com
+      - familytreenow.com
+      - searchpeoplefree.com
+      - smartbackgroundchecks.com
+      - usphonebook.com
+      - advancedbackgroundchecks.com
+      - cyberbackgroundchecks.com
+      - fastbackgroundcheck.com
+      - peoplesmart.com
+      - checkpeople.com
+      - infotracer.com
+      - idcrawl.com
+      - socialcatfish.com
+      - locatefamily.com
+      - neighbor.report
+      - rehold.com
+      - officialusa.com
+      - peoplesearchnow.com
+      - publicrecordsnow.com
+      - 192.com
+  phishing:
+    title: Phishing sites (Phishing Army)
+    why: >-
+      Pages that copy a real sign-in or payment page to steal what you type. Phishing Army merges several public feeds
+      and drops known false positives.
+    url: https://phishing.army/download/phishing_army_blocklist.txt
+    homepage: https://phishing.army/
+    terms: Generator under GPL-3.0; the feeds it merges keep their own conditions (https://phishing.army/license/).
+  threats:
+    title: Malware, phishing and scam sites (Hagezi TIF mini)
+    why: >-
+      Hagezi's Threat Intelligence Feeds, mini version: about 190,000 sites that serve malware, phishing, scams and
+      command-and-control servers. Larger than Open WebUI checks quickly, so it is off by default; protective DNS
+      covers it for every app at no cost (see the user guide).
+    url: https://cdn.jsdelivr.net/gh/hagezi/dns-blocklists@latest/wildcard/tif.mini-onlydomains.txt
+    homepage: https://github.com/hagezi/dns-blocklists
+    terms: GPL-3.0.

@@ -364,10 +364,10 @@ class InstallerWindow(Temp):
         for fid in ("models", "gateway", "chat"):
             self.assertTrue(boxes[fid].instate(["disabled"]), fid)
             self.assertTrue(self.app.feature_vars[fid].get(), fid)
-        for fid in ("tracing", "images", "voice_typing", "recordings", "openclaw"):
+        for fid in ("tracing", "web_filter", "images", "voice_typing", "recordings", "openclaw"):
             self.assertFalse(boxes[fid].instate(["disabled"]), fid)
         ticked = {fid for fid, v in self.app.feature_vars.items() if v.get()}
-        self.assertEqual(ticked, {"models", "gateway", "chat", "images", "openclaw"})
+        self.assertEqual(ticked, {"models", "gateway", "chat", "web_filter", "images", "openclaw"})
 
     def test_the_summary_follows_the_ticks(self):
         self.assertIn("An image needs about 10.5 GB", self.summary())
@@ -437,7 +437,7 @@ class InstallerWindow(Temp):
         self.assertTrue(self.app.validate())
         self.app.on_install()
         _profile, chosen, media_root, status, options = self.calls["save_features"].call_args.args
-        self.assertEqual(chosen, {"models", "gateway", "chat", "images", "recordings", "openclaw"})
+        self.assertEqual(chosen, {"models", "gateway", "chat", "web_filter", "images", "recordings", "openclaw"})
         self.assertEqual(media_root, str(self.tmp / "media"))
         self.assertIs(status, self.status)
         plan = self.calls["spawn_worker"].call_args.args[0]

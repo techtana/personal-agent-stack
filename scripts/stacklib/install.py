@@ -854,6 +854,23 @@ def step_build(plan: Plan, profile: dict, report) -> str:
     return f"primary model {profile['models'].get('primary')}, external models {'on' if profile['policy']['external']['enabled'] else 'off'}"
 
 
+def step_web_filter(plan: Plan, profile: dict, report) -> str:
+    """Blocked sites (stacklib/webfilter.py): download the lists, fill Open WebUI's web search filter when its database
+    exists (a fresh one takes the filters from its environment at first start), write the Claude security audit's
+    list, and say whether this PC uses protective DNS, which covers every app, Claude Desktop's browser included."""
+    from . import webfilter
+
+    if not webfilter.enabled(profile):
+        raise Skip("not chosen; tick Blocked sites in the installer, or turn on Block unsafe sites in the tray's "
+                   "Settings")
+    report("downloading the lists of blocked sites")
+    failed = [r.text for r in webfilter.maintain(profile) if not r.ok]
+    text = f"{webfilter.summary(profile)} {webfilter.dns_text()}"
+    if failed:
+        raise Warn("; ".join(failed) + ". " + text)
+    return text
+
+
 def step_pull(plan: Plan, profile: dict, report) -> str:
     if not plan.pull:
         raise Skip("not chosen; run `uv run scripts/stack.py pull` later")
@@ -951,6 +968,7 @@ STEPS = (
     ("ollama_env", "Point Ollama at the models folder", step_ollama_env),
     ("tools", "Install the gateway and the chosen Python tools", step_tools),
     ("build", "Generate gateway and agent configs", step_build),
+    ("web_filter", "Set up blocked sites (web filter)", step_web_filter),
     ("pull", "Download models", step_pull),
     ("huggingface", "Set up the Hugging Face cache", step_huggingface),
     ("media", "Install ComfyUI and the image model", step_media),

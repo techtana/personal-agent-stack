@@ -89,6 +89,7 @@ your choice:
 | Local models (Ollama) | yes | Ollama and the chat model every other feature talks to. |
 | Gateway and agent tools | yes | LiteLLM with the privacy rules, the orchestrator for the departments, and the tray app. |
 | Chat in the browser (Open WebUI) | no | Chat at http://127.0.0.1:3000, with documents, the agents' tools and the image button. |
+| Blocked sites (web filter) | no | Keeps Open WebUI's web search and page fetches away from request catchers, data brokers and phishing sites ([details](user-guide.md#blocked-sites)). Ticked by default. |
 | Trace viewer (Phoenix) | no | Each request's steps, for debugging. The tray's Usage tab works without it. |
 | Image generation (ComfyUI) | no | ComfyUI with Z-Image-Turbo for the chat's image button. Needs the media folder. |
 | Voice typing (Whisper) | no | A hotkey and a mic button that type what you say into any app ([details](user-guide.md#voice-typing)). |

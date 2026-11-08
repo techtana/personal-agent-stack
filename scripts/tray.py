@@ -90,10 +90,11 @@ from PIL import ImageTk  # noqa: E402
 from stacklib import IS_WINDOWS, clients, media, ollama, process_metrics, procname, profile as prof, services  # noqa: E402
 from stacklib.icon import COLORS, make_icon  # noqa: E402
 from stacklib import settings as cfg  # noqa: E402
-from stacklib import comfy_usage, features, gpu_models, startup, usage, usage_log  # noqa: E402
+from stacklib import comfy_usage, features, gpu_models, startup, usage, usage_log, webfilter  # noqa: E402
 
 POLL_SECONDS = 10
 CLIENT_SECONDS = 60  # between feature and Hugging Face checks: measuring the cache walks every file in it
+WEB_FILTER_SECONDS = 600  # between blocked-sites rounds: lists due for download, Open WebUI's search filter
 START_TIMEOUT = 180  # seconds a started service gets to answer its health check
 RESOURCE_SECONDS = 5  # pause between process samples while the Resources tab is on screen
 RESOURCES_TAB = 3
@@ -220,6 +221,7 @@ class TrayApp:
         self.dictation_health: dict | None = None
         self.client_status: dict[str, clients.ClientStatus] = {}
         self.clients_checked = 0.0  # monotonic; 0 = never
+        self.web_filter_checked = 0.0  # monotonic; 0 = never
         self.hardware = features.hardware(self.profile)
         self.feature_status: dict[str, features.Status] = {}  # empty until the first check: service rows as before
         self.feature_est = features.estimates(self.profile, self.hardware)
@@ -275,6 +277,7 @@ class TrayApp:
         self._store_rows(rows, checked)
         self._check_dictation()
         self._collect_usage()
+        self._maintain_web_filter(checked)
         self._check_gpu_models()
         if checked - self.clients_checked >= CLIENT_SECONDS or not self.clients_checked:
             self.clients_checked = checked
@@ -342,6 +345,23 @@ class TrayApp:
             return
         if n:
             print(f"[tray] recorded {n} ComfyUI job(s) for the Usage tab")
+
+    def _maintain_web_filter(self, now: float) -> None:
+        """Blocked sites (stacklib/webfilter.py): download the lists that are due and keep Open WebUI's web search filter
+        and the audit's list current. Every WEB_FILTER_SECONDS, in its own thread, since a download takes seconds."""
+        if self.web_filter_checked and now - self.web_filter_checked < WEB_FILTER_SECONDS:
+            return
+        self.web_filter_checked = now
+        profile = self.profile
+
+        def run() -> None:
+            try:
+                for r in webfilter.maintain(profile):
+                    print(f"[tray] blocked sites: {r.text}")
+            except Exception as e:  # noqa: BLE001 - a bad list or database must not stop the poller
+                print(f"[tray] blocked sites round failed: {e}")
+
+        threading.Thread(target=run, daemon=True, name="web-filter").start()
 
     def _check_clients(self) -> dict[str, clients.ClientStatus]:
         out = {}
@@ -1508,7 +1528,7 @@ class TrayApp:
 
         groups = [("Models", "models"), ("Tracing and services", ("observability", "services")),
                   ("Voice typing", "dictation"), ("Refine selected text", "refine"), ("Read aloud", "read_aloud"),
-                  ("Ollama runtime", "ollama_env")]
+                  ("Blocked sites", "web_filter"), ("Ollama runtime", "ollama_env")]
         self.setting_vars: dict[str, tk.Variable | TextVar] = {}
         self.model_boxes: list[ttk.Combobox] = []
         self.changed_marks: dict[str, ttk.Label] = {}
@@ -1591,7 +1611,7 @@ class TrayApp:
         t = self.t
         frame = ttk.Frame(parent, style="Card.TFrame")
         frame.columnconfigure(0, weight=1)
-        box = tk.Text(frame, height=12, width=72, wrap="word", undo=True, maxundo=-1, font=(FONT, 10),
+        box = tk.Text(frame, height=s.lines, width=72, wrap="word", undo=True, maxundo=-1, font=(FONT, 10),
                       bg=t["page"], fg=t["ink"], insertbackground=t["ink"], selectbackground=t["select"],
                       selectforeground=t["ink"], inactiveselectbackground=t["select"], relief="flat", borderwidth=0,
                       padx=8, pady=6, highlightthickness=2, highlightbackground=t["border"], highlightcolor=t["accent"])

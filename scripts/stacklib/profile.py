@@ -203,6 +203,8 @@ def resolve_profile(name: str | None = None) -> dict:
         "dictation": {**(defaults.get("dictation") or {}), **{k: v for k, v in (m.get("dictation") or {}).items() if v is not None}},
         "refine": resolve_refine(defaults.get("refine") or {}, m.get("refine") or {}),
         "read_aloud": resolve_read_aloud(defaults.get("read_aloud") or {}, m.get("read_aloud") or {}),
+        "web_filter": {**(defaults.get("web_filter") or {}),
+                       **{k: v for k, v in (m.get("web_filter") or {}).items() if v is not None}},
         "agent_access": {"allowed_roots": list(((m.get("agent_access") or {}).get("allowed_roots")) or [])},
     }
 

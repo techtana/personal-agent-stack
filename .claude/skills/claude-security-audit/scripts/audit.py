@@ -14,7 +14,8 @@ and name, git email, OS user name, GitHub account name) are read only to find an
 report or the state. Paths that the owner's own Read deny rules cover are not read. Online checks (skipped with
 --offline) fetch public data only: Claude Code's docs and changelog, its latest npm version, and OSV advisories for
 package names and versions. The one exception is `gh api user`, which asks GitHub, as the signed-in GitHub CLI,
-for that account's name.
+for that account's name. The web-filter checks read `blocked-sites.txt` (written by personal-agent-stack) from the
+state folder and this PC's DNS server addresses; they report only.
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ import argparse
 import collections
 import datetime as dt
 import hashlib
+import ipaddress
 import json
 import os
 import platform
@@ -132,6 +134,46 @@ SAFE_ENV_VALUES = {
     "OTEL_LOG_USER_PROMPTS", "OTEL_LOG_TOOL_DETAILS", "OTEL_METRICS_INCLUDE_ACCOUNT_UUID",
     "OTEL_METRICS_INCLUDE_SESSION_ID", "CLAUDE_CODE_DISABLE_FEATURE_FLAGS", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
 }
+BLOCKLIST_FILE = "blocked-sites.txt"     # written into the state folder by personal-agent-stack's web filter
+WEB_FILTER_EXPORT = "`uv run scripts/stack.py web-filter export` (in personal-agent-stack)"
+DOMAIN_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+WEBFETCH_WILDCARD_VERSION = (2, 1, 172)  # permissions docs: `*` in WebFetch rules matches from this version on
+# Public resolvers that block malicious domains, from each provider's own docs (checked 2026-11-08). Only filtering
+# addresses: Quad9 9.9.9.10, Cloudflare 1.1.1.1, AdGuard 94.140.14.140 and Control D 76.76.2.0 are listed below as
+# unfiltered. NextDNS's anycast addresses filter only what the owner's NextDNS profile says.
+PROTECTIVE_DNS = (
+    ("Quad9", ("9.9.9.9", "149.112.112.112", "9.9.9.11", "149.112.112.11", "2620:fe::fe", "2620:fe::9", "2620:fe::11",
+               "2620:fe::fe:11")),
+    ("Cloudflare for Families", ("1.1.1.2", "1.0.0.2", "1.1.1.3", "1.0.0.3", "2606:4700:4700::1112",
+                                 "2606:4700:4700::1002", "2606:4700:4700::1113", "2606:4700:4700::1003")),
+    ("AdGuard DNS", ("94.140.14.14", "94.140.15.15", "94.140.14.15", "94.140.15.16", "2a10:50c0::ad1:ff",
+                     "2a10:50c0::ad2:ff", "2a10:50c0::bad1:ff", "2a10:50c0::bad2:ff")),
+    ("CleanBrowsing", ("185.228.168.9", "185.228.169.9", "185.228.168.10", "185.228.169.11", "185.228.168.168",
+                       "185.228.169.168", "2a0d:2a00:1::2", "2a0d:2a00:2::2", "2a0d:2a00:1::1", "2a0d:2a00:2::1",
+                       "2a0d:2a00:1::", "2a0d:2a00:2::")),
+    ("Control D", ("76.76.2.1", "76.76.10.1", "76.76.2.2", "76.76.10.2", "76.76.2.4", "76.76.10.4", "2606:1a40::1",
+                   "2606:1a40:1::1", "2606:1a40::2", "2606:1a40:1::2", "2606:1a40::4", "2606:1a40:1::4")),
+    ("NextDNS (filtering depends on your profile)", ("45.90.28.0/24", "45.90.30.0/24", "2a07:a8c0::/32",
+                                                     "2a07:a8c1::/32")),
+)
+UNFILTERED_DNS = {
+    "1.1.1.1": "Cloudflare without filtering; 1.1.1.2 blocks malware", "1.0.0.1": "Cloudflare without filtering",
+    "2606:4700:4700::1111": "Cloudflare without filtering", "2606:4700:4700::1001": "Cloudflare without filtering",
+    "8.8.8.8": "Google Public DNS, no filtering", "8.8.4.4": "Google Public DNS, no filtering",
+    "2001:4860:4860::8888": "Google Public DNS, no filtering", "2001:4860:4860::8844": "Google Public DNS, no filtering",
+    "9.9.9.10": "Quad9 unsecured; 9.9.9.9 blocks malware", "149.112.112.10": "Quad9 unsecured",
+    "2620:fe::10": "Quad9 unsecured", "2620:fe::fe:10": "Quad9 unsecured",
+    "94.140.14.140": "AdGuard DNS non-filtering", "94.140.14.141": "AdGuard DNS non-filtering",
+    "76.76.2.0": "Control D unfiltered; 76.76.2.1 blocks malware", "76.76.10.0": "Control D unfiltered",
+    "76.76.2.5": "Control D uncensored, no malware blocking", "76.76.10.5": "Control D uncensored, no malware blocking",
+}
+RESOLV_CONF = Path("/etc/resolv.conf")
+WINDOWS_DNS_PS = (  # one line per connected adapter: DNS|<alias>|<server>,<server>
+    "$up = @(Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' } | "
+    "ForEach-Object { $_.ifIndex }); "
+    "Get-DnsClientServerAddress -AddressFamily IPv4,IPv6 -ErrorAction Stop | "
+    "Where-Object { $_.ServerAddresses -and ($up.Count -eq 0 -or $up -contains $_.InterfaceIndex) } | "
+    "ForEach-Object { 'DNS|' + $_.InterfaceAlias + '|' + ($_.ServerAddresses -join ',') }")
 TRACKED_SETTINGS = ("cleanupPeriodDays", "desktopSessionCleanupPeriodDays", "feedbackDrafts", "feedbackSurveyRate",
                     "skipWebFetchPreflight", "attribution", "enableAllProjectMcpServers", "disableClaudeAiConnectors",
                     "permissions.defaultMode", "permissions.disableBypassPermissionsMode",
@@ -1885,6 +1927,286 @@ def check_profile_b(ctx, label, layers) -> list[dict]:
     return []
 
 
+# ---------------------------------------------------------------- web filter (report only)
+
+def blocked_sites(ctx: Ctx):
+    """(domains, skipped lines) from the stack's blocked-sites.txt in the state folder, or None when it is missing.
+    One domain per line, `#` starts a comment, a domain covers its subdomains: so a domain whose parent is listed too
+    is dropped. Lower case, without a trailing dot, international names in their xn-- form, in file order."""
+    text = read_text(ctx.state / BLOCKLIST_FILE)
+    if text is None:
+        return None
+    found, bad = [], 0
+    for raw in text.splitlines():
+        d = raw.split("#", 1)[0].strip().lower().rstrip(".")
+        if d.startswith("*."):
+            d = d[2:]
+        if not d:
+            continue
+        if not d.isascii():
+            try:
+                d = d.encode("idna").decode("ascii")
+            except UnicodeError:
+                bad += 1
+                continue
+        if DOMAIN_RE.match(d):
+            found.append(d)
+        else:
+            bad += 1
+    listed = set(found)
+    out, seen = [], set()
+    for d in found:
+        labels = d.split(".")
+        if d not in seen and not any(".".join(labels[i:]) in listed for i in range(1, len(labels))):
+            seen.add(d)
+            out.append(d)
+    return out, bad
+
+
+def _labels_match(pattern: list[str], host: list[str]) -> bool:
+    return len(pattern) == len(host) and all(
+        re.fullmatch(re.escape(p).replace(r"\*", "[^.]*"), h) for p, h in zip(pattern, host))
+
+
+def webfetch_domain_matches(pattern: str, host: str) -> bool:
+    """How Claude Code matches `WebFetch(domain:<pattern>)` (permissions docs): case-insensitive, a trailing dot
+    ignored; `example.com` matches that host only; a leading `*.` matches subdomains at any depth but not the domain
+    itself; a bare `*` matches every host; a `*` anywhere else matches text within one label."""
+    p, h = pattern.strip().lower().rstrip("."), host.strip().lower().rstrip(".")
+    if p == "*":
+        return True
+    hl = h.split(".")
+    if p.startswith("*."):
+        pl = p[2:].split(".")
+        return len(hl) > len(pl) and _labels_match(pl, hl[-len(pl):])
+    return _labels_match(p.split("."), hl)
+
+
+def webfetch_missing(patterns: list[str], domain: str) -> list[str]:
+    """The deny rules still needed so that `domain` and every subdomain of it is denied."""
+    need = []
+    if not any(webfetch_domain_matches(p, domain) for p in patterns):
+        need.append(f"WebFetch(domain:{domain})")
+    subs = any(p.strip() == "*" or (p.strip().lower().startswith("*.") and (
+        _labels_match(p.strip().lower().rstrip(".")[2:].split("."), domain.split(".")) or
+        webfetch_domain_matches(p, domain))) for p in patterns)
+    if not subs:
+        need.append(f"WebFetch(domain:*.{domain})")
+    return need
+
+
+def webfetch_denies(layers: list[Layer]):
+    """(scope of a rule that denies every fetch or None, [(domain pattern, scope)]) from the deny rules. Every fetch:
+    a bare `WebFetch` (the tool is removed) or `WebFetch(domain:*)` (each fetch refused)."""
+    patterns = []
+    for rule, scope in rules(layers, "deny"):
+        tool, spec = parse_rule(rule)
+        if tool != "WebFetch":
+            continue
+        if spec is None:
+            return scope, []
+        s = spec.strip()
+        if s.lower().startswith("domain:"):
+            pat = s.split(":", 1)[1].strip()
+            if pat == "*":
+                return scope, []
+            if pat:
+                patterns.append((pat, scope))
+    return None, patterns
+
+
+def check_web_blocklist(ctx: Ctx, layers: list[Layer], vers=None) -> list[dict]:
+    everything, patterns = webfetch_denies(layers)
+    if everything:
+        return []                       # WebFetch is denied outright: no list can add to that
+    path = ctx.red(str(ctx.state / BLOCKLIST_FILE)).replace("\\", "/")
+    listed = blocked_sites(ctx)
+    if listed is None or not listed[0]:
+        what = "does not exist" if listed is None else "holds no domain names"
+        return [finding("WEB-BLOCKLIST-MISSING", "info", "web", "No blocked-sites list, so WebFetch's rules were not "
+                        "compared with one",
+                        f"{path} {what}. personal-agent-stack writes it when its web filter is set up (one domain per "
+                        "line, `#` for comments); without it there is nothing to compare Claude Code's WebFetch deny "
+                        "rules with. The DNS and server-side checks still ran.",
+                        f"With the stack: {WEB_FILTER_EXPORT} writes it. Without it, write the file yourself "
+                        "(UTF-8, one domain per line).", DOC + "permissions#webfetch")]
+    domains, bad = listed
+    everywhere = [p for p, s in patterns if s in ("user", "managed")]
+    every = [p for p, _s in patterns]
+    missing = {d: need for d in domains if (need := webfetch_missing(everywhere, d))}
+    if not missing:
+        return []
+    names = list(missing)
+    local_only = sum(1 for d in names if not webfetch_missing(every, d))
+    shown = names[:10]
+    more = len(names) - len(shown)
+    detail = (f"{len(names)} of the {len(domains)} domains in {path} are not denied for WebFetch in your user or "
+              f"managed settings, so Claude Code can fetch them: {', '.join(shown)}" +
+              (f", and {more} more." if more else "."))
+    if local_only:
+        detail += (f"\n{local_only} of them are denied only in the current project's settings, which other projects "
+                   "don't share.")
+    detail += ("\n`WebFetch(domain:x)` matches the host x only; its subdomains need a second rule, "
+               "`WebFetch(domain:*.x)`. These rules cover Claude Code's WebFetch tool only: not `curl` in Bash, "
+               "Claude Desktop, its built-in browser or Claude in Chrome (see WEB-DNS and WEB-SERVER-SIDE).")
+    if bad:
+        detail += f"\n{bad} lines of the list are not domain names and were skipped."
+    old = [f"{k} {v}" for k, v in (vers or {}).items() if k in ("cli", "vscode", "desktop_code") and
+           re.match(r"^\d+\.\d+\.\d+$", str(v)) and vtuple(v) < WEBFETCH_WILDCARD_VERSION]
+    rules_shown = [r for d in shown for r in missing[d]]
+    managed = ctx.red(str(managed_dir(ctx) / "managed-settings.json")).replace("\\", "/")
+    fix = ("Add to permissions.deny in ~/.claude/settings.json (as administrator, the same rules in " + managed +
+           " make them binding):\n" + json.dumps(rules_shown, indent=2))
+    fix += (f"\nThat covers the first {len(shown)} domains; {WEB_FILTER_EXPORT} prints the rules for all "
+            f"{len(names)}." if more else f"\n{WEB_FILTER_EXPORT} regenerates the list and prints these rules.")
+    fix += "\nThe `*.` rules match from Claude Code 2.1.172 on" + (
+        f"; update first ({', '.join(old)} installed)." if old else ".")
+    return [finding("WEB-BLOCKLIST-RULES", "medium", "web",
+                    f"Claude Code's WebFetch can reach {len(names)} sites on your blocked list", detail, fix,
+                    DOC + "permissions#webfetch")]
+
+
+def _dns_tokens(text: str) -> list[str]:
+    """IP addresses in text: zone (%eth0) and DNS-over-TLS name (#dns.example) suffixes dropped."""
+    out = []
+    for tok in re.split(r"[\s,;]+", text or ""):
+        tok = tok.strip("[]()").split("#", 1)[0].split("%", 1)[0]
+        try:
+            out.append(str(ipaddress.ip_address(tok)))
+        except ValueError:
+            pass
+    return out
+
+
+def parse_windows_dns(text: str) -> list[tuple[str, str]]:
+    """(connection, address) from the WINDOWS_DNS_PS lines `DNS|<alias>|<a>,<b>`."""
+    out = []
+    for line in (text or "").splitlines():
+        parts = line.strip().split("|")
+        if len(parts) >= 3 and parts[0] == "DNS":
+            alias = "|".join(parts[1:-1]).strip() or "a connection"
+            out += [(alias, a) for a in _dns_tokens(parts[-1])]
+    return out
+
+
+def dns_servers(ctx: Ctx):
+    """[(where, address)] of the DNS servers this PC uses, or None when they could not be read."""
+    if ctx.system == "windows":
+        code, out = run(ctx, ["powershell", "-NoProfile", "-NonInteractive", "-Command", WINDOWS_DNS_PS], timeout=30)
+        servers = parse_windows_dns(out) if code == 0 else []
+        return servers or None
+    if ctx.system == "mac":
+        code, out = run(ctx, ["scutil", "--dns"], timeout=20)
+        found = re.findall(r"(?m)^\s*nameserver\[\d+\]\s*:\s*(\S+)", out) if code == 0 else []
+        addrs = list(dict.fromkeys(a for f in found for a in _dns_tokens(f)))
+        return [("scutil --dns", a) for a in addrs] or None
+    text = read_text(RESOLV_CONF) or ""
+    addrs = _dns_tokens(" ".join(re.findall(r"(?m)^\s*nameserver\s+(\S+)", text)))
+    if addrs and all(ipaddress.ip_address(a).is_loopback for a in addrs):   # systemd-resolved's 127.0.0.53 stub
+        code, out = run(ctx, ["resolvectl", "dns"], timeout=20)
+        upstream = list(dict.fromkeys(a for a in _dns_tokens(out) if not ipaddress.ip_address(a).is_loopback)) \
+            if code == 0 else []
+        if upstream:
+            return [("systemd-resolved", a) for a in upstream]
+    return [("/etc/resolv.conf", a) for a in addrs] or None
+
+
+def protective_provider(address: str):
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return None
+    for provider, nets in PROTECTIVE_DNS:
+        if any(ip.version == n.version and ip in n for n in map(ipaddress.ip_network, nets)):
+            return provider
+    return None
+
+
+def check_web_dns(ctx: Ctx) -> list[dict]:
+    if truthy(ctx.environ.get("AUDIT_NO_DNS")):
+        return []
+    servers = dns_servers(ctx)
+    if servers is None:
+        ctx.errors.append("DNS servers: could not read them, so the protective DNS check was skipped")
+        return []
+    unfiltered = {str(ipaddress.ip_address(k)): v for k, v in UNFILTERED_DNS.items()}
+    lines, providers, others = [], [], []
+    for where, addr in servers:
+        ip = ipaddress.ip_address(addr)
+        if ip.version == 6 and ip in ipaddress.ip_network("fec0::/10"):
+            continue                    # Windows' placeholder site-local servers on connections without IPv6 DNS
+        prov = protective_provider(addr)
+        note = prov or unfiltered.get(addr) or ("a DNS program on this PC" if ip.is_loopback else
+                                                "your router or network" if ip.is_private or ip.is_link_local else
+                                                "not a known protective resolver")
+        lines.append(f"- {ctx.red(where)}: {addr} ({note})")
+        if not prov:
+            others.append(addr)
+        elif prov not in providers:
+            providers.append(prov)
+    covers = ("Protective DNS is the only filter on this PC that reaches all of Claude Desktop's built-in browser, "
+              "Claude in Chrome, computer use and `curl` in Bash. It blocks the provider's own lists (malware, "
+              "phishing), not the sites in blocked-sites.txt, unless the provider takes your own denylist (NextDNS, "
+              "Control D). A browser whose Secure DNS names another provider skips this PC's DNS.")
+    blind = ("A router that forwards to a protective resolver, a VPN, a DNS program on this PC, or a DNS-over-HTTPS "
+             "setting (Windows' or a browser's Secure DNS) can also filter, and this check can't see them, so \"not "
+             "found\" is a hint, not proof.")
+    if ctx.system == "windows":
+        fix = ("A system setting, so you change it: Settings > Network & internet > Wi-Fi or Ethernet > your "
+               "connection (for Wi-Fi, Hardware properties) > DNS server assignment > Edit > Manual. Turn on IPv4 and "
+               "enter 9.9.9.9 and 149.112.112.112 (Quad9) or 1.1.1.2 and 1.0.0.2 (Cloudflare for Families), with DNS "
+               "over HTTPS On (automatic template); for IPv6, 2620:fe::fe and 2620:fe::9. Repeat for each connection "
+               "you use, or set it once on the router for every device.")
+    elif ctx.system == "mac":
+        fix = ("System Settings > Network > your connection > Details > DNS: add 9.9.9.9 and 149.112.112.112 (Quad9) "
+               "and remove the others, or set it once on the router.")
+    else:
+        fix = ("Set your connection's DNS servers to 9.9.9.9 and 149.112.112.112 (Quad9), for example `nmcli "
+               "connection modify <name> ipv4.dns \"9.9.9.9 149.112.112.112\" ipv4.ignore-auto-dns yes`, or `DNS=` "
+               "in /etc/systemd/resolved.conf; or set it once on the router.")
+    docs = "https://www.quad9.net/service/service-addresses-and-features"
+    if providers and not others:
+        nextdns = any(p.startswith("NextDNS") for p in providers)
+        return [finding("WEB-DNS", "info", "web", f"This PC uses a protective DNS resolver: {', '.join(providers)}",
+                        "\n".join(lines) + "\n" + covers +
+                        ("\nNextDNS blocks only what your profile says: check that its Security settings are on, and "
+                         "add the blocked sites to its Denylist." if nextdns else ""),
+                        "", docs)]
+    if providers:
+        return [finding("WEB-DNS", "low", "web", "Protective DNS is set for only some of this PC's DNS servers",
+                        "\n".join(lines) + "\nWindows and most systems may ask any of them, so a blocked site can "
+                        "still resolve through the others.\n" + covers + "\n" + blind,
+                        "Give every connection the protective servers only. " + fix, docs)]
+    return [finding("WEB-DNS", "low", "web", "No protective DNS resolver found on this PC",
+                    ("\n".join(lines) + "\n" if lines else "") + covers + "\n" + blind, fix, docs)]
+
+
+def check_web_server_side(ctx: Ctx, layers: list[Layer]) -> list[dict]:
+    denied = next((s for r, s in rules(layers, "deny") if parse_rule(r)[0] == "WebSearch" and
+                   (parse_rule(r)[1] or "").strip() in ("", "*")), None)
+    state = (f"denied in {denied} settings" if denied else
+             "not denied, so it asks first unless an allow rule or mode lets it run")
+    return [finding("WEB-SERVER-SIDE", "info", "web",
+                    "Web search and fetch in Claude Desktop chats run on Anthropic's servers",
+                    "Claude Desktop's (and claude.ai's) web search and web fetch, and Claude Code's WebSearch, are run "
+                    "by Anthropic: the request to the site comes from Anthropic's servers, not from this PC, so no "
+                    "list, DNS resolver or setting here can filter them. Claude Code's WebFetch runs on this PC, so "
+                    "its deny rules apply (WEB-BLOCKLIST-RULES).\n"
+                    f"Claude Code's WebSearch is {state}.\n"
+                    "Claude in Chrome browses in your own Chrome, where Chrome's URLBlocklist policy blocks the "
+                    "listed sites (for you as well).",
+                    "Turn web search off in a Claude Desktop chat when you don't need it (the tools menu in the "
+                    'message box). In Claude Code, add "WebSearch" to permissions.deny in ~/.claude/settings.json if '
+                    f"you don't use it. For Claude in Chrome: {WEB_FILTER_EXPORT} writes a .reg file with Chrome's "
+                    "URLBlocklist policy; import it (double-click it) and check chrome://policy.",
+                    DOC + "permissions")]
+
+
+def check_web_filter(ctx: Ctx, layers: list[Layer], vers=None) -> list[dict]:
+    """Report only: what the stack's blocked-sites list reaches in Claude Code and Claude Desktop, and what it can't."""
+    return check_web_blocklist(ctx, layers, vers) + check_web_dns(ctx) + check_web_server_side(ctx, layers)
+
+
 def check_extensions(ctx, servers, hooks, plugs, markets, tasks) -> list[dict]:
     out = []
     unpinned, plaintext, insecure = [], [], []
@@ -2182,6 +2504,7 @@ def collect(ctx: Ctx, extra_repos: list[str], include_projects: bool = True, inc
     findings += check_permissions(ctx, layers_a, gjson_a, project_allow_rules(ctx, repos, current))
     for label, _pdir, _g in profs[1:]:
         findings += check_profile_b(ctx, label, layers_by_profile[label])
+    findings += check_web_filter(ctx, layers_a, vers)
     findings += check_extensions(ctx, servers, hooks, plugs, markets, tasks)
     history = git_history_identity(ctx, repos) if ctx.identity.emails else {}
     findings += check_identity_settings(ctx, layers_a, pdir_a, repos, history)

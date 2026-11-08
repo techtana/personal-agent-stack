@@ -710,6 +710,54 @@ def cmd_whisper(a):
         print(json.dumps({whisper.SERVER_NAME: whisper.server_entry(p)}, indent=2))
 
 
+def cmd_web_filter(a):
+    """Blocked sites (stacklib/webfilter.py): what is blocked and where, download the lists, write Open WebUI's web
+    search filter, check one site, or export what the stack cannot enforce (the Claude security audit's list, Claude
+    Code WebFetch deny rules, a Chrome URLBlocklist file)."""
+    from stacklib import webfilter
+
+    p = prof.resolve_profile()
+    if a.action == "check":
+        if not a.site:
+            die("name a site: `stack.py web-filter check example.com`")
+        info(webfilter.check(p, a.site))
+        return
+    if a.action in ("refresh", "sync"):
+        results = webfilter.maintain(p, force=a.action == "refresh")
+        for r in results:
+            (info if r.ok else warn)(r.text)
+        if not results:
+            info("nothing to download or change")
+    if a.action == "export":
+        out = webfilter.export(p)
+        sites = webfilter.short_list(p)
+        if "audit" in out:
+            info(f"Claude security audit's list: {out['audit']} ({len(sites)} sites)")
+        else:
+            info("the web filter is off: no list for the Claude security audit")
+        info(f"Claude Code WebFetch deny rules: {out['claude']}")
+        info("  add its permissions.deny entries to ~/.claude/settings.json (or managed settings, to make them "
+             "binding). They stop Claude Code's WebFetch only: Claude's web search runs on Anthropic's servers.")
+        if "chrome" in out:
+            info(f"Chrome URLBlocklist (Claude in Chrome): {out['chrome']}")
+            info("  import it yourself (double-click, or `reg import`), then check chrome://policy. It changes a "
+                 "browser policy, so the stack does not import it.")
+    pl = webfilter.plan(p)
+    info(f"Blocked sites: {webfilter.summary(p)}")
+    if pl.on and a.action == "status":
+        for sid, n in pl.counts.items():
+            name = "Your own sites" if sid == webfilter.OWN else webfilter.by_id()[sid].title
+            m = webfilter.meta(p, sid)
+            when = ""
+            if m.get("fetched_at"):
+                import time as _t
+
+                when = f", downloaded {_t.strftime('%Y-%m-%d %H:%M', _t.localtime(float(m['fetched_at'])))}"
+            err = f" (last try failed: {m['last_error']})" if m.get("last_error") else ""
+            info(f"  {name}: {n:,} sites{when}{err}")
+        info(f"DNS: {webfilter.dns_text()}")
+
+
 def cmd_retro(a):
     rest = [x for x in a.rest if x != "--"]
     raise SystemExit(subprocess.run([sys.executable, str(REPO / "scripts" / "retro.py"), *rest], cwd=REPO).returncode)
@@ -777,6 +825,11 @@ def main(argv=None):
     s.set_defaults(f=cmd_read_aloud)
     s = sub.add_parser("whisper", help="local Whisper for recordings: install, register|unregister in Claude Desktop, entry")
     s.add_argument("action", choices=["install", "register", "unregister", "entry"]); s.set_defaults(f=cmd_whisper)
+    s = sub.add_parser("web-filter", help="blocked sites in Open WebUI: status, refresh (download the lists), sync, "
+                                          "check <site>, export (the audit's list, Claude Code rules, Chrome policy)")
+    s.add_argument("action", nargs="?", default="status", choices=["status", "refresh", "sync", "check", "export"])
+    s.add_argument("site", nargs="?")
+    s.set_defaults(f=cmd_web_filter)
     s = sub.add_parser("retro"); s.add_argument("rest", nargs=argparse.REMAINDER); s.set_defaults(f=cmd_retro)
     s = sub.add_parser("tray", help="background tray app that runs the services and shows their status")
     s.add_argument("--foreground", action="store_true"); s.add_argument("--status", action="store_true"); s.add_argument("--stop", action="store_true")
