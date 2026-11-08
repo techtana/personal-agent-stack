@@ -1,7 +1,6 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-07 night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
-late evening (uv tools start through their own Python; pid files carry start times). Earlier the
+Updated: 2026-11-07 night (refine selected text in every app; open item 27). Before that, 2026-11-07 night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
 Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; design in docs/ORCHESTRATOR-DESIGN.md.
@@ -383,6 +382,19 @@ once across a session restart.
    - restart voice typing (Stop and Start its tray row) so it serves the endpoint.
    If voice typing is later turned off, Open WebUI's mic shows a connection error until its engine is set back to
    Whisper (Local) in Admin Settings > Audio. Neither the tray's Voice typing switch nor provisioning undoes the rows.
+27. Refine selected text (2026-11-07, branch claude/ai-text-refinement-contextmenu-70d19f): a pencil button left of
+   the mic and Ctrl+Alt+R copy the selection of any app, have `local-primary` rewrite it in a style (7 built in, your
+   own under `refine.prompts`), check the reply, copy again to confirm the same selection and paste over it. Every
+   suggestion goes to `.run/dictation/refine-log.jsonl` (before, after, status); Revert and History are in the pencil's
+   right-click menu. Design: docs/design/plans/2026-11-07-refine-selection.md. Verified: 59 new unit tests (260 in
+   total); a test copy of the app (port 8791) with a test gateway (port 4010) refined, reverted and refused "nothing
+   selected" in a Win32 EDIT control (HTTP, injected hotkey, a real click on the pencil), in a throwaway Word document
+   over COM and in Edge textarea and contenteditable fields; the clipboard was put back every time. A code review then
+   found and the session fixed two menu bugs, an Esc stall and five smaller ones; the EDIT-control, Esc and menu runs
+   passed again afterwards, the Word and Edge runs were not repeated (the permission check refused the rerun). That evening the
+   owner's tray had stopped all its services at about 23:07, from outside this session; they were left stopped. Not
+   verified: Logseq and Notion themselves, the look of the bar and the History window, the tray's new settings group
+   live. The live app runs the new code only after the tray restarts from the main checkout.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

@@ -137,7 +137,7 @@ uv run scripts/stack.py bench [--model m] [--num-ctx n] [--tokens n] [--runs n]
 uv run scripts/stack.py smoke [--dept id] [--skip-mcp] [--media | --media-only]
 uv run scripts/stack.py media check|install|provision          ComfyUI and image models under media.root (path guard first)
 uv run scripts/stack.py media gpu chat|media                   hand the GPU to chat (free ComfyUI) or media (unload Ollama)
-uv run scripts/stack.py dictate install|start|stop|status|check voice typing in any app: Ctrl+Alt+D or the mic button
+uv run scripts/stack.py dictate install|start|stop|status|check voice typing in any app: Ctrl+Alt+D or the mic button; Ctrl+Alt+R or the pencil button refines selected text
 uv run scripts/stack.py dictate transcribe note.wav [--style concise]   the voice typing pipeline on a recording
 uv run scripts/stack.py why-routed [--last n] [--days n]
 uv run scripts/stack.py retro -- --days 7 [--reflect local-small|none] [--pr]

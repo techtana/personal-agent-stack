@@ -280,19 +280,47 @@ def install(profile: dict, report=lambda *a: None, download_model: bool = True) 
     return "; ".join(notes)
 
 
-def save_setting(profile: dict, key: str, value) -> None:
-    """Write dictation.<key> into machines/<HOST>.yaml, keeping the owner's comments, so a choice made in the button's
-    menu survives a restart and shows in the tray's Settings tab."""
+def save_setting(profile: dict, key: str, value, section: str = "dictation") -> None:
+    """Write <section>.<key> (dictation or refine) into machines/<HOST>.yaml, keeping the owner's comments, so a
+    choice made in a button's menu survives a restart and shows in the tray's Settings tab."""
     import yaml
 
     from .. import profile as prof
     from ..yamledit import set_key
 
     path = prof.machine_file(profile.get("name"))
-    text = set_key(path.read_text(encoding="utf-8"), "dictation", key, value)
-    if ((yaml.safe_load(text) or {}).get("dictation") or {}).get(key) != value:
-        raise ValueError(f"could not write dictation.{key} into {path.name} safely")
+    text = set_key(path.read_text(encoding="utf-8"), section, key, value)
+    if ((yaml.safe_load(text) or {}).get(section) or {}).get(key) != value:
+        raise ValueError(f"could not write {section}.{key} into {path.name} safely")
     path.write_text(text, encoding="utf-8", newline="\n")
+
+
+REFINE_TEMPLATE = """
+refine:
+  # Refine selected text: the pencil button next to the mic, or its hotkey. Your own styles go under prompts; they
+  # appear in the button's right-click menu the next time you open it. An entry with a built-in id (polish, grammar,
+  # concise, professional, friendly, simple, bullets) replaces that style's instructions.
+  prompts:
+    # my-voice: Rewrite in my voice. Short sentences, active verbs, no jargon.
+    # email-reply:
+    #   name: Email reply
+    #   prompt: Turn my notes into a short, polite email reply. Keep every fact and date.
+"""
+
+
+def ensure_refine_section(path: Path) -> bool:
+    """Append a commented `refine:` section with example styles when the machine file has none. True if it wrote."""
+    import re
+
+    import yaml
+
+    text = path.read_text(encoding="utf-8")
+    if re.search(r"^refine:", text, re.M):
+        return False
+    new = text.rstrip("\n") + "\n" + REFINE_TEMPLATE
+    yaml.safe_load(new)  # never leave a file that no longer parses
+    path.write_text(new, encoding="utf-8", newline="\n")
+    return True
 
 
 def write_state(profile: dict, **values) -> None:

@@ -55,6 +55,7 @@ SOURCES: dict[str, Source] = {
 # Programs that call the gateway with User-Agent agent-stack-<id> (usage_log.user_agent): id -> client name shown.
 COMPONENTS: dict[str, str] = {
     "voice-typing": "Voice typing",
+    "refine": "Refine selection",   # the voice typing app's refine button (stacklib/dictation/refine.py)
     "orchestrator": "Orchestrator",
     "retro": "Retrospective",
     "smoke": "Stack scripts",
@@ -74,7 +75,7 @@ SERVICE_MODELS: dict[str, str | None] = {
     "kokoro": "text to speech, in UNCOUNTED until it records its calls",
     "dictation": "Whisper calls (source voice-typing): its own, and Open WebUI's microphone through "
                  "/v1/audio/transcriptions (client Open WebUI); the text clean-up through the gateway "
-                 "(agent-stack-voice-typing)",
+                 "(agent-stack-voice-typing); refining selected text through the gateway (agent-stack-refine)",
 }
 
 
