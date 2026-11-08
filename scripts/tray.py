@@ -1636,9 +1636,11 @@ class TrayApp:
         models = cfg.installed_models(self.profile)
         for box in self.model_boxes:
             box.configure(values=models)
+        # only model settings: the context sizes live in the same "models" section of the machine file
+        model_ids = {cfg.setting_id(s) for s in cfg.SETTINGS if s.kind == "model"}
         for sid, var in self.setting_vars.items():
             var.set(values[sid])
-            if sid.startswith("models.") and isinstance(var, tk.StringVar) and values[sid] and values[sid] not in models:
+            if sid in model_ids and values[sid] and values[sid] not in models:
                 for box in self.model_boxes:  # keep the configured model selectable even when it is not pulled
                     box.configure(values=sorted({*box.cget("values"), values[sid]}))
         self.cloud_label.configure(text=(
