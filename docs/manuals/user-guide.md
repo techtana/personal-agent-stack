@@ -311,6 +311,13 @@ original back within 30 minutes. It is part of the voice typing app, so it runs 
 3. The pencil turns blue while the model works (about 1 to 2 seconds for a paragraph). Then the selection is replaced
    and the bubble shows the new text.
 
+To pick the style each time instead, press **Ctrl+Alt+Shift+R** after selecting. A menu of every style opens at the
+text cursor: press a number (**1** Polish, **2** Fix spelling and grammar only, and so on) or click a style, and the
+selection is refined with it. **R** (Revert to the original) puts back the text of an earlier refine; **Esc** closes
+the menu and leaves the text alone. Browsers, Electron apps such as Logseq and Notion, and some editors draw their own
+text cursor and do not tell Windows where it is; there the menu opens at the mouse pointer. Change or turn off the key
+with **Refine style menu hotkey** in the tray's Settings tab (`refine.menu_hotkey`; restarts voice typing).
+
 To undo it right away, press **Ctrl+Z** in the app, as for any paste. To undo it later (within 30 minutes), select the
 refined text, right-click the pencil and choose **Revert selected text to the original**. **Refine history...** in the
 same menu lists the refines of the last 30 minutes, newest first: the text before and after side by side, removed
@@ -357,7 +364,7 @@ stay in the drive's free space until it is overwritten. To forget everything at 
 Good to know:
 
 - **Right-click menus of other apps.** Windows has no shared right-click menu that a program can add to: Word, Logseq
-  and Notion each draw their own. Refine therefore lives on its own button, its hotkey and the button's menu.
+  and Notion each draw their own. Refine therefore lives on its own button, its hotkeys, the button's menu and the style menu at the cursor.
 - **Formatting.** The new text is pasted as plain text and takes the formatting where it lands. Bold, italics or links
   inside the selection are not kept. A selection with a picture or a table is refused, because pasting plain text
   would delete them.

@@ -140,6 +140,7 @@ refine:
   # kept, with the text it replaced, in .run\dictation\refine-log.jsonl for keep_minutes, then deleted (History and
   # Revert in the button's menu work within that time).
   hotkey: ctrl+alt+r         # refine with the default style ('' = none; it replaces Word's Ctrl+Alt+R for (R))
+  menu_hotkey: ctrl+alt+shift+r  # a menu of every style at the text cursor; 1-9 picks one ('' = none)
   default: polish            # polish | grammar | concise | professional | friendly | simple | bullets | your own id
   model: local-primary       # gateway alias that rewrites (private models only)
   button: true               # show the refine button next to the mic button (the hotkey works either way)
