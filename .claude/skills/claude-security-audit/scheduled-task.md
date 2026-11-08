@@ -9,7 +9,7 @@ task is due, it runs at the next launch.
 
 ---
 
-Weekly Claude security and confidentiality audit of this machine, using the claude-security-audit skill from the personal-agent-stack repository. Nobody is watching this run: ask no questions, list decisions for the owner in the final summary instead, and never write an email address, a person's name or the Windows user name anywhere (files, commits, PR text, summary).
+Weekly Claude security and confidentiality audit of this machine, using the claude-security-audit skill from the personal-agent-stack repository. Nobody is watching this run: ask no questions, list decisions for the owner in the final summary instead, and never write an email address, a person's name, the Windows user name or the GitHub account name anywhere (files, commits, PR text, summary).
 
 Work in Git Bash. The main checkout is C:\Code\personal-agent-stack: do not edit, stash or switch branches in it.
 
