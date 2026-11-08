@@ -121,7 +121,7 @@ Files are kept current: when understanding improves, the explanation is rewritte
 | V2A (video to audio) | A model that watches finished video frames and makes matching sound. |
 | VAE | The part of a media model that compresses pixels or sound into a latent and decodes it back. |
 | Vision-language model | A model that reads images as well as text; Qwen 3.5 is one. |
-| VRAM | The GPU's own memory; fast, but small (12 GB on SEKAIHOME). |
+| VRAM | The GPU's own memory; fast, but small (12 GB on the reference machine). |
 
 ## Changes
 

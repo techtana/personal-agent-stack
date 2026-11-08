@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from . import IS_WINDOWS, REPO, info
-from . import services
+from . import procname, services
 
 TRAY_SCRIPT = REPO / "scripts" / "tray.py"
 SHORTCUT_NAME = "Agent Stack.lnk"
@@ -30,6 +30,11 @@ def tray_python() -> Path:
     return venv / "bin" / "python"
 
 
+def tray_program() -> Path:
+    """What the shortcuts start: PAS-Tray.exe (procname), or the plain pythonw.exe when no copy can be made."""
+    return procname.named(tray_python(), "tray")
+
+
 def _startup_dir() -> Path:
     return Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
 
@@ -44,24 +49,30 @@ def menu_shortcut() -> Path:
 
 
 def ensure_menu_shortcut() -> Path | None:
-    """Create the Start menu entry if it is missing (Windows only). Returns its path, or None elsewhere."""
+    """Write the Start menu entry, and rewrite the start-at-login one if it exists, so both start the current
+    PAS-Tray.exe with the tray's icon (Windows only). Returns the menu entry's path, or None elsewhere."""
     if not IS_WINDOWS:
         return None
     lnk = menu_shortcut()
-    if not lnk.exists():
-        _make_shortcut(lnk, show=True)
+    _make_shortcut(lnk, show=True)
+    if is_installed():
+        _make_shortcut(_autostart_file())
     return lnk
 
 
 def _make_shortcut(path: Path, show: bool = False) -> None:
-    """Windows .lnk that runs the tray with pythonw from the repository folder. `show` opens its window on launch."""
+    """Windows .lnk that runs the tray (PAS-Tray.exe, a renamed pythonw) from the repository folder, with the tray's
+    icon. `show` opens its window on launch."""
     ps = (
         "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($env:LNK_PATH); "
         "$s.TargetPath = $env:LNK_TARGET; $s.Arguments = $env:LNK_ARGS; $s.WorkingDirectory = $env:LNK_DIR; "
+        "if ($env:LNK_ICON) { $s.IconLocation = \"$env:LNK_ICON,0\" }; "
         "$s.Description = 'Agent Stack tray (personal-agent-stack)'; $s.WindowStyle = 7; $s.Save()"
     )
     args = f'"{TRAY_SCRIPT}"' + (" --show" if show else "")
-    env = {**os.environ, "LNK_PATH": str(path), "LNK_TARGET": str(tray_python()), "LNK_ARGS": args, "LNK_DIR": str(REPO)}
+    ico = procname.icon_file()
+    env = {**os.environ, "LNK_PATH": str(path), "LNK_TARGET": str(tray_program()), "LNK_ARGS": args, "LNK_DIR": str(REPO),
+           "LNK_ICON": str(ico or "")}
     path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(["powershell", "-NoProfile", "-Command", ps], env=env, check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0)
 

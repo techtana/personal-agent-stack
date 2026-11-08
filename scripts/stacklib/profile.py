@@ -1,6 +1,7 @@
 """Machine profiles: detection, hardware-class selection, resolution."""
 from __future__ import annotations
 
+import functools
 import json
 import os
 import platform
@@ -37,8 +38,28 @@ def load_policy() -> dict:
     return doc
 
 
+@functools.lru_cache(maxsize=1)
+def _main_checkout() -> Path | None:
+    """The main working tree when this checkout is a linked `git worktree` (a Claude Code session's), else None."""
+    try:
+        out = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                             capture_output=True, text=True, timeout=10, check=False).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    main = Path(out).parent if out else None
+    return main if main and main.resolve() != REPO.resolve() else None
+
+
 def machine_file(name: str | None = None) -> Path:
-    return MACHINES_DIR / f"{name or machine_name()}.yaml"
+    """machines/<name>.yaml. Profiles stay on the computer they describe: the installer writes them and git ignores
+    them, because they hold the computer's name and the owner's folders. A linked worktree has none of its own, so it
+    uses the main checkout's profile."""
+    p = MACHINES_DIR / f"{name or machine_name()}.yaml"
+    if not p.exists():
+        main = _main_checkout()
+        if main is not None and (main / "machines" / p.name).exists():
+            return main / "machines" / p.name
+    return p
 
 
 def load_machine(name: str | None = None) -> dict:
@@ -130,6 +151,7 @@ def write_profile(name: str | None = None, refresh: bool = False) -> Path:
     header = (
         f"# Machine profile for {name}. Re-detect with: uv run scripts/stack.py doctor --write-profile --refresh\n"
         "# `detected:` is overwritten by --refresh; everything else is yours.\n"
+        "# Local to this computer: git ignores it. Never commit it; the repository is public.\n"
     )
     p.write_text(header + yaml.safe_dump(doc, sort_keys=False, allow_unicode=True), encoding="utf-8")
     return p
@@ -140,7 +162,8 @@ def resolve_profile(name: str | None = None) -> dict:
     defaults = load_defaults()
     m = load_machine(name)
     if not m:
-        raise FileNotFoundError(f"no machine profile at {machine_file(name)}; run: uv run scripts/stack.py doctor --write-profile")
+        raise FileNotFoundError(f"no machine profile at {machine_file(name)}; run install.cmd (or: uv run scripts/stack.py "
+                                "doctor --write-profile)")
     cls_name = m.get("hardware_class") or pick_class(defaults, m.get("detected", {}))
     cls = next((c for c in defaults["hardware_classes"] if c["name"] == cls_name), defaults["hardware_classes"][-1])
     models = dict(cls["models"])

@@ -62,7 +62,7 @@ and very fast. System **RAM** is the shelf behind you: bigger, slower to reach. 
 hall: biggest, slowest. The GPU can only compute on what is on its bench, and the CPU works from the shelf.
 
 On the owner's machine the bench is 12 GB (12,288 MiB), but Windows takes part of it for the desktop before any model
-loads. The machine profile records 1,135 MiB of idle use ([`machines/SEKAIHOME.yaml`](../../machines/SEKAIHOME.yaml));
+loads. The machine profile records 1,135 MiB of idle use (`machines/<HOST>.yaml`);
 `memory/state.md` says about 1.0 GB. This is the Windows display driver model (WDDM) at work: the desktop, browser and
 video decoding all use video memory, and a model cannot take it back. The usable bench is therefore about 11 GB. The
 shelf is 31.9 GB of DDR4-2133 in two 16 GB modules, but the usual desktop apps leave only about 11-12 GB free before
@@ -288,7 +288,7 @@ a chat model (a few hundred MB to about 1 GB), so they can sit beside the large 
 | KV bytes/token = 2 x layers x kv_heads x head_dim x bytes | 160 KiB (14B dense, 16-bit) down to about 20-32 KiB (newer hybrid designs) | [research-inference-engine.json](../research/research-inference-engine.json), [research-local-models.json](../research/research-local-models.json) |
 | `q8_0` KV cache is about half of 16-bit | negligible quality loss; `q4_0` is a quarter, more loss | [Ollama FAQ](https://github.com/ollama/ollama/blob/main/docs/faq.mdx), via the research notes |
 | Ollama default context under 23 GiB of VRAM | 4,096 tokens | research claim on `server/routes.go`; too small for agents, so the project sets `OLLAMA_CONTEXT_LENGTH` |
-| Usable VRAM on this card | about 11 GB of 12 GB | idle use 1,135 MiB, [`machines/SEKAIHOME.yaml`](../../machines/SEKAIHOME.yaml) |
+| Usable VRAM on this card | about 11 GB of 12 GB | idle use 1,135 MiB, `machines/<HOST>.yaml` |
 | Free RAM before a model loads | about 11-12 GB with the usual desktop apps open | [`memory/state.md`](../../memory/state.md) |
 | Community speed of the 35B MoE on a 3060 12 GB | 39-47 tok/s, on faster RAM | disputed; see below |
 | Cold load of the 9B / 35B here | 130-161 s / 331 s | [`memory/state.md`](../../memory/state.md), Benchmarks |
@@ -329,7 +329,7 @@ a chat model (a few hundred MB to about 1 GB), so they can sit beside the large 
 - **Hardware classes.** [`machines/_defaults.yaml`](../../machines/_defaults.yaml) maps VRAM and RAM to a class
   (`moe-12gb-32ram`, `dense-12gb-16ram` and others). Each class names models and sets `primary_num_ctx`,
   `small_num_ctx` and `max_loaded_models`. `uv run scripts/stack.py doctor --write-profile` detects the machine.
-- **This machine.** [`machines/SEKAIHOME.yaml`](../../machines/SEKAIHOME.yaml) overrides the class: `primary:
+- **This machine.** `machines/<HOST>.yaml` overrides the class: `primary:
   qwen3.5:9b`, `primary_options: {}` (no `use_mmap`), and both `primary_num_ctx` and `small_num_ctx` at 32768. Its
   comment gives the reason: 9B at about 52 tok/s with about 18 GB of RAM left, against 35B at about 25 tok/s with
   about 1 GB left. Deleting the four override lines returns to the 35B MoE.

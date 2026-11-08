@@ -101,7 +101,7 @@ An ACL guards files on this PC. Some data does not travel through files:
 - **Localhost services.** A program running as the owner can serve personal data on `127.0.0.1` (for example the
   Logseq HTTP API behind `mcp-logseq`). The agent account can connect to a local port. Put a token only the owner
   can read in front of such a service, or restrict it with a firewall rule by user (to be tested, V-F7).
-- **Synced folders.** Documents, Desktop and Pictures on SEKAIHOME are redirected into OneDrive inside the profile.
+- **Synced folders.** Documents, Desktop and Pictures on the reference machine are redirected into OneDrive inside the profile.
   Locally covered, but also reachable through the Microsoft account.
 - **Copying in.** If the owner pastes personal data into `C:\AgentWork` or a chat, the block no longer applies to it.
 
@@ -185,7 +185,7 @@ because they only advise. Secrets live only in `.env` and `.claude/settings.loca
 
 ## 6. What we found
 
-V-F1 ran on 2026-10-30 as a read-only check on SEKAIHOME:
+V-F1 ran on 2026-10-30 as a read-only check on the reference machine:
 
 - **`D:` is exFAT.** Any account can read all of it, including `shows`, `songs`, `mem`, loose photos at the root,
   `keycloak` and `ollama`. The plan's lock means nothing there until personal data moves off `D:` or the drive is

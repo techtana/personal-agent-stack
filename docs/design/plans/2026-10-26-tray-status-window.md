@@ -20,7 +20,7 @@ PR #9 added a fifth wish from the same session: change configuration from the tr
 - Rebuild the status window as three tabs that follow Windows light/dark mode: **Overview**, **Usage**, **Settings**.
   The tray menu gains **Usage by model** and **Settings**.
 - **Usage** reads the gateway's JSONL traces (`traces/litellm/*.jsonl`) through `scripts/stacklib/usage.py`, not
-  Phoenix, because Smart App Control blocks Phoenix on SEKAIHOME. Period **Today** / **7 days** / **30 days**; group by
+  Phoenix, because Smart App Control blocks Phoenix on the reference machine. Period **Today** / **7 days** / **30 days**; group by
   gateway alias or served model; tiles, a sortable table and a tokens-per-day chart.
 - **Settings** (`scripts/stacklib/settings.py`) edits a fixed list of keys in `machines/<HOST>.yaml`, keeps comments,
   re-parses before writing, runs the same generators as `stack.py build`, and restarts only what changed.
