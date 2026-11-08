@@ -1,4 +1,4 @@
-**Status:** done 2026-11-01 ([PR #13](https://github.com/techtana/personal-agent-stack/pull/13)); the move into
+**Status:** done 2026-11-01 (PR #13); the move into
 `skills/` and the second eval round are still open.
 
 # `/ux-rules`: a researched UX rule catalog as a skill

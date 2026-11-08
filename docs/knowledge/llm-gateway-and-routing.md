@@ -353,7 +353,7 @@ changes to tier boundaries from evidence, and `adaptive_router` is the upgrade o
   `<dept>-local` is a direct `ollama_chat/` deployment of the primary model, with the same `num_ctx` and load options
   as `local-primary` so Ollama keeps one runner loaded.
 - **Base aliases.** `local-fim` (FIM, `qwen2.5-coder:1.5b-base`), `local-embed` (`nomic-embed-text`), `local-small` and
-  `local-primary` (both `qwen3.5:9b` at `num_ctx` 32768 on SEKAIHOME), `local-reviewer` (`flint:40b-a2b`, not pulled, no
+  `local-primary` (both `qwen3.5:9b` at `num_ctx` 32768 on the reference machine), `local-reviewer` (`flint:40b-a2b`, not pulled, no
   tier routes to it). A model a machine lacks falls back to the best local one when the config is built.
 - **Router config.** Every department router uses `classifier_type: heuristic`, escalation keywords `ESCALATE` and
   `use claude`, stall and context-window escalation, and optional `plan_mode_min_tier` and `keyword_tier_rules` from the
@@ -365,7 +365,7 @@ changes to tier boundaries from evidence, and `adaptive_router` is the upgrade o
 - **Trace callback.** `custom_callbacks.proxy_handler_instance` writes JSONL traces: requested alias, served model,
   provider, routing decision, tokens, cost, latency, Claude Code hint headers and Ollama load, prefill and decode
   times. `otel` sends spans to Phoenix when enabled; Phoenix is broken on
-  SEKAIHOME and slated for removal, so today the callback has no collector. `stack.py why-routed` reads the traces.
+  the reference machine and slated for removal, so today the callback has no collector. `stack.py why-routed` reads the traces.
 - **Profile B.** `scripts/claude-local.ps1|.sh` runs Claude Code on the gateway with private aliases only and denies the
   `WebFetch` and `WebSearch` tools in its own settings (the reason is not recorded; both tools reach the web directly).
 - **Planned enforcement.** `docs/plans/SHARED-COMPONENTS.md` S3 describes a `custom_auth` function plus

@@ -26,8 +26,8 @@ Commands
   run           run one service in the foreground and restart it when it exits (what each task runs)
   tray          background tray app: runs the services; its window shows status, usage per model and settings
                 (--show, --foreground, --status, --stop, --install-startup, --remove-startup)
-  dictate       voice typing in any app: install | run | start | stop | status | toggle | show | hide | check |
-                transcribe FILE.wav (the live pipeline on a recording, with the cleanup)
+  dictate       voice typing in any app: install | run | start | stop | status | toggle | show | hide | reload |
+                check | transcribe FILE.wav (the live pipeline on a recording, with the cleanup)
 """
 from __future__ import annotations
 
@@ -496,12 +496,26 @@ def cmd_media(a):
         info(media.install_comfyui(p, info))
         info(media.install_models(p, p["media"].get("image_workflow") or "z_image_turbo", lambda d=None, f=None: info(d) if d else None))
     if a.action in ("install", "provision"):
-        # Images through ComfyUI, and document embeddings through the gateway (counted in the tray's Usage tab).
+        # Images through ComfyUI, document embeddings through the gateway, and the chat box's microphone through voice
+        # typing's Whisper (all counted in the tray's Usage tab). One transaction, after one backup.
         embed = services.openwebui_embedding_settings(p)
         if not embed and p["models"].get("embed"):
             warn("LITELLM_MASTER_KEY is empty: Open WebUI's document embeddings stay on Ollama, outside the Usage tab")
-        keys = media.provision_openwebui(media.openwebui_db(p), {**embed, **media.image_settings(p)})
-        info(f"Open WebUI: {len(keys)} settings changed" + ("; restart it (`stack.py down open_webui` then `up open_webui`)" if keys else ""))
+        stt = {}
+        if p["services"].get("dictation") == "native":
+            from stacklib import dictation
+
+            try:  # voice typing's own key for Open WebUI's requests, added to .env the first time
+                stt = services.openwebui_stt_settings(p, dictation.ensure_api_key())
+            except OSError as e:
+                warn(f"could not add {dictation.KEY_NAME} to .env ({e}); Open WebUI's microphone stays on its own "
+                     "Whisper, outside the Usage tab")
+        keys = media.provision_openwebui(media.openwebui_db(p), {**embed, **stt, **media.image_settings(p)})
+        # Open WebUI reads its speech-to-text rows on every request; the embedding function needs a restart.
+        restart = [k for k in keys if not k.startswith("audio.stt.")]
+        info(f"Open WebUI: {len(keys)} settings changed" + (
+            "; restart it (`stack.py down open_webui` then `up open_webui`)" if restart
+            else "; its microphone uses voice typing's Whisper from the next recording" if keys else ""))
     if a.action == "gpu":
         info(media.gpu_mode(p, a.mode))
 
@@ -536,7 +550,7 @@ def cmd_dictate(a):
             info("voice typing is running: press " + dictation.hotkey_label(p) + " or click the mic button" if ok
                  else "voice typing did not answer within 30 s; see .run/logs/dictation.log")
         return
-    if a.action in ("status", "toggle", "show", "hide"):
+    if a.action in ("status", "toggle", "show", "hide", "reload"):
         try:
             info(json.dumps(control.call(port, "health" if a.action == "status" else a.action), indent=2))
         except OSError:
@@ -616,11 +630,11 @@ def main(argv=None):
     s.add_argument("--clients", action="store_true", help="also list each row's clients (aliases with --by client)"); s.set_defaults(f=cmd_usage)
     s = sub.add_parser("skills-sync", help="copy new or changed personal skills into skills/ (rules: skills/sync.yaml)")
     s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_skills_sync)
-    s = sub.add_parser("media", help="ComfyUI and media models under media.root: check, install, provision (Open WebUI's image and embedding settings), gpu chat|media")
+    s = sub.add_parser("media", help="ComfyUI and media models under media.root: check, install, provision (Open WebUI's image, embedding and microphone settings), gpu chat|media")
     s.add_argument("action", choices=["check", "install", "provision", "gpu"]); s.add_argument("mode", nargs="?", choices=["chat", "media"])
     s.set_defaults(f=cmd_media)
     s = sub.add_parser("dictate", help="voice typing in any app: install, run, start/stop, status, transcribe a WAV")
-    s.add_argument("action", choices=["install", "run", "start", "stop", "status", "toggle", "show", "hide", "check", "transcribe"])
+    s.add_argument("action", choices=["install", "run", "start", "stop", "status", "toggle", "show", "hide", "reload", "check", "transcribe"])
     s.add_argument("file", nargs="?"); s.add_argument("--style", choices=["verbatim", "clean", "concise"])
     s.add_argument("--mode", choices=["polish", "live"]); s.add_argument("--language"); s.add_argument("--device", choices=["auto", "cuda", "cpu"])
     s.add_argument("--vocabulary"); s.set_defaults(f=cmd_dictate)

@@ -1,11 +1,11 @@
 # Tray status window: modern design, usage and settings
 
-**Status:** done 2026-10-27 in [PR #9](https://github.com/techtana/personal-agent-stack/pull/9), except per-process
-CPU/RAM/GPU (part 2), which is in open [PR #8](https://github.com/techtana/personal-agent-stack/pull/8).
+**Status:** done 2026-10-27 in PR #9, except per-process
+CPU/RAM/GPU (part 2), which is in open PR #8.
 
 ## Goal
 
-From [issue #4](https://github.com/techtana/personal-agent-stack/issues/4) (2026-10-26), the owner asked for:
+From issue #4 (2026-10-26), the owner asked for:
 
 1. A more modern tray window than default tkinter.
 2. Current CPU, RAM and GPU use per process.
@@ -20,7 +20,7 @@ PR #9 added a fifth wish from the same session: change configuration from the tr
 - Rebuild the status window as three tabs that follow Windows light/dark mode: **Overview**, **Usage**, **Settings**.
   The tray menu gains **Usage by model** and **Settings**.
 - **Usage** reads the gateway's JSONL traces (`traces/litellm/*.jsonl`) through `scripts/stacklib/usage.py`, not
-  Phoenix, because Smart App Control blocks Phoenix on SEKAIHOME. Period **Today** / **7 days** / **30 days**; group by
+  Phoenix, because Smart App Control blocks Phoenix on the reference machine. Period **Today** / **7 days** / **30 days**; group by
   gateway alias or served model; tiles, a sortable table and a tokens-per-day chart.
 - **Settings** (`scripts/stacklib/settings.py`) edits a fixed list of keys in `machines/<HOST>.yaml`, keeps comments,
   re-parses before writing, runs the same generators as `stack.py build`, and restarts only what changed.

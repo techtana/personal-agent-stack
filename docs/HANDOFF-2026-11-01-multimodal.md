@@ -1,6 +1,6 @@
 # HANDOFF - 2026-11-01 - multimodal stack, for the next Claude Code session
 
-**Status:** open. Written in a cloud session that could read this repository and the web but not SEKAIHOME. Nothing in
+**Status:** open. Written in a cloud session that could read this repository and the web but not the reference machine. Nothing in
 the plan has been run on the machine. Session 1 (deep planning) is done as of 2026-11-01: decisions D-M1 to D-M8 are
 in plan section 12 and the code review in plan section 16. Start at Session 2.
 
@@ -19,7 +19,7 @@ Then work through section 4 below.
 
 ## 1. Owner's goals (authoritative)
 
-1. One private stack on SEKAIHOME for writing, coding, software architecture, science, art critique, image
+1. One private stack on the reference machine for writing, coding, software architecture, science, art critique, image
    recognition, web search, image generation, style transfer, video generation, music and speech.
 2. **Generated videos must have audio**: sound effects in time with the picture, with optional narration and music.
 3. The right "expert" answers each message without the owner picking a model by hand.
@@ -37,8 +37,8 @@ Then work through section 4 below.
   allowed because the repo, a config value or an earlier session mentions it; the owner may change the selection at
   any time.
 - When a step needs a path outside the selection (a model download folder, a ComfyUI models folder, a cache), stop.
-  Either the owner adds that folder to the selection, or you tell him exactly what to copy where and he does it.
-  Paths go into `machines/<HOST>.yaml` only as values he gives you.
+  Either the owner adds that folder to the selection, or you tell the owner exactly what to copy where and they do it.
+  Paths go into `machines/<HOST>.yaml` only as values the owner gives you.
 - Point every tool's cache and output at a selected folder explicitly (for example `HF_HOME`, ComfyUI's model and
   output paths), so nothing lands in a default location outside it.
 - The repository is public. Do not commit personal data, file names from personal folders, or secrets.
@@ -108,7 +108,7 @@ with audio, music, `media mux`) -> M5b (`make_video` tool) -> M6 (web search, Du
 - write or extend tests first where the code is testable without a GPU (build output, service commands, the ffmpeg
   filter graph);
 - run `uv run scripts/stack.py build` and `uv run --with pytest pytest -q`;
-- run the package's acceptance check on SEKAIHOME and paste the result into the pull request;
+- run the package's acceptance check on the reference machine and paste the result into the pull request;
 - update README (configuration, commands, known issues, path forward), the manuals, `DECISIONS.md` and
   `memory/state.md`.
 
@@ -126,7 +126,7 @@ with audio, music, `media mux`) -> M5b (`make_video` tool) -> M6 (web search, Du
 
 ## 6. Kickoff prompt
 
-Paste this into Claude Code opened on this repository on SEKAIHOME:
+Paste this into Claude Code opened on this repository on the reference machine:
 
 ```
 Read docs/HANDOFF-2026-11-01-multimodal.md and follow it. Start with Session 1 (deep planning, no machine

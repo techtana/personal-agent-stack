@@ -71,7 +71,8 @@ Counts every model the stack ran, local or outside API:
   typing's clean-up), read from `traces/litellm/<date>.jsonl`.
 - Models that run outside the gateway, each written to `traces/usage/<source>/<date>.jsonl`:
   - Whisper in voice typing (the live previews shown while you speak re-read the phrase so far, so they are listed
-    under the table and kept out of the totals);
+    under the table and kept out of the totals), including the microphone in Open WebUI's chat box once it uses voice
+    typing's Whisper (client **Open WebUI**);
   - Whisper in the recordings server that Claude Desktop uses;
   - images made by ComfyUI (the tray reads ComfyUI's job history every few seconds while ComfyUI runs);
   - `stack.py bench` and the start-up warm-up.
@@ -95,9 +96,10 @@ What is in the tab:
   **Overall** adds the time spent loading the model and waiting in the queue. An outside API's row ends in `· API`.
   Click a heading to sort. A red row means every request in it failed.
 - The line under the table says what the selected row's requests were and where their time went.
-- **Not counted** names model use the tab cannot see yet, while it can happen. Today that is the microphone in Open
-  WebUI's chat box, which runs Open WebUI's own Whisper, and on an existing install Open WebUI's document embeddings
-  until the provisioning step below.
+- **Not counted** names model use the tab cannot see yet, while it can happen. On an existing install that is the
+  microphone in Open WebUI's chat box, which runs Open WebUI's own Whisper, and Open WebUI's document embeddings, both
+  until the provisioning step below. It also names a speech-to-text engine outside the stack, if one is chosen in
+  Open WebUI's **Admin Settings > Audio**.
 - The chart shows requests per day for all models together. Select a row to see that row in its own unit: tokens,
   minutes of audio, or images per day.
 
@@ -111,8 +113,10 @@ the type of an error, never a prompt, transcript, image or file path.
 
 Two steps apply this to an existing install:
 
-- Open WebUI's document embeddings go through the gateway (and are counted) on a fresh install. On an existing one,
-  run `uv run scripts/stack.py media provision`, then restart Open WebUI.
+- On a fresh install, Open WebUI's document embeddings go through the gateway, and its chat-box microphone goes to
+  voice typing's Whisper while voice typing is on (see [Voice typing](#voice-typing)); both are counted. On an
+  existing install, run `uv run scripts/stack.py media provision`: it backs up Open WebUI's database, then writes both
+  settings. Restart Open WebUI for the embeddings; the microphone switches with the next recording.
 - Recordings are counted once `uv run scripts/stack.py whisper install` has been run again from the main checkout
   (a worktree would point the records at its own folder): it copies the new server and adds its usage folder to
   Claude Desktop's config. Restart Claude Desktop afterwards.
@@ -127,8 +131,10 @@ Changes the most common values in your machine profile, `machines/<HOST>.yaml`, 
 | Models | **Memory-map primary weights** | Needed for the 35B MoE model; leave off for dense models. |
 | Models | **Small model**, **Small context (tokens)** | The model behind `local-small`. Keep the context equal to the primary's when both use the same model. |
 | Tracing and services | **Write usage traces** | Writes `traces/litellm/` and `traces/usage/`. The Usage tab and `retro` need it. |
-| Tracing and services | **Phoenix tracing** | Runs Phoenix. Leave off on SEKAIHOME: Smart App Control blocks it. |
+| Tracing and services | **Phoenix tracing** | Runs Phoenix. Leave off on the reference machine: Smart App Control blocks it. |
 | Tracing and services | **Open WebUI (chat)** | Runs the chat at http://127.0.0.1:3000. |
+| Voice typing | **Voice typing hotkey**, **When to type**, **Cleanup**, **Stop after quiet**, **Language**, **Whisper model**, **Insert text by**, **Show the mic button** | See [Voice typing](#voice-typing). |
+| Voice typing, under **Show advanced** | **Cleanup prompt** | The instructions the local model follows when it cleans up a dictation. See [Your own cleanup instructions](#your-own-cleanup-instructions). |
 | Ollama runtime | **Keep models loaded for**, **KV cache precision**, **Flash attention**, **Parallel requests per model** | Ollama's memory and speed options. |
 
 A changed row is marked **changed**. The bar at the bottom says what **Apply** will do. **Apply** saves the changed
@@ -143,7 +149,7 @@ Cloud tiers are shown but cannot be changed here. Turning them on is a deliberat
 - `uv run scripts/stack.py status` lists each service as `UP`.
 - `uv run scripts/stack.py smoke` prints `smoke: 8/8 passed`.
 - A reply from the 9B model starts within a few seconds once the model is loaded. The first request after a long idle
-  period reloads the model, which takes about 2 minutes from the USB drive on SEKAIHOME.
+  period reloads the model, which takes about 2 minutes from the USB drive on the reference machine.
 
 | Service | Address | What it is for |
 |---|---|---|
@@ -161,7 +167,7 @@ image button works:
 
 1. In a chat, click **Image** under the message box (or ask the model to draw something; Open WebUI turns the
    request into an image prompt), then send your description.
-2. The image appears in the chat. The first one after a start or a GPU switch takes about 30 s on SEKAIHOME while
+2. The image appears in the chat. The first one after a start or a GPU switch takes about 30 s on the reference machine while
    the model loads from D:; later ones take about 11 s at 1024 x 1024.
 
 The model is Z-Image-Turbo (Apache-2.0) with 8 steps. Images are saved in `<media.root>\outputs\open-webui`.
@@ -207,10 +213,10 @@ How the text is made: two models, both on this PC.
    each phrase when you pause, verbatim, fillers included. It gets the text so far as a prompt (for continuity) and
    `dictation.vocabulary` as hints. Whisper does not clean or shorten anything.
 2. **The chat model cleans it up (polish mode, Clean or Concise only).** When you stop, the joined transcript goes
-   to the gateway alias `dictation.cleanup_model` (`local-small`, the 9B in Ollama on SEKAIHOME), with instructions
-   to remove fillers and false starts, keep only self-corrections, fix punctuation, keep your words and meaning, and
-   never answer what you said. Concise also asks it to shorten. The request uses JSON output and turns the model's
-   thinking off (with thinking on, the 9B returned nothing after 49 s).
+   to the gateway alias `dictation.cleanup_model` (`local-small`, the 9B in Ollama on the reference machine), with
+   instructions to remove fillers and false starts, keep only self-corrections, fix punctuation, keep your words and
+   meaning, and never answer what you said. Concise also asks it to shorten. The request uses JSON output and turns
+   the model's thinking off (with thinking on, the 9B returned nothing after 49 s).
 
 The reply is checked before it is typed. If it grew, shrank too much or reads like an answer, or the gateway does not
 answer, the raw transcript is typed instead, with only um/uh/er removed by a simple text rule (no model).
@@ -221,9 +227,9 @@ answer, the raw transcript is typed instead, with only um/uh/er removed by a sim
 | Polish, Verbatim | yes | no |
 | Live | yes | no (only the um/uh rule) |
 
-On SEKAIHOME (RTX 3060 with the 9B chat model loaded) Whisper takes 0.3 to 0.5 s per phrase and the cleanup about
-1 s. Whisper holds about 1.2 GB of VRAM and frees it after 30 idle minutes; the next dictation loads it again (5 s,
-while you are already talking).
+On the reference machine (RTX 3060 with the 9B chat model loaded) Whisper takes 0.3 to 0.5 s per phrase and the
+cleanup about 1 s. Whisper holds about 1.2 GB of VRAM and frees it after 30 idle minutes; the next dictation loads it
+again (5 s, while you are already talking).
 
 Good to know:
 
@@ -251,8 +257,124 @@ Good to know:
   the choice (`dictation.button`).
 - **Try it on a recording.** `uv run scripts/stack.py dictate transcribe note.wav --style concise` prints each phrase,
   the transcript and the cleaned text. `stack.py dictate check` lists the microphones and shows whether the GPU is used.
+- **Open WebUI's microphone.** While voice typing runs, the mic in Open WebUI's chat box uses the same Whisper
+  (`dictation.model` on the GPU) instead of Open WebUI's own small Whisper `base`. Audio files dropped into a chat use
+  it too.
+  - Open WebUI sends each recording to `http://127.0.0.1:8790/v1/audio/transcriptions` with voice typing's own key,
+    `DICTATION_BEARER` in `.env` (not the gateway's key, so a program that takes the port while voice typing is off
+    learns nothing that opens the gateway). It arrives as webm, ogg or mp4 from the browser, or as the file's own
+    format. Each one is counted in the tray's Usage tab under client **Open WebUI**.
+  - A fresh install is set up for it. On an existing one, run `uv run scripts/stack.py media provision` once: it adds
+    the key to `.env` (the rest of the file stays as it is) and points Open WebUI at voice typing.
+  - The language is detected for each recording unless Open WebUI's own **Speech-to-Text Language** setting names one.
+    Voice typing's **Language** setting is for dictation only.
+  - Open WebUI gets Whisper's words as heard; the chat-model cleanup is only for text typed into apps.
+  - Limits: 25 MB and 30 minutes of audio per file (longer recordings belong to the recordings server), and one file
+    at a time. Whisper is shared with dictation, so a long file holds a dictation until it is done.
+  - If voice typing is stopped, Open WebUI's mic shows a connection error. Start voice typing again, or set
+    **Speech-to-Text Engine** back to **Whisper (Local)** in Open WebUI's **Admin Settings > Audio**.
 
 Every setting is under `dictation:` in `machines/_defaults.yaml`; copy a line into `machines/<HOST>.yaml` to change it.
+
+### Your own cleanup instructions
+
+The instructions the chat model gets are a setting. In the tray window, go to **Settings**, then **Voice typing**, and
+click **Show advanced**. The **Cleanup prompt** box shows the built-in instructions until you change them. Edit them
+there, for example add a line such as `- Use British spelling.` or `- Write numbers as digits.`, then click **Apply**.
+Voice typing uses them from the next dictation, without a restart. **Restore default** puts the built-in text back
+(Ctrl+Z undoes it until you apply). When your own instructions are saved, a note beside **Show advanced** says so.
+
+Three things stay the same whatever you write:
+
+- **Concise** adds its rule to shorten.
+- The app adds the reply format (JSON with a `text` field), because it reads the answer from that field.
+- The checks above still run. Instructions that ask for more than cleaning (summarise, translate, add a heading) can
+  make the model's reply too long or too short, and then the transcript is typed instead (see
+  [Troubleshooting](troubleshooting.md)).
+
+The prompt is saved as `dictation.cleanup_prompt` in `machines/<HOST>.yaml`, as a block of lines; `''` means the
+built-in text, so later improvements to it still reach you. If you edit the file by hand, run
+`uv run scripts/stack.py dictate reload` so the running app reads it. `stack.py dictate transcribe` (**Try it on a
+recording** above) uses the saved prompt too, so you can compare instructions on the same recording.
+
+On the reference machine, adding `- Use American spelling and write every number as digits.` to the built-in text
+took effect in 6 of 6 tries on the 9B, and the other rules still held (the self-correction "blue, no wait, green"
+became "green" every time).
+
+## Refine selected text
+
+Rewrite text you selected in any app (Word, Logseq, Notion, a browser field) with the local model, and put the
+original back whenever you want. It is part of the voice typing app, so it runs whenever voice typing runs.
+
+1. Select the text.
+2. Click the pencil button left of the mic button, or press **Ctrl+Alt+R**.
+3. The pencil turns blue while the model works (about 1 to 2 seconds for a paragraph). Then the selection is replaced
+   and the bubble shows the new text.
+
+To undo it right away, press **Ctrl+Z** in the app, as for any paste. To undo it later, select the refined text,
+right-click the pencil and choose **Revert selected text to the original**. **Refine history...** in the same menu lists
+every refine, newest first: the text before and after side by side, removed words struck through and added words
+underlined. **Copy original**, **Copy suggestion** and **Revert in the app** work on the entry you pick.
+
+Styles, all in the pencil's right-click menu: **Polish** (the default: fixes mistakes and smooths sentences), **Fix
+spelling and grammar only**, **Concise**, **Professional**, **Friendly**, **Plain language** and **Bullet points**.
+Clicking a style refines with it once; **Click and hotkey use** changes the default. To add your own styles, choose
+**Add or edit styles...**. It opens `machines/<HOST>.yaml` (adding an example `refine:` section if there is none):
+
+```yaml
+refine:
+  prompts:
+    my-voice: Rewrite in my voice. Short sentences, active verbs, no jargon.
+    email-reply:
+      name: Email reply
+      prompt: Turn my notes into a short, polite email reply. Keep every fact and date.
+```
+
+Save the file; the styles appear the next time you open the menu, no restart needed. An entry named like a built-in
+style (`polish`, `grammar`, `concise`, `professional`, `friendly`, `simple`, `bullets`) replaces that style's
+instructions.
+
+How it works, all on this PC:
+
+1. It presses Ctrl+C in the app to read the selection, then puts back what was on your clipboard.
+2. The gateway alias `refine.model` (`local-primary`, the 9B on the reference machine) rewrites the text. With the
+   style's instructions it gets fixed rules: keep the language; keep names, numbers, links, `[[page links]]`,
+   `#tags`, `((block references))` and markdown; never answer a question in the text, only rewrite it.
+3. The reply is checked. If it reads like an answer to you, grew or shrank far more than the style allows, or is empty,
+   your text stays as it was. The suggestion still goes into the history.
+4. It presses Ctrl+C once more. Only if the same text is still selected in the same window does it paste the new text
+   over it. If you clicked elsewhere or switched windows meanwhile, nothing changes and the new text goes to the
+   clipboard; the bubble says so.
+
+The log is `.run\dictation\refine-log.jsonl`, one line per refine: time, app, window title, style, model, the text
+before, the suggestion and what happened to it (replaced, rejected, copied, unchanged, cancelled). Unlike the voice
+typing log it holds your words; that is its job. It stays on this PC and is never trimmed. To forget entries, delete
+their lines or the file.
+
+Good to know:
+
+- **Right-click menus of other apps.** Windows has no shared right-click menu that a program can add to: Word, Logseq
+  and Notion each draw their own. Refine therefore lives on its own button, its hotkey and the button's menu.
+- **Formatting.** The new text is pasted as plain text and takes the formatting where it lands. Bold, italics or links
+  inside the selection are not kept. A selection with a picture or a table is refused, because pasting plain text
+  would delete them.
+- **Word.** Ctrl+Alt+R is Word's shortcut for the (R) sign; while voice typing runs, it refines instead. Choose another
+  **Refine hotkey** in the tray's Settings tab if you need it. Selected paragraph marks are kept.
+- **Logseq.** Select text inside the block you are editing (Ctrl+A selects the whole block). Selected blocks (Esc, then
+  Shift+click) are copied as a list and do not fit.
+- **Clipboard history.** Reading the selection uses the app's own copy, so the selected text shows up in Win+V history
+  if that is on. The new text and your restored clipboard stay out of it.
+- **Refused on purpose.** Terminals (Ctrl+C there could stop the running program), apps running as administrator
+  (Windows blocks simulated keys), and the whole-line copy that VS Code, Notepad++ and Visual Studio make when nothing
+  is selected. In VS Code, Cursor and JetBrains IDEs it copies with Ctrl+Insert, which cannot stop a program in their
+  terminal panel; still, do not refine text in a terminal panel, where the new text would land on the command line.
+- **Moving on.** If you switch to another app while the model works, it does not pull you back: the new text goes to
+  the clipboard instead.
+- **Limits.** Up to 10,000 characters at a time (`refine.max_chars`). Esc cancels while the model works; nothing is
+  replaced then.
+- **Settings.** The tray's Settings tab has a **Refine selected text** group: hotkey, default style, model and whether
+  the pencil button shows. Every setting is under `refine:` in `machines/_defaults.yaml`. **Hide this button** in the
+  pencil's menu keeps only the hotkey; **Show the refine button** in the mic button's menu brings it back.
 
 ## Working with the departments
 

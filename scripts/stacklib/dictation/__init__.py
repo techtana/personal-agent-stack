@@ -24,7 +24,7 @@ STYLES = ("verbatim", "clean", "concise")
 INSERTS = ("paste", "type")
 DEVICES = ("auto", "cuda", "cpu")
 
-# Versions that loaded under Smart App Control on SEKAIHOME (2026-11-07; Python 3.14 from python.org). Smart App
+# Versions that loaded under Smart App Control on the reference machine (2026-11-07; Python 3.14 from python.org). Smart App
 # Control judges compiled modules file by file, so a new version is a new judgement: test it in a throwaway venv first.
 PACKAGES = (
     "faster-whisper==1.2.1",
@@ -56,6 +56,7 @@ class Config:
     max_minutes: float = 10.0
     insert: str = "paste"
     cleanup_model: str = "local-small"
+    cleanup_prompt: str = ""      # '' = cleanup.DEFAULT_PROMPT
     vocabulary: str = ""
     mic: str = ""
     unload_after_min: float = 30.0
@@ -165,6 +166,46 @@ def control_url(profile: dict) -> str:
     return f"http://127.0.0.1:{profile['ports']['dictation']}"
 
 
+def transcription_url(profile: dict) -> str:
+    """Base URL of voice typing's OpenAI-compatible speech to text (POST <url>/audio/transcriptions), for Open WebUI's
+    microphone. Built from the port alone, so it can only point at this machine."""
+    port = int(profile["ports"]["dictation"])
+    if not 0 < port < 65536:
+        raise ValueError(f"ports.dictation {port} is not a TCP port")
+    return f"http://127.0.0.1:{port}/v1"
+
+
+KEY_NAME = "DICTATION_BEARER"
+
+
+def api_key() -> str:
+    """The key callers of the transcription endpoint send (Open WebUI): DICTATION_BEARER from the environment or .env.
+    Its own key, not the gateway's: while voice typing is off, any local program could listen on its port and would
+    learn only this one."""
+    from .. import env_value
+
+    return env_value(KEY_NAME)
+
+
+def ensure_api_key(path: Path | None = None) -> str:
+    """DICTATION_BEARER, appended to .env as a new random key when it is not set yet; the rest of .env is left as it
+    is (comments included). The running voice typing app reads it on its next request."""
+    import secrets
+
+    from .. import ENV_FILE, load_dotenv
+
+    path = path or ENV_FILE
+    key = os.environ.get(KEY_NAME) or load_dotenv(path).get(KEY_NAME, "")
+    if key:
+        return key
+    key = secrets.token_urlsafe(32)
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(("" if not text or text.endswith("\n") else "\n") + f"{KEY_NAME}={key}\n")
+    info(f"{path.name}: added {KEY_NAME}, the key Open WebUI's microphone uses with voice typing")
+    return key
+
+
 def hotkey_label(profile: dict) -> str:
     """'Ctrl+Alt+Space' for menus and help text."""
     return "+".join(part.strip().capitalize() for part in Config.from_profile(profile).hotkey.split("+"))
@@ -240,19 +281,47 @@ def install(profile: dict, report=lambda *a: None, download_model: bool = True) 
     return "; ".join(notes)
 
 
-def save_setting(profile: dict, key: str, value) -> None:
-    """Write dictation.<key> into machines/<HOST>.yaml, keeping the owner's comments, so a choice made in the button's
-    menu survives a restart and shows in the tray's Settings tab."""
+def save_setting(profile: dict, key: str, value, section: str = "dictation") -> None:
+    """Write <section>.<key> (dictation or refine) into machines/<HOST>.yaml, keeping the owner's comments, so a
+    choice made in a button's menu survives a restart and shows in the tray's Settings tab."""
     import yaml
 
     from .. import profile as prof
     from ..yamledit import set_key
 
     path = prof.machine_file(profile.get("name"))
-    text = set_key(path.read_text(encoding="utf-8"), "dictation", key, value)
-    if ((yaml.safe_load(text) or {}).get("dictation") or {}).get(key) != value:
-        raise ValueError(f"could not write dictation.{key} into {path.name} safely")
+    text = set_key(path.read_text(encoding="utf-8"), section, key, value)
+    if ((yaml.safe_load(text) or {}).get(section) or {}).get(key) != value:
+        raise ValueError(f"could not write {section}.{key} into {path.name} safely")
     path.write_text(text, encoding="utf-8", newline="\n")
+
+
+REFINE_TEMPLATE = """
+refine:
+  # Refine selected text: the pencil button next to the mic, or its hotkey. Your own styles go under prompts; they
+  # appear in the button's right-click menu the next time you open it. An entry with a built-in id (polish, grammar,
+  # concise, professional, friendly, simple, bullets) replaces that style's instructions.
+  prompts:
+    # my-voice: Rewrite in my voice. Short sentences, active verbs, no jargon.
+    # email-reply:
+    #   name: Email reply
+    #   prompt: Turn my notes into a short, polite email reply. Keep every fact and date.
+"""
+
+
+def ensure_refine_section(path: Path) -> bool:
+    """Append a commented `refine:` section with example styles when the machine file has none. True if it wrote."""
+    import re
+
+    import yaml
+
+    text = path.read_text(encoding="utf-8")
+    if re.search(r"^refine:", text, re.M):
+        return False
+    new = text.rstrip("\n") + "\n" + REFINE_TEMPLATE
+    yaml.safe_load(new)  # never leave a file that no longer parses
+    path.write_text(new, encoding="utf-8", newline="\n")
+    return True
 
 
 def write_state(profile: dict, **values) -> None:

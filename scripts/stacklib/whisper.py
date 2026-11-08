@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from . import IS_WINDOWS, REPO, info, which
-from . import paths, usage_log
+from . import paths, procname, usage_log
 from .media import _run, _uv_env, media, system_python
 
 SERVER_SRC = REPO / "scripts" / "whisper_mcp.py"
@@ -55,7 +55,8 @@ def server_env(profile: dict) -> dict[str, str]:
 
 def server_entry(profile: dict) -> dict:
     """The mcpServers entry, in Claude Desktop's format (Claude Code's .mcp.json takes the same stdio shape)."""
-    return {"command": str(whisper_python(profile)), "args": ["-I", str(whisper_dir(profile) / "whisper_mcp.py")],
+    # Claude Desktop starts it as PAS-Recordings.exe (procname) when the copy can be made.
+    return {"command": str(procname.named(whisper_python(profile), "recordings")), "args": ["-I", str(whisper_dir(profile) / "whisper_mcp.py")],
             "env": server_env(profile)}
 
 

@@ -97,7 +97,7 @@ also a Trustee resource, with a copy sealed offline. App secrets live on the enc
 not in Google Secret Manager. The effect: a disk snapshot or backup taken through the cloud provider's own tools is
 unreadable without the broker. Source: PLAN-A section 1, acceptance test 5.
 
-The broker runs on owned hardware (SEKAIHOME or the admin's machine), reached over WireGuard. If it is offline when the
+The broker runs on owned hardware (the reference machine or the admin's machine), reached over WireGuard. If it is offline when the
 VM reboots, the admin unlocks the disk by hand. A second Trustee instance on the admin's machine is a listed mitigation.
 Source: PLAN-A section 8-9.
 
@@ -181,7 +181,7 @@ Rules of thumb:
 ## How the project uses it
 
 Status, as of 2026-11-01: **planned, not built.** The gate (S1-S3) and Plan A (A-S0 through A9) are unbuilt. The shipped
-build is private-only with `external.enabled: false`. Plan A would be the way to keep the stack up when SEKAIHOME is
+build is private-only with `external.enabled: false`. Plan A would be the way to keep the stack up when the reference machine is
 off; Plan B runs every tier locally and needs no confidential VM. `special_categories_location: any` is the default
 (decision G5/A-D5).
 
@@ -194,7 +194,7 @@ Plan A work packages ([PLAN-A-CLOUD-LED.md](../plans/PLAN-A-CLOUD-LED.md)):
 - **A3:** Trustee on owned hardware, LUKS unlock at boot through a custom initramfs hook, restic backups with keys held
   as Trustee resources, a restore script. Fallback: Clevis + Tang with an admin unlock.
 - **A4:** the confidential model server image (llama.cpp on CPU, vLLM on GPU) and the start-on-demand controller.
-- **A5:** WireGuard link to SEKAIHOME. **A6:** the encrypted deferred queue. **A7:** installer. **A8:** staging tests.
+- **A5:** WireGuard link to the reference machine. **A6:** the encrypted deferred queue. **A7:** installer. **A8:** staging tests.
   **A9:** user guide and admin runbook.
 - Shared packages that touch this topic: S1-S4, S6, S8, S7 (Authentik inside the VM); see the companion note
   [Privacy for LLM systems](privacy-for-llm-systems.md).
@@ -231,7 +231,7 @@ Only one plan check touches this area; it was a documentation and source check, 
 - How slow is CPU inference on C3 with TDX for a 9B model, and is that usable daily? (A-S0)
 - What is the cold start from stopped to first token (boot, attestation, unlock, model load)? (A-S0)
 - Which regions offer the needed machine types? (A-D6)
-- Can the owner accept manual unlock when SEKAIHOME is off at a reboot? (A-D3)
+- Can the owner accept manual unlock when the reference machine is off at a reboot? (A-D3)
 - Do the cost estimates hold? They are marked rough and unverified.
 - Are the CPU vendors' known side-channel and firmware issues acceptable for special-category data, or should it stay
   on-prem (A-D5)? A decision for the owner.

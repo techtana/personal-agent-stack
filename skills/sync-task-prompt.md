@@ -9,7 +9,7 @@ Paste everything below the line into a new Claude Code desktop scheduled task (s
 
 ---
 
-Sync the owner's personal agent skills into the personal-agent-stack repository: copy skills that are new AND update skills that were modified at their source, then open a pull request when anything changed. The repository is PUBLIC on GitHub (techtana/personal-agent-stack), so nothing personal may reach it.
+Sync the owner's personal agent skills into the personal-agent-stack repository: copy skills that are new AND update skills that were modified at their source, then open a pull request when anything changed. The repository is PUBLIC on GitHub, so nothing personal may reach it.
 
 Steps (Git Bash; main checkout is C:\Code\personal-agent-stack — do NOT edit, stash or switch branches in it):
 

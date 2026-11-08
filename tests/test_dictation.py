@@ -1,7 +1,8 @@
 """Tests for voice typing (scripts/stacklib/dictation): the parts that need no microphone, model or Windows desktop.
 
 Hotkey parsing, the silence and phrase rules, filler removal, the cleanup request and its safety checks (against a local
-fake gateway), the control endpoint's request rules, configuration, the service command and the tray settings.
+fake gateway), the control endpoint's request rules, configuration, the service command and the tray settings,
+including the cleanup prompt and the multi-line YAML it is saved as.
 """
 from __future__ import annotations
 
@@ -15,6 +16,8 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest import mock
+
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from stacklib import dictation, services, settings, yamledit  # noqa: E402
@@ -262,6 +265,41 @@ class Cleanup(unittest.TestCase):
         res = cleanup.polish(RAW, "verbatim", base_url="http://127.0.0.1:9", api_key="k", model="m")
         self.assertEqual((res.text, res.polished, res.note), (RAW, False, ""))
 
+    def test_without_a_custom_prompt_the_built_in_one_is_sent(self):
+        self.assertEqual(cleanup.system_prompt("clean"), f"{cleanup.DEFAULT_PROMPT}\n{cleanup.REPLY_FORMAT}")
+        self.assertEqual(cleanup.system_prompt("concise"),
+                         f"{cleanup.DEFAULT_PROMPT}\n- {cleanup.CONCISE}\n{cleanup.REPLY_FORMAT}")
+        for rule in cleanup.RULES:
+            self.assertIn(rule, cleanup.DEFAULT_PROMPT)
+        self.assertEqual(cleanup.system_prompt("clean", " \n "), cleanup.system_prompt("clean"))
+
+    def test_a_custom_prompt_replaces_only_the_instructions(self):
+        mine = "Clean up dictated text.\n- Keep my words."
+        clean = cleanup.system_prompt("clean", f"\n{mine}\n\n")
+        self.assertEqual(clean, f"{mine}\n{cleanup.REPLY_FORMAT}")  # parse_reply needs the reply format: never dropped
+        self.assertNotIn(cleanup.RULES[0], clean)
+        self.assertEqual(cleanup.system_prompt("concise", mine), f"{mine}\n- {cleanup.CONCISE}\n{cleanup.REPLY_FORMAT}")
+        body = cleanup.request_body(RAW, "clean", "local-small", mine)
+        self.assertEqual(body["messages"][0]["content"], clean)
+        self.assertIs(body["think"], False)
+        self.assertEqual(body["response_format"], {"type": "json_object"})
+
+    def test_polish_sends_the_custom_prompt_and_still_checks_the_reply(self):
+        gw = _FakeGateway('{"text": "We should move the meeting to Wednesday. Can you send the agenda?"}')
+        try:
+            res = cleanup.polish(RAW, "clean", base_url=gw.url, api_key="k", model="m", prompt="My rules.")
+        finally:
+            gw.close()
+        self.assertTrue(res.polished, res.note)
+        self.assertEqual(gw.requests[0]["body"]["messages"][0]["content"], f"My rules.\n{cleanup.REPLY_FORMAT}")
+        gw = _FakeGateway('{"text": "Sure! Here is a detailed agenda for Wednesday: 1. Welcome 2. Updates 3. Q&A 4. Wrap-up and next steps for everyone."}')
+        try:
+            res = cleanup.polish(RAW, "clean", base_url=gw.url, api_key="k", model="m", prompt="Answer questions.")
+        finally:
+            gw.close()
+        self.assertFalse(res.polished)
+        self.assertEqual(res.text, textops.strip_fillers(RAW))
+
 
 class Control(unittest.TestCase):
     def test_request_rules(self):
@@ -274,6 +312,8 @@ class Control(unittest.TestCase):
         self.assertEqual(control.check_request("POST", "/toggle", {**ok, "Origin": "https://evil.example"}, 8790)[0], 403)
         self.assertEqual(control.check_request("POST", "/toggle", {"Host": "evil.example:8790"}, 8790)[0], 403)
         self.assertEqual(control.check_request("POST", "/toggle", {}, 8790)[0], 403)
+        self.assertIsNone(control.check_request("POST", "/reload", ok, 8790))
+        self.assertEqual(control.check_request("GET", "/reload", ok, 8790)[0], 405)
 
     def test_server_round_trip(self):
         with socket.socket() as s:
@@ -325,6 +365,11 @@ class Configuration(unittest.TestCase):
         self.assertEqual((cfg.mode, cfg.insert), ("polish", "paste"))
         self.assertEqual(cfg.silence_stop_s, 0.8)      # clamped
         self.assertEqual(cfg.phrase_pause_s, 0.7)      # not a number: default
+
+    def test_cleanup_prompt(self):
+        self.assertEqual(dictation.Config.from_profile({}).cleanup_prompt, "")  # '' = the built-in prompt
+        cfg = dictation.Config.from_profile({"dictation": {"cleanup_prompt": "\n  Rule one.\n\n- Rule two.\n"}})
+        self.assertEqual(cfg.cleanup_prompt, "Rule one.\n\n- Rule two.")
 
     def test_defaults_file_matches_the_dataclass(self):
         from stacklib import profile as prof
@@ -421,6 +466,124 @@ class Integration(unittest.TestCase):
             dirs = [str(d) for d in gpu.candidate_dirs(Path(r"C:\venv"))]
         self.assertIn(str(Path(r"C:\Users\x\AppData\Local") / "Programs" / "Ollama" / "lib" / "ollama" / "cuda_v12"), dirs)
         self.assertEqual(dirs[0], str(Path(r"C:\venv") / "Lib" / "site-packages" / "nvidia" / "cublas" / "bin"))
+
+
+class MultiLineYaml(unittest.TestCase):
+    """yamledit writes the cleanup prompt as a literal block and replaces a value that spans lines whole."""
+
+    def test_blocks_round_trip_and_keep_the_rest_of_the_file(self):
+        base = ("# owner's notes\nname: TEST\ndictation:\n  language: en               # set by me\n"
+                "  cleanup_prompt: ''         # '' = built-in\n                             # a continued comment\n"
+                "  button: true\nservices:\n  dictation: native\n")
+        first = "You turn raw speech.\n- Keep 'quotes' and # signs.\n\n- ไทย and émoji 🎤."
+        text = yamledit.set_key(base, "dictation", "cleanup_prompt", first)
+        # The continued comment would become part of the block, so both comment lines move above the key.
+        self.assertIn("  # '' = built-in\n  # a continued comment\n  cleanup_prompt: |-\n    You turn raw speech.\n", text)
+        for value in (first, "Second\n  indented line\nlast", "  starts with spaces\nnext", "a space \nand\ta tab", ""):
+            text = yamledit.set_key(text, "dictation", "cleanup_prompt", value)
+            data = yaml.safe_load(text)
+            self.assertEqual(data["dictation"], {"language": "en", "cleanup_prompt": value, "button": True}, repr(value))
+            self.assertEqual(data["services"], {"dictation": "native"})
+        self.assertIn("# owner's notes", text)
+        self.assertIn("  language: en               # set by me", text)
+        text = yamledit.set_key(text, "dictation", "button", False)
+        self.assertEqual(text.count("button:"), 1)
+
+    def test_hand_written_multi_line_values_are_replaced_whole(self):
+        folded = "dictation:\n  cleanup_prompt: >-   # mine\n    folded text\n    continues here\n\n  mic: ''\n"
+        self.assertEqual(yamledit.set_key(folded, "dictation", "cleanup_prompt", "A\nB"),
+                         "dictation:\n  cleanup_prompt: |-   # mine\n    A\n    B\n\n  mic: ''\n")
+        quoted = 'dictation:\n  cleanup_prompt: "first\n    second # not a comment"\n  mic: x\n'
+        self.assertEqual(yamledit.set_key(quoted, "dictation", "cleanup_prompt", "one # two"),
+                         "dictation:\n  cleanup_prompt: 'one # two'\n  mic: x\n")
+
+    def test_keys_next_to_a_block_and_values_with_hash_signs(self):
+        block = "dictation:\n  cleanup_prompt: |-\n    a\n    b\n"
+        self.assertEqual(yaml.safe_load(yamledit.set_key(block, "dictation", "language", "th"))["dictation"],
+                         {"cleanup_prompt": "a\nb", "language": "th"})
+        # A '#' inside a value used to hide the key, so a second `vocabulary:` line was appended.
+        self.assertEqual(yamledit.set_key("dictation:\n  vocabulary: C#, F#\n  mic: ''\n", "dictation", "vocabulary", "Rust"),
+                         "dictation:\n  vocabulary: Rust\n  mic: ''\n")
+
+
+class CleanupPromptSetting(unittest.TestCase):
+    """The tray's Voice typing > Advanced > Cleanup prompt."""
+
+    def setUp(self):
+        self.s = next(s for s in settings.SETTINGS if settings.setting_id(s) == "dictation.cleanup_prompt")
+        self.p = {"name": "TEST", "models": {}, "observability": {}, "services": {"dictation": "native"},
+                  "ollama_env": {}, "ports": {"dictation": 8790}, "dictation": {"cleanup_prompt": ""}}
+
+    def test_the_box_shows_the_built_in_prompt_and_saves_only_a_change(self):
+        self.assertEqual((self.s.kind, self.s.advanced, self.s.effect), ("text", True, "dictation"))
+        sid = "dictation.cleanup_prompt"
+        self.assertEqual(settings.current_values(self.p)[sid], cleanup.DEFAULT_PROMPT)
+        for box in (cleanup.DEFAULT_PROMPT, cleanup.DEFAULT_PROMPT.replace("\n", "  \r\n") + "\n\n", "", " \n "):
+            self.assertEqual(settings.changed(self.p, {sid: box}), [], repr(box[:30]))
+            self.assertEqual(settings._to_file_value(self.s, box), "")  # the built-in text stays in the code
+        mine = "Clean it.\n- Keep my words."
+        self.assertEqual(settings.changed(self.p, {sid: mine + "  \n"}), [self.s])
+        self.assertEqual(settings._to_file_value(self.s, "\n" + mine.replace("\n", " \r\n") + "\n"), mine)
+        custom = {**self.p, "dictation": {"cleanup_prompt": mine}}
+        self.assertEqual(settings.current_values(custom)[sid], mine)
+        self.assertEqual(settings.changed(custom, {sid: cleanup.DEFAULT_PROMPT}), [self.s])
+
+    def test_save_writes_a_block_and_restore_default_writes_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            machine = Path(tmp) / "TEST.yaml"
+            machine.write_text("# notes\nname: TEST\ndictation:\n  language: en               # chosen\n", encoding="utf-8")
+            mine = "Clean it.\n\n- Keep 'quotes', # signs and ไทย."
+            with mock.patch("stacklib.profile.machine_file", return_value=machine):
+                self.assertEqual(settings.save(self.p, {"dictation.cleanup_prompt": mine}), [self.s])
+                text = machine.read_text(encoding="utf-8")
+                self.assertIn("  cleanup_prompt: |-\n    Clean it.\n\n    - Keep 'quotes', # signs and ไทย.\n", text)
+                self.assertIn("  language: en               # chosen", text)
+                saved = {**self.p, "dictation": {"cleanup_prompt": mine}}
+                self.assertEqual(settings.save(saved, {"dictation.cleanup_prompt": cleanup.DEFAULT_PROMPT}), [self.s])
+            self.assertEqual(yaml.safe_load(machine.read_text(encoding="utf-8"))["dictation"],
+                             {"language": "en", "cleanup_prompt": ""})
+
+    def test_the_running_app_takes_a_new_prompt_without_a_restart(self):
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        acted: list[str] = []
+        server = control.ControlServer(port, dict, lambda name: (acted.append(name), {"ok": True})[1])
+        server.start()
+        p = {**self.p, "ports": {"dictation": port}, "dictation": {"cleanup_prompt": "Mine."}}
+        logs: list[str] = []
+        try:
+            self.assertTrue(settings._update_dictation(p, {"dictation.cleanup_prompt"}, logs.append))
+            with mock.patch.object(control, "ACTIONS", ("toggle", "show", "hide")):  # an app from before /reload
+                self.assertFalse(settings._update_dictation(p, {"dictation.cleanup_prompt"}, logs.append))
+        finally:
+            server.stop()
+        self.assertEqual(acted, ["reload"])
+        self.assertEqual(logs, ["Voice typing uses your own cleanup prompt from the next dictation"])
+        self.assertTrue(settings._update_dictation(p, {"dictation.cleanup_prompt"}, logs.append))  # not running: read at start
+        style = next(s for s in settings.SETTINGS if settings.setting_id(s) == "dictation.style")
+        self.assertEqual(settings.effect_texts([self.s]), ["update voice typing (no restart)"])
+        self.assertEqual(settings.effect_texts([self.s, style]), ["restart voice typing"])
+
+    def test_apply_restarts_voice_typing_only_for_other_settings(self):
+        from stacklib import profile as prof
+
+        with tempfile.TemporaryDirectory() as tmp:
+            machine = Path(tmp) / "TEST.yaml"
+            machine.write_text("name: TEST\nservices:\n  dictation: native\n", encoding="utf-8")
+            with mock.patch("stacklib.profile.machine_file", return_value=machine), \
+                    mock.patch.object(services, "_task_managed", return_value=set()), \
+                    mock.patch.object(services, "stop") as stop, \
+                    mock.patch.object(services, "start", return_value={}) as start, \
+                    mock.patch.object(control, "call", return_value={"ok": True}) as call:
+                p = settings.apply(prof.resolve_profile("TEST"), {"dictation.cleanup_prompt": "Mine."}, log=lambda m: None)
+                call.assert_called_once_with(p["ports"]["dictation"], "reload")
+                stop.assert_not_called()
+                start.assert_not_called()
+                self.assertEqual(p["dictation"]["cleanup_prompt"], "Mine.")
+                settings.apply(p, {"dictation.style": "concise"}, log=lambda m: None)
+                stop.assert_called_once()
+                start.assert_called_once()
 
 
 class Languages(unittest.TestCase):

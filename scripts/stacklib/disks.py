@@ -2,7 +2,7 @@
 
 Uses `winsat disk` when the process runs as administrator (winsat does nothing without it: no output, exit code 0)
 and otherwise times a 256 MB test file: written and flushed, then read back past the OS cache. The thresholds come
-from SEKAIHOME (2026-11-01): a Crucial X8 USB SSD measured 41 MB/s on a USB 2.0 link and 376 MB/s on USB 3, against
+from the reference machine (2026-11-01): a Crucial X8 USB SSD measured 41 MB/s on a USB 2.0 link and 376 MB/s on USB 3, against
 2,762 MB/s for the internal NVMe drive. docs/manuals/choosing-drives.md explains the advice in plain language.
 """
 from __future__ import annotations

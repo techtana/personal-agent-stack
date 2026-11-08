@@ -1,8 +1,11 @@
 """The voice typing app: hotkey or button -> microphone -> VAD -> Whisper -> optional cleanup -> the focused window.
+It also refines selected text: the refine button or its hotkey -> Ctrl+C -> the gateway's local model -> Ctrl+V over
+the selection, with every suggestion kept in the refine log (refiner.py).
 
-Threads: Tk main loop (button, bubble); hotkeys (Win32 message loop); microphone (WinMM) which also runs the VAD and
-the segmenter on each 32 ms frame; control (start, stop, cancel, in order); worker (Whisper and the cleanup, one job
-at a time); inserter (clipboard and keystrokes, in order); the local HTTP control endpoint.
+Threads: Tk main loop (buttons, bubble, history window); hotkeys (Win32 message loop); microphone (WinMM) which also
+runs the VAD and the segmenter on each 32 ms frame; control (start, stop, cancel, in order); worker (Whisper and the
+cleanup, one job at a time); inserter (clipboard and keystrokes, in order); a refine job's own thread while it waits
+for the model; the local HTTP control endpoint.
 
 One pipeline serves both modes. Each phrase is transcribed as soon as you pause, with the text so far as Whisper's
 prompt. Live mode types each phrase right away; polish mode joins them when you stop and asks the gateway's local model
@@ -22,9 +25,13 @@ import numpy as np
 
 from .. import env_value
 from .. import profile as prof
-from . import Config, cleanup, control, hotkey, read_state, save_setting, write_state
+from . import (Config, cleanup, control, ensure_refine_section, hotkey, read_state, refine, save_setting, state_dir,
+               transcriptions, write_state)
+from . import api_key as transcription_key
 from .audio import RATE, Recorder, RecorderError
 from .engine import Engine
+from .refinelog import LOG_NAME, RefineLog
+from .refiner import Refiner
 from .segment import FRAME, Event, Segmenter
 from .textops import joiner, strip_fillers
 from .vad import level, make_vad
@@ -80,6 +87,16 @@ class InsertJob:
     detail: str = ""
 
 
+@dataclass
+class CallJob:
+    """Run fn(winsys, clipboard) on the inserter thread (the refine's Ctrl+C and Ctrl+V), in turn with the inserts."""
+    fn: object
+    done: threading.Event = field(default_factory=threading.Event)
+    result: object = None
+    error: BaseException | None = None
+    abandoned: bool = False   # the caller gave up waiting: never press keys for it later
+
+
 class Inserter(threading.Thread):
     """Puts text into the focused window, one job at a time, on the thread that owns the clipboard window."""
 
@@ -92,6 +109,17 @@ class Inserter(threading.Thread):
         self.q.put(job)
         return job
 
+    def call(self, fn, timeout: float = 30.0):
+        """fn(winsys, clipboard) on this thread; returns its result or raises its exception."""
+        job = CallJob(fn)
+        self.q.put(job)
+        if not job.done.wait(timeout):
+            job.abandoned = True
+            raise TimeoutError("the clipboard thread did not answer")
+        if job.error is not None:
+            raise job.error
+        return job.result
+
     def run(self) -> None:
         from . import winsys
 
@@ -102,6 +130,15 @@ class Inserter(threading.Thread):
             job = self.q.get()
             if job is None:
                 break
+            if isinstance(job, CallJob):
+                if job.abandoned:
+                    continue
+                try:
+                    job.result = job.fn(winsys, self.clip)
+                except BaseException as e:  # noqa: BLE001 - handed back to the caller
+                    job.error = e
+                job.done.set()
+                continue
             try:
                 job.outcome, job.detail = self._insert(job)
             except Exception as e:  # noqa: BLE001 - report in the bubble, keep the thread
@@ -189,13 +226,28 @@ class App:
         self.hotkey_error = ""
         self.last_target = 0
         self.last_external = 0            # last foreground window that is not ours (see _track_focus)
-        self.server = control.ControlServer(self.port, self.health, self.act)  # raises when another copy runs
+        self.pid = os.getpid()
+        self.rcfg = refine.Config.from_profile(profile, warn=lambda m: log(f"[refine] {m}"))
+        self.refine_hotkey_error = ""
+        self.refine_log = RefineLog(state_dir(profile) / LOG_NAME)
+        self._esc_refine = False
+        self._esc_lock = threading.Lock()
+        # Raises when another copy runs. Also serves Open WebUI's microphone (transcriptions.py) on the same Whisper,
+        # for callers with DICTATION_BEARER, looked up on each request so a key added to .env later works at once.
+        self.server = control.ControlServer(
+            self.port, self.health, self.act, api_key=transcription_key, log=log,
+            transcribe=lambda data, **kw: transcriptions.transcribe_with(self.engine, data, **kw))
         state = read_state(profile)
         pos = (int(state["x"]), int(state["y"])) if "x" in state and "y" in state else None
         winsys.set_dpi_aware()
-        self.overlay = Overlay(self, self.cfg.button, pos)
+        self.overlay = Overlay(self, self.cfg.button, pos, show_refine=self.rcfg.button,
+                               saved_width=int(state.get("w") or 0))
         self.inserter = Inserter(self.overlay.windows)
         self.hotkeys = winsys.HotkeyThread(self._on_hotkey)
+        self.refiner = Refiner(call=self.inserter.call, target=self._target, ui=RefineUI(self), cfg=self._refine_cfg,
+                               refine_fn=self._refine_fn, log=self.refine_log, esc=self._refine_esc,
+                               elevated=winsys.self_elevated(), ours=self._ours, busy_elsewhere=self._dictating,
+                               logline=log)
 
     # ---------------------------------------------------------------- lifecycle
 
@@ -208,11 +260,13 @@ class App:
         threading.Thread(target=self._worker_loop, name="dictation-worker", daemon=True).start()
         threading.Thread(target=self._track_focus, name="dictation-focus", daemon=True).start()
         self.engine.load_async()
-        log(f"[dictation] ready: hotkey {self.hotkey_text()}, mode {self.cfg.mode}, cleanup {self.cfg.style}, "
-            f"VAD {self.vad.name}, control http://127.0.0.1:{self.port}")
-        if self.hotkey_error:
-            self.ui(lambda: self.overlay.set_state("error", "Hotkey not available", self.hotkey_error,
-                                                   "Pick another one in the tray's Settings tab; the button still works.",
+        log(f"[dictation] ready: hotkey {self.hotkey_text()}, mode {self.cfg.mode}, cleanup {self.cfg.style} "
+            f"({self.prompt_kind()} prompt), VAD {self.vad.name}, refine {self.refine_hotkey_text()} "
+            f"({self.rcfg.default} via {self.rcfg.model}), control http://127.0.0.1:{self.port}")
+        problems = [p for p in (self.hotkey_error, self.refine_hotkey_error) if p]
+        if problems:
+            self.ui(lambda: self.overlay.set_state("error", "Hotkey not available", " ".join(problems),
+                                                   "Pick another one in the tray's Settings tab; the buttons still work.",
                                                    hide_after=12))
         self.overlay.run()
         self.hotkeys.stop()
@@ -222,30 +276,58 @@ class App:
     def ui(self, fn) -> None:
         self.overlay.post(fn)
 
+    def _ours(self, hwnd: int) -> bool:
+        """A window of this app: the buttons, the bubble, a menu, the history window or a picker."""
+        return hwnd in self.overlay.windows() or self.ws.window_pid(hwnd) == self.pid
+
     def _track_focus(self) -> None:
-        """Remember the last window you used that is not the button, so a click on the button (should it ever take
-        the focus) still dictates into the app you came from."""
+        """Remember the last window you used that is not ours, so a click on a button, a menu item or the history
+        window's Revert still acts on the app you came from."""
         while True:
             hwnd = self.ws.root_window(self.ws.foreground())
-            if hwnd and hwnd not in self.overlay.windows():
+            if hwnd and not self._ours(hwnd):
                 self.last_external = hwnd
             time.sleep(0.25)
 
+    def _target(self) -> int:
+        hwnd = self.ws.root_window(self.ws.foreground())
+        return self.last_external if not hwnd or self._ours(hwnd) else hwnd
+
     def _register_hotkey(self) -> None:
+        dictate = None
         try:
-            mods, vk = hotkey.parse(self.cfg.hotkey)
+            mods, vk = dictate = hotkey.parse(self.cfg.hotkey)
         except hotkey.HotkeyError as e:
             self.hotkey_error = f"{self.cfg.hotkey}: {e}"
-            return
-        ok, err = self.hotkeys.register("dictate", mods, vk)
-        if ok:
-            self.hotkey_vk = vk
         else:
-            self.hotkey_error = f"{self.hotkey_text()} is taken by another program ({err})."
-            log(f"[dictation] {self.hotkey_error}")
+            ok, err = self.hotkeys.register("dictate", mods, vk)
+            if ok:
+                self.hotkey_vk = vk
+            else:
+                self.hotkey_error = f"{self.hotkey_text()} is taken by another program ({err})."
+                log(f"[dictation] {self.hotkey_error}")
+        if not self.refine_hotkey_text():
+            return  # refine.hotkey: '' (or off): the button and its menu only
+        try:
+            mods, vk = hotkey.parse(self.rcfg.hotkey)
+        except hotkey.HotkeyError as e:
+            self.refine_hotkey_error = f"Refine {self.rcfg.hotkey}: {e}"
+            return
+        if (mods, vk) == dictate:
+            self.refine_hotkey_error = f"The refine hotkey {self.refine_hotkey_text()} is also the voice typing hotkey."
+            return
+        ok, err = self.hotkeys.register("refine", mods, vk)
+        if not ok:
+            self.refine_hotkey_error = f"Refine: {self.refine_hotkey_text()} is taken by another program ({err})."
+            log(f"[refine] {self.refine_hotkey_error}")
 
     def hotkey_text(self) -> str:
         return hotkey.label(self.cfg.hotkey)
+
+    def refine_hotkey_text(self) -> str:
+        """'Ctrl+Alt+R', or '' when refine.hotkey is empty or off."""
+        key = (self.rcfg.hotkey or "").strip()
+        return "" if key.lower() in ("", "off", "none") else hotkey.label(key)
 
     def summary(self) -> str:
         mode = "types when you finish, cleaned up" if self.cfg.mode == "polish" else "types as you speak"
@@ -260,6 +342,10 @@ class App:
                 "model": self.engine.model_name, "note": self.engine.note, "vad": self.vad.name,
                 "hotkey": self.cfg.hotkey, "hotkey_ok": not self.hotkey_error, "mode": self.cfg.mode,
                 "style": self.cfg.style, "language": self.cfg.language, "button": bool(self.cfg.button),
+                "refine": {"hotkey": self.rcfg.hotkey, "hotkey_ok": not self.refine_hotkey_error,
+                           "button": bool(self.rcfg.button), "default": self.rcfg.default, "model": self.rcfg.model,
+                           "busy": self.refiner.busy, "log": str(self.refine_log.path)},
+                "transcriptions": bool(transcription_key()),  # Open WebUI's microphone needs DICTATION_BEARER
                 "pid": os.getpid()}
 
     def act(self, name: str) -> dict:
@@ -268,14 +354,36 @@ class App:
         elif name == "start":
             self.commands.put(("start", "http"))
         elif name in ("stop", "cancel"):
+            if name == "cancel" and self.refiner.cancel():
+                return {"ok": True, "state": self.state}
             self.commands.put((name, "http"))
         elif name in ("show", "hide"):
             visible = name == "show"
             self.cfg.button = visible  # reported by /health at once; the Tk thread shows or hides and saves it
             self.ui(lambda: self.set_option("button", visible))
+        elif name in ("show_refine", "hide_refine"):
+            visible = name == "show_refine"
+            self.rcfg.button = visible
+            self.ui(lambda: self.set_refine_option("button", visible))
+        elif name == "refine":
+            return {"ok": self.refiner.start("", "http"), "state": self.state}
+        elif name == "revert":
+            return {"ok": self.refiner.revert("", "http"), "state": self.state}
         elif name == "quit":
             self.quit()
+        elif name == "reload":
+            self.reload()
         return {"ok": True, "state": self.state}
+
+    def prompt_kind(self) -> str:
+        return "custom" if self.cfg.cleanup_prompt else "built-in"
+
+    def reload(self) -> None:
+        """Take the settings that need no restart from the machine file: the cleanup prompt (the tray's Apply calls
+        this after saving it). The next cleanup uses it."""
+        fresh = Config.from_profile(prof.resolve_profile(self.profile.get("name") or None))
+        self.cfg.cleanup_prompt = fresh.cleanup_prompt
+        log(f"[dictation] settings reloaded: {self.prompt_kind()} cleanup prompt")
 
     def quit(self) -> None:
         log("[dictation] quitting")
@@ -284,7 +392,10 @@ class App:
     # ---------------------------------------------------------------- triggers
 
     def toggle(self, source: str) -> None:
-        if self.state == "idle":
+        if self.state == "idle" and self.refiner.busy:
+            self.ui(lambda: self.overlay.show_bubble("Still refining the selection", "", "Esc cancels it.",
+                                                     ink="#8cc8ff", owner="working", source="refine"))
+        elif self.state == "idle":
             self.commands.put(("start", source))
         elif self.state == "listening":
             self.commands.put(("stop", source))
@@ -292,9 +403,22 @@ class App:
             self.ui(lambda: self.overlay.show_bubble("Still finishing the last one", "", "One moment.",
                                                      ink="#8cc8ff", owner="working"))
 
+    def _dictating(self) -> str:
+        return "Finish dictating first" if self.state != "idle" else ""
+
     def _on_hotkey(self, name: str) -> None:
         if name == "cancel":
             self.commands.put(("cancel", "esc"))
+            return
+        if name == "refine_cancel":
+            # Off this thread: cancelling unregisters Esc, which waits for this (the hotkey) thread to answer.
+            threading.Thread(target=self.refiner.cancel, name="dictation-refine-cancel", daemon=True).start()
+            return
+        if name == "refine":
+            self.refiner.start("", "hotkey")
+            return
+        if self.refiner.busy:
+            self.toggle("hotkey")  # says it is still refining
             return
         if self.state == "idle":
             self.commands.put(("start", "hotkey"))
@@ -376,9 +500,9 @@ class App:
     def _start(self, source: str) -> None:
         if self.state != "idle":
             return
-        target = self.ws.root_window(self.ws.foreground())
-        if not target or target in self.overlay.windows():
-            target = self.last_external
+        if self.refiner.busy:
+            return
+        target = self._target()
         app = self.ws.process_name(self.ws.window_pid(target)) if target else ""
         cfg = self.cfg
         self.counter += 1
@@ -598,7 +722,7 @@ class App:
             if s.style != "verbatim":
                 self.ui(lambda: self.overlay.set_state("working", "Cleaning up", raw))
                 res = cleanup.polish(raw, s.style, base_url=self.gateway, api_key=self.api_key,
-                                     model=self.cfg.cleanup_model)
+                                     model=self.cfg.cleanup_model, prompt=self.cfg.cleanup_prompt)
                 final, note, polish_s = res.text, res.note, res.seconds
             if s.cancelled:
                 return
@@ -628,16 +752,111 @@ class App:
         if key == "button":
             self.overlay.set_button_visible(bool(value))
             if not value:
-                self.overlay.show_bubble("Button hidden", "", f"{self.hotkey_text()} still works. Show it again from "
-                                         "the tray: Voice typing row, Show button.", owner="idle")
+                self.overlay.show_bubble("Mic button hidden", "", f"{self.hotkey_text()} still works. Show it again "
+                                         "from the tray: Voice typing row, Show button.", owner="idle")
                 self.overlay._schedule_hide(5)
         try:
             save_setting(self.profile, key, value)
         except Exception as e:  # noqa: BLE001 - the change still applies until the app restarts
             log(f"[dictation] could not save dictation.{key}: {e}")
 
-    def remember_position(self, x: int, y: int) -> None:
-        write_state(self.profile, x=x, y=y)
+    def remember_position(self, x: int, y: int, width: int = 0) -> None:
+        write_state(self.profile, x=x, y=y, w=width)
+
+    # ---------------------------------------------------------------- refine selected text
+
+    def _refine_cfg(self) -> refine.Config:
+        """The refine settings as the machine file has them now, so styles you add apply without a restart. The
+        hotkey stays the one registered at start."""
+        try:
+            fresh = refine.Config.from_profile(prof.resolve_profile(self.profile.get("name")))
+        except Exception as e:  # noqa: BLE001 - a typo in the YAML must not break the button
+            log(f"[refine] could not read the machine profile ({e}); using the settings from start-up")
+            return self.rcfg
+        fresh.hotkey = self.rcfg.hotkey
+        self.rcfg = fresh
+        return fresh
+
+    def _refine_fn(self, text: str, style, *, model: str, timeout: float):
+        return refine.refine_text(text, style, base_url=self.gateway, api_key=self.api_key, model=model,
+                                  timeout=timeout)
+
+    def _refine_esc(self, on: bool) -> None:
+        """Esc cancels a refine while the model works; it is only taken from other apps for that long. Never call
+        this on the hotkey thread: the hotkey thread does the (un)registering and this waits for its answer."""
+        with self._esc_lock:
+            if on == self._esc_refine:
+                return
+            self._esc_refine = on
+            if on:
+                self.hotkeys.register("refine_cancel", 0, hotkey.VK_ESCAPE)
+            else:
+                self.hotkeys.unregister("refine_cancel")
+
+    def refine_choices(self) -> tuple[list, str]:
+        cfg = self._refine_cfg()
+        return refine.styles(cfg, warn=lambda m: log(f"[refine] {m}")), cfg.default
+
+    def refine_summary(self) -> str:
+        cfg = self._refine_cfg()  # the tray's Settings tab may have changed the default since start-up
+        return f"A click rewrites the selection as {refine.style_named(cfg, None).name} with {cfg.model} on this PC."
+
+    def refine_busy(self) -> bool:
+        return self.refiner.busy
+
+    def refine_click(self) -> None:
+        self.refiner.start("", "button")
+
+    def refine_with(self, style: str) -> None:
+        self.refiner.start(style, "menu")
+
+    def refine_revert(self, entry: str = "") -> None:
+        self.refiner.revert(entry, "history" if entry else "menu")
+
+    def set_refine_option(self, key: str, value) -> None:
+        setattr(self.rcfg, key, value)
+        if key == "button":
+            self.overlay.set_refine_visible(bool(value))
+            if not value:
+                key_note = f"{self.refine_hotkey_text()} still refines the selection. " if self.refine_hotkey_text() else ""
+                self.overlay.show_bubble("Refine button hidden", "", key_note + "Show it again from the mic button's "
+                                         "menu.", owner="idle")
+                self.overlay._schedule_hide(5)
+        elif key == "default":
+            name = refine.style_named(self.rcfg, value).name
+            users = f"A click and {self.refine_hotkey_text()} now use it." if self.refine_hotkey_text() else                 "A click on the pencil now uses it."
+            self.overlay.show_bubble("Refine style chosen", name, users, owner="idle", source="refine")
+            self.overlay._schedule_hide(3, "refine")
+        try:
+            save_setting(self.profile, key, value, section="refine")
+        except Exception as e:  # noqa: BLE001 - the change still applies until the app restarts
+            log(f"[refine] could not save refine.{key}: {e}")
+
+    def edit_refine_styles(self) -> None:
+        """Open the machine file, with a commented example `refine:` section added if it has none."""
+        path = prof.machine_file(self.profile.get("name"))
+        try:
+            added = ensure_refine_section(path)
+            if os.name == "nt":
+                try:
+                    os.startfile(path)  # type: ignore[attr-defined]
+                except OSError:
+                    import subprocess
+
+                    subprocess.Popen(["notepad.exe", str(path)])
+        except Exception as e:  # noqa: BLE001
+            self.overlay.show_bubble("Could not open the styles", str(e), owner="idle", source="refine")
+            self.overlay._schedule_hide(8, "refine")
+            return
+        self.overlay.show_bubble(f"Opened {path.name}", "Your styles go under refine: prompts:" +
+                                 (" (an example was added at the end)." if added else "."),
+                                 "Save the file; the refine menu shows them the next time you open it.",
+                                 owner="idle", source="refine")
+        self.overlay._schedule_hide(10, "refine")
+
+    def copy_text(self, text: str) -> None:
+        self.inserter.submit(InsertJob(text, "copy", 0))
+
 
     def paste_last(self) -> None:
         if not self.history:
@@ -654,6 +873,33 @@ class App:
         if self.history:
             text = self.history[-1][0 if raw else 1]
             self.inserter.submit(InsertJob(text, "copy", 0))
+
+
+class RefineUI:
+    """The refine button's states and bubble, for Refiner (which runs on its own thread)."""
+
+    def __init__(self, app: App) -> None:
+        self.app = app
+
+    def _set(self, state: str, title: str, body: str, hint: str, hide_after: float = 0.0) -> None:
+        self.app.ui(lambda: self.app.overlay.set_state(state, title, body, hint, hide_after=hide_after, which="refine"))
+
+    def working(self, title: str, body: str = "", hint: str = "") -> None:
+        self._set("working", title, body, hint)
+
+    def done(self, title: str, body: str = "", hint: str = "") -> None:
+        self._set("done", title, body, hint, hide_after=6)
+
+    def error(self, title: str, body: str = "", hint: str = "") -> None:
+        self._set("error", title, body, hint, hide_after=10)
+
+    def cancelled(self, title: str, body: str = "", hint: str = "") -> None:
+        self._set("idle", title, body, hint, hide_after=2.5)
+
+    def note(self, title: str, body: str = "", hint: str = "") -> None:
+        """A message that leaves the button's state alone (it may be spinning)."""
+        self.app.ui(lambda: self.app.overlay.show_bubble(title, body, hint, ink="#8cc8ff", owner="note",
+                                                         source="refine"))
 
 
 def main(argv: list[str] | None = None) -> int:
