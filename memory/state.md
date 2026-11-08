@@ -1,12 +1,12 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+Updated: 2026-11-07 night (privacy cleanup, machine profiles local; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
 Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; design in docs/ORCHESTRATOR-DESIGN.md.
 
-## Machine: SEKAIHOME (profile: machines/SEKAIHOME.yaml, class moe-12gb-32ram, primary overridden to qwen3.5:9b)
+## Reference machine (local profile machines/<HOST>.yaml, class moe-12gb-32ram, primary overridden to qwen3.5:9b)
 - Windows 11 Pro, AMD Ryzen 5 5500 (6C/12T), 32 GB DDR4-2133 (2x16), RTX 3060 12 GB (driver 610.88, ~1.0 GB idle VRAM), C: ~36 GB free after installs, D: ~788 GB free.
 - D: is a USB SSD (Micron Crucial X8); C: is an NVMe SSD (Kingston SNV3S). Model loads from D: are USB-bound.
   2026-11-01 `winsat`: D: read 41.6 MB/s (USB 2.0 link) until the owner turned the USB-C plug over, then 376 MB/s read /
@@ -30,7 +30,7 @@ Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; des
 
 ## Media: images (2026-11-04, branch claude/hf-not-working-0777b4)
 - Owner chose `D:\media` (ComfyUI, models, inputs, outputs, uv cache) and `D:\huggingface` (HF_HOME) as the only
-  folders for media tools and agent sessions; both are in `agent_access.allowed_roots` of machines/SEKAIHOME.yaml.
+  folders for media tools and agent sessions; both are in `agent_access.allowed_roots` of machines/<HOST>.yaml.
 - ComfyUI 0.44.0 (commit 56f179f6) in `D:\media\comfyui`, venv from python.org Python 3.14.7, torch 2.14.1+cu130
   (CUDA available on the RTX 3060). First `import torch` took 47 s (Smart App Control scanning the new DLLs).
 - Smart App Control refused PyAV 19.0.2 (`av\audio\frame.pyd`, CodeIntegrity 3033) and 16.0.1; 17.0.0 runs. Pinned.
@@ -52,7 +52,7 @@ Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; des
 - `local-primary` and `local-small` both serve qwen3.5:9b at num_ctx 32768 with Ollama's default load options, so all
   eight 9B deployments (primary, small, six `<dept>-local`) share one runner and never reload between tiers.
 - The class default primary, qwen3.6:35b-a3b-coding, stays on disk (22 GB on D:) but no gateway alias uses it now.
-  To bring it back as the default, delete the four override lines under `models:` in machines/SEKAIHOME.yaml and rebuild.
+  To bring it back as the default, delete the four override lines under `models:` in machines/<HOST>.yaml and rebuild.
 - `local-reviewer` still points at flint:40b-a2b, which is not pulled; no department tier routes to it.
 
 ## Services (native, `uv run scripts/stack.py up|down|status`)
@@ -237,7 +237,7 @@ once across a session restart.
    GPU through Ollama's `lib\ollama\cuda_v12\cublas64_12.dll`. Load 5-8 s; 0.3 s for 3.5 s of speech, 0.6 s for
    15 s; +1.2 GB VRAM (9.2 of 12 GB with the 9B). CPU turbo: 9.7 s for 15 s, so `cpu_model: small`. Cleanup via
    `local-small` with `think: false` and JSON mode: 0.55-1.2 s. `services.dictation: native` is set in
-   machines/SEKAIHOME.yaml. Verified: 39 new unit tests (180 passed in total); `stack.py dictate transcribe` on Windows
+   machines/<HOST>.yaml. Verified: 39 new unit tests (180 passed in total); `stack.py dictate transcribe` on Windows
    TTS recordings (phrases, silence stop, Thursday->Friday correction); the running app with a replayed recording
    pasting into a Tk test window (clipboard restored) and typing live phrases. Ctrl+Alt+Space is taken here (Claude
    desktop quick entry), hence Ctrl+Alt+D. Not verified: a live microphone and hand-pressed hotkey, the bubble's look
@@ -295,7 +295,7 @@ once across a session restart.
    WebUI), and claude-haiku-5-5, 2 requests (orchestrator), both from before the private-only build.
    Not counted, and named in the tab:
    - Open WebUI's own speech-to-text: its database has audio.stt.engine "", so the chat mic runs Whisper base inside
-     Open WebUI;
+     Open WebUI (open item 26 moves it to voice typing's Whisper once `media provision` runs);
    - Open WebUI's document embeddings: its database still has rag.embedding_engine "ollama", until `media provision`;
    - Kokoro, when it runs.
    Claude Code profile A is outside the stack.
@@ -322,6 +322,81 @@ once across a session restart.
    - run `stack.py whisper install` and restart Claude Desktop (recordings);
    - run `stack.py media provision` and restart Open WebUI (embeddings);
    - restart the orchestrator (its name in the traces).
+26. Open WebUI's microphone on voice typing's Whisper (2026-11-07, branch claude/competent-mccarthy-a81053, PR #41).
+   - Endpoint: voice typing's control port (8790) also serves an OpenAI-compatible `POST /v1/audio/transcriptions`
+     (stacklib/dictation/transcriptions.py). It takes multipart `file`, `model` (ignored), `language`, `prompt` and
+     `response_format` json|text. The Origin and Host refusals stay. Bodies may be chunked, because Open WebUI's
+     aiohttp streams the file.
+   - The key is voice typing's own bearer, DICTATION_BEARER in .env, not the gateway's master key. While voice typing
+     is off, any local program could listen on 8790 and would learn only this key. The installer generates it;
+     `media provision` appends it to an existing .env and leaves the rest of the file as it is. The app reads it on
+     each request, so a key added later works without a restart.
+   - Limits: 25 MB per upload, 30 minutes of decoded audio, one request at a time (the next waits up to 2 minutes,
+     then gets 503 busy), and 2 minutes to send the body. A refusal is answered first; the server then reads what the
+     caller still sends, so the caller sees the answer instead of a reset.
+   - No language field means detect it, as OpenAI's API does, even when dictation.language names one. Open WebUI sends
+     its user's Speech-to-Text Language when one is set.
+   - It runs on voice typing's own Engine (one model, one decode at a time). Each call is recorded under source
+     voice-typing with the client named from its User-Agent (Open WebUI).
+   - Open WebUI points at it only while `services.dictation` is native. A fresh install gets the environment
+     (AUDIO_STT_ENGINE=openai, base URL `http://127.0.0.1:8790/v1`, key, model, request format multipart).
+     `stack.py media provision` writes the same five rows into an existing database, after a backup, in one
+     transaction. Open WebUI reads them on every request, so it needs no restart.
+   - The Usage tab's "own speech-to-text" note stays while audio.stt.engine is "" and goes once the engine points at
+     voice typing. A second note names an engine or URL outside the stack.
+   - This install (read-only check that night): audio.stt.engine "", audio.stt.openai.api_base_url
+     "https://api.openai.com/v1", no key, whisper_model "base". Changing the engine alone would have sent recordings
+     to OpenAI.
+   - No ffmpeg on PATH, so Open WebUI skips its pydub conversion and forwards the browser's recording unchanged. PyAV
+     17.0.0 in the dictation venv decodes webm/opus, ogg/opus, ogg/vorbis, wav, m4a/aac, mp4/aac, mp3 and flac. Broken
+     files get a 400; a truncated webm decodes as far as it goes.
+   A security review (subagent, read-only) found no critical or high issues. It found three medium ones, all fixed:
+   - uncapped decoding: a 494 KB FLAC of digital silence declares 45 minutes, and 25 MB of it would decode to about
+     9 GB of samples;
+   - a long job holding voice typing's model;
+   - the master key reused as the endpoint's key.
+   It also found three low ones and one info. Fixed: resets on refused uploads, folder paths in the 503 message, a
+   body that trickles in, and dictation's language forced onto Open WebUI recordings. Not done:
+   - SO_EXCLUSIVEADDRUSE on the port, because on Windows it can refuse a re-bind while the port's connections are in
+     TIME_WAIT, and the tray's health check leaves those every 10 s;
+   - a limit on concurrent connections. Local programs could already hold threads before this change.
+   Verified:
+   - unit tests (309 passed), and the decoder and engine tests in the dictation venv;
+   - a throwaway server on port 8797 with the real Engine (large-v3-turbo on cuda, loaded in 5.5 s). Requests were
+     sent the way Open WebUI 0.12.3's `_transcribe_openai` sends them, from its own Python 3.11 with aiohttp 3.14.3
+     (chunked). webm, ogg, mp4, m4a, mp3 and wav each returned the spoken sentence. Each took 0.3 s warm for 4.8 s of
+     eSpeak speech, and the first took 1.1 s;
+   - "English" as a language got a 400, and Open WebUI's retry without a language worked;
+   - a wrong key got a 401 in OpenAI's error shape;
+   - the server wrote six records with client Open WebUI and device cuda, to a temp folder;
+   - after the review fixes, the same check with the decoder written here passed again. A German eSpeak recording sent
+     without a language came back as German with dictation.language "en". `bomb.flac` (45 minutes of silence) got a
+     413 in 12 ms from its header. A 90 s webm muxed live, with no duration in its header (as MediaRecorder writes it),
+     got a 413 after 0.4 s with the cap lowered to 60 s;
+   - `stack.py media provision` with the real machine profile against a synthetic Open WebUI database in a temp folder:
+     16 rows written after one backup, and the note gone.
+   Not verified: Open WebUI itself calling it, a real browser recording, and the mic in the browser. The services were
+   down, and Open WebUI's live database was not changed: `media provision` needs the owner's OK.
+   After merging:
+   - run `uv run scripts/stack.py media provision` from the main checkout. It adds DICTATION_BEARER to .env, backs up
+     webui.db, and writes the rows;
+   - restart voice typing (Stop and Start its tray row) so it serves the endpoint.
+   If voice typing is later turned off, Open WebUI's mic shows a connection error until its engine is set back to
+   Whisper (Local) in Admin Settings > Audio. Neither the tray's Voice typing switch nor provisioning undoes the rows.
+27. Privacy cleanup (2026-11-07, branch claude/personal-info-cleanup-0f23d8). The repository is public, and
+   it named the computer and the Windows account. Now machine profiles are local: `machines/*.yaml` except
+   `_defaults.yaml` is ignored, the installer writes the profile, and a linked worktree reads the main checkout's
+   (`profile.machine_file`). Docs say "the reference machine", `<owner>` and `machines/<HOST>.yaml`, and the generated
+   LiteLLM header no longer names the machine. `tests/test_personal_info.py` checks every file git would publish for
+   this machine's names and git email, plus words in the ignored `.personal-terms`. The stray `litellm.db*` (an Open
+   WebUI database committed 2026-10-26) is gone; it held the live LITELLM_MASTER_KEY, so the key must be rotated (.env,
+   Open WebUI's connection, `~/.openclaw/.env`). The main checkout's profile has uncommitted Settings edits, and a
+   plain pull refuses to remove it, so before pulling: copy `machines/<HOST>.yaml` out of the repository,
+   `git checkout -- machines/<HOST>.yaml`, pull, copy it back (tested on a scratch repo; `git rm --cached` first makes
+   the pull refuse instead). Not done: git history, GitHub's pull request pages and three commits' author email still
+   carry the names. Same day: 26 branches deleted on GitHub (25 merged, plus the superseded
+   multimodal-stack-planning-s1 at c5d9a7e) and 20 locally (four subagent worktrees removed; four idle session
+   worktrees detached, files kept). `claude/ux-rules-research-skill-a11269` stays for its unmerged `a8400c9`.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

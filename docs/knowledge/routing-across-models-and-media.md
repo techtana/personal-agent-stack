@@ -135,7 +135,7 @@ belongs with `scientist`, a diagram with `architect`.
 
 ### Stage 3: which tier inside the department?
 
-This stage exists today. Each department alias is a LiteLLM complexity router; on SEKAIHOME every tier resolves to
+This stage exists today. Each department alias is a LiteLLM complexity router; on the reference machine every tier resolves to
 the same `qwen3.5:9b`, so the stage matters only once a stronger local model exists.
 
 ```mermaid
@@ -215,7 +215,7 @@ Things change mid-conversation. The table says what each stage does.
 |---|---|---|
 | The owner attaches an image to a pinned writer chat | Checks the writer's `vision` capability; if it has none, stage 2 picks a vision department for this one answer and keeps the pin | 1, 2 |
 | The owner types `@scientist` | Switches and re-pins; the next answer shows "Routed to: Scientist" | 2 |
-| The conversation grows past 90% of the context | Gateway moves to a tier with a larger window. On SEKAIHOME every tier is the same 32k model, so nothing changes and the request fails or is cut once it no longer fits; nothing asks the owner to shorten yet | 3 |
+| The conversation grows past 90% of the context | Gateway moves to a tier with a larger window. On the reference machine every tier is the same 32k model, so nothing changes and the request fails or is cut once it no longer fits; nothing asks the owner to shorten yet | 3 |
 | The model repeats the same tool call, or writes `ESCALATE` | Gateway bumps the tier for the next turn | 3 |
 | The owner asks for a video in the middle of a chat | v1: points to the workflow; v2: queues a job and keeps chatting | 1, 5 |
 | A video job is running and the owner asks a question | The 9B reloads if it was unloaded; ComfyUI may slow down; the tray shows Media mode | 4 |

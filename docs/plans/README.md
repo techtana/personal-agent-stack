@@ -8,11 +8,11 @@ talk to their own cloud (Claude Code on a subscription, Claude Desktop), because
 
 | | [Plan A: cloud-led](PLAN-A-CLOUD-LED.md) | [Plan B: local-led](PLAN-B-LOCAL-LED.md) |
 |---|---|---|
-| Main processor | Confidential VM in our Google Cloud project (TLS, data and keys inside it) | SEKAIHOME (native services, no Docker) |
+| Main processor | Confidential VM in our Google Cloud project (TLS, data and keys inside it) | The reference machine (native services, no Docker) |
 | Private models | confidential model server (CPU, optional GPU) started on demand, then on-prem; queue when neither is up | local GPU, every tier |
 | Provider access to data | memory encrypted in use (SEV-SNP / TDX), checked by attestation; disks and backups encrypted with keys held outside Google | none; the edge relay sees only encrypted traffic |
 | External models | optional, off by default, explicit and consented, non-sensitive only | same |
-| Works when SEKAIHOME is off | yes (confidential model server; the key broker must be reachable at reboots or the admin unlocks) | no |
+| Works when the reference machine is off | yes (confidential model server; the key broker must be reachable at reboots or the admin unlocks) | no |
 | Idle cloud cost (rough) | ~$70-85 a month | $0-5 a month |
 | Biggest risk | CPU inference speed on the confidential server; trust in CPU vendors' confidential computing | weaker local answers for complex work |
 

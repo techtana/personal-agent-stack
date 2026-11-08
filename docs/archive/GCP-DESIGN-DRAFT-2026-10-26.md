@@ -54,7 +54,7 @@ Browser ── HTTPS ──▶ Caddy (TLS, rate limits)            [or Cloudflar
               guardrails, per-user keys, budgets, routing, fallbacks
         ┌─────────────┬─────────────────┼──────────────────────┐
   Vertex AI      open-model APIs      owner's home GPU        optional Cloud Run L4 GPU
-  (Gemini Flash- (Qwen etc. via any   (Ollama on SEKAIHOME     (Ollama/vLLM, min 0;
+  (Gemini Flash- (Qwen etc. via any   (Ollama on that PC       (Ollama/vLLM, min 0;
    Lite / Flash)  OpenAI-compatible    over a tunnel; $0)       on demand only)
                   provider)
 
