@@ -631,8 +631,14 @@ def step_pull(plan: Plan, profile: dict, report) -> str:
 def step_start(plan: Plan, profile: dict, report) -> str:
     from . import startup
 
+    try:
+        lnk = startup.ensure_menu_shortcut()
+    except Exception as e:  # noqa: BLE001 - start.cmd still works without the Start menu entry
+        report(f"could not create the Start menu entry: {e}")
+        lnk = None
     if not plan.start_stack:
-        raise Skip("not chosen; run `uv run scripts/stack.py tray` to start it")
+        where = "the Start menu entry Agent Stack or start.cmd" if lnk else "start.cmd"
+        raise Skip(f"not chosen; start it later with {where}")
     if startup.running_pid():
         if not plan.tool_dir:
             return "the tray app was already running"

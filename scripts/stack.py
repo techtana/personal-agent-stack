@@ -22,7 +22,7 @@ Commands
                 (Windows Task Scheduler, --trigger startup|logon; systemd user units on Linux)
   run           run one service in the foreground and restart it when it exits (what each task runs)
   tray          background tray app: runs the services; its window shows status, usage per model and settings
-                (--foreground, --status, --stop, --install-startup, --remove-startup)
+                (--show, --foreground, --status, --stop, --install-startup, --remove-startup)
 """
 from __future__ import annotations
 
@@ -327,10 +327,19 @@ def cmd_tray(a):
     elif a.foreground:
         raise SystemExit(subprocess.run([sys.executable, str(startup.TRAY_SCRIPT)], cwd=REPO).returncode)
     elif not (a.install_startup or a.remove_startup):
+        try:
+            if lnk := startup.ensure_menu_shortcut():
+                info(f"tray: Start menu entry {lnk}")
+        except Exception as e:  # noqa: BLE001 - a missing shortcut must not stop the tray from starting
+            warn(f"tray: could not create the Start menu entry: {e}")
         if startup.running_pid():
-            info(f"tray: already running (pid {startup.running_pid()}); click its icon in the notification area")
+            if a.show:
+                startup.request_show()
+                info(f"tray: already running (pid {startup.running_pid()}); opening its window")
+            else:
+                info(f"tray: already running (pid {startup.running_pid()}); click its icon in the notification area")
             return
-        state, msg = startup.launch_and_wait()
+        state, msg = startup.launch_and_wait(show=a.show)
         if state == "failed":
             die(f"tray: {msg}")
         elif state == "running":
@@ -426,6 +435,7 @@ def main(argv=None):
     s = sub.add_parser("retro"); s.add_argument("rest", nargs=argparse.REMAINDER); s.set_defaults(f=cmd_retro)
     s = sub.add_parser("tray", help="background tray app that runs the services and shows their status")
     s.add_argument("--foreground", action="store_true"); s.add_argument("--status", action="store_true"); s.add_argument("--stop", action="store_true")
+    s.add_argument("--show", action="store_true", help="open the tray window (also when the tray is already running)")
     s.add_argument("--install-startup", action="store_true"); s.add_argument("--remove-startup", action="store_true"); s.set_defaults(f=cmd_tray)
     a = ap.parse_args(argv)
     a.f(a)

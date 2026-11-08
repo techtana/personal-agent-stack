@@ -1327,6 +1327,8 @@ class TrayApp:
                     print(f"[tray] ui update failed: {e}")
         except queue.Empty:
             pass
+        if startup.take_show_request():  # Start menu entry, start.cmd or `stack.py tray` while this tray runs
+            self.show_window(0)
         if not self.stop_event.is_set():
             self.root.after(100, self._drain_ui_queue)
 
@@ -1342,8 +1344,11 @@ class TrayApp:
 def main() -> int:
     print(f"[tray] {datetime.now().isoformat(timespec='seconds')} starting pid {os.getpid()}")
     if not startup.claim_single_instance():
+        if "--show" in sys.argv:
+            startup.request_show()
         print("[tray] another tray instance is running; exiting")
         return 0
+    startup.take_show_request()  # drop a request left over from an earlier run
     app = TrayApp(autostart="--no-autostart" not in sys.argv)  # an error here reaches _report_startup_failure
     app.root.after(0, lambda: print(f"{READY} pid {os.getpid()}"))  # runs once the icon is up and the Tk loop turns
     app.run()

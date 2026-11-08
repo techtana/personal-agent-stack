@@ -79,6 +79,10 @@ driver-reported GPU engine use and dedicated GPU memory per process; unavailable
 the gateway or Ollama is down. The tray runs outside any terminal or Claude Code session, so its services keep running.
 "Quit (keep services running)" closes only the tray; "Stop services and quit" stops everything.
 
+After a quit, start it again from the Start menu entry **Agent Stack** (the installer creates it) or by double-clicking
+`start.cmd` in the repository folder; either opens the window when the tray is already running. `stop.cmd` closes the
+tray and stops its services (Ollama keeps running), even when the tray has already been quit.
+
 For services that must run before anyone signs in (edge mode), register one Task Scheduler task per service instead,
 from an elevated terminal: `uv run scripts/stack.py tasks install`. See the
 [installation manual](docs/manuals/installation.md#run-the-services-before-sign-in-optional).
@@ -127,7 +131,7 @@ After any change: `uv run scripts/stack.py build` (and `up`/`down` to restart th
 uv run scripts/stack.py doctor [--write-profile [--refresh]]   hardware, tools, ports, chosen class
 uv run scripts/stack.py profile | build | setup | pull [--all]
 uv run scripts/stack.py up [svc...] | down [svc...] | status
-uv run scripts/stack.py tray [--foreground | --status | --stop | --install-startup | --remove-startup]
+uv run scripts/stack.py tray [--show | --foreground | --status | --stop | --install-startup | --remove-startup]
 uv run scripts/stack.py tasks install|remove|start|stop|status|xml [svc...] [--trigger startup|logon]
 uv run scripts/stack.py bench [--model m] [--num-ctx n] [--tokens n] [--runs n]
 uv run scripts/stack.py smoke [--dept id] [--skip-mcp] [--media | --media-only]
