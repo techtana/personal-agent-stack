@@ -550,6 +550,15 @@ once across a session restart.
    After merging, run install.cmd from the main checkout once. Then check that the Start menu entry and the login
    shortcut start `%LOCALAPPDATA%\Programs\AgentStack`, and that Open WebUI shows the old chats and images. Then
    restart Claude Desktop (recordings). Delete the checkout's `.run`, `traces` and `.env` when the app works.
+33. Tray GPU card lists every model on the card (2026-11-08, branch claude/whisper-gpu-memory-44134a). It was
+   "GPU: loaded in Ollama" and asked only Ollama, so voice typing's Whisper (loaded on cuda that day, ~1.2 GB) and
+   ComfyUI's models never showed. Now "GPU: loaded models" (stacklib/gpu_models.py) adds a "Used by" column and merges
+   Ollama's /api/ps, voice typing's /health (size is the measured figure per model, shown with ~; new health fields
+   idle_s and unload_after_min give "Unloads") and ComfyUI's /system_stats torch_vram_total (listed above 256 MB).
+   Not listed: the recordings server's Whisper inside Claude Desktop (no port to ask). Verified: unit tests; rows built
+   from the live services (qwen3.5:9b 5.7 GB + whisper large-v3-turbo ~1.2 GB; nvidia-smi 9.1 of 12 GB used); the
+   card's rows rendered in a hidden Tk frame. Not verified: the live tray (restart it from the main checkout after
+   merging; restart voice typing for the Unloads column).
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render
