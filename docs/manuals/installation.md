@@ -63,7 +63,22 @@ winget configure --file winget\configuration.winget --accept-configuration-agree
 On Windows, double-click `install.cmd` in the repository root, or run `.\scripts\setup.ps1`. On Linux, macOS, WSL
 or Git Bash, run `./scripts/setup.sh`.
 
-The installer has two pages, in a window (or the same questions in the terminal when there is no display, or with
+The repository is only the source. Setup first installs the app into its own folder:
+`%LOCALAPPDATA%\Programs\AgentStack` on Windows, `~/.local/share/agent-stack` elsewhere. To use another folder, set
+`AGENT_STACK_HOME` before you start, or pass `--to <folder>`. The app folder gets:
+
+- a copy of the code, without `tests/`;
+- its own Python environment (`.venv`);
+- its own `.env`, machine profile (`machines/<HOST>.yaml`), logs and service data (`.run/`), traces
+  (`traces/`) and orchestrator jobs.
+
+The first install copies those from the repository once, while the repository's tray and services are stopped. That
+covers the secrets, the profile, Open WebUI's chats and uploads, and the usage history. Paths saved in the copied
+databases are changed to point into the app folder. The repository keeps its own files; delete them once the app
+works. After that, the Start menu entry, the login shortcut, the tray, the services and Claude Desktop's recordings
+server all run from the app folder. Nothing they do reads or writes the repository.
+
+The installer then opens from the app folder. It has two pages, in a window (or the same questions in the terminal when there is no display, or with
 `--no-gui`).
 
 **Page 1: Which features do you want?** One row per feature. Two are required and always installed; the others are
@@ -187,7 +202,8 @@ If setup reports problems, see [troubleshooting.md](troubleshooting.md).
 
 ### 3. Review your machine profile
 
-Open `machines/<HOST>.yaml`. The `detected:` block is regenerated on refresh. You can change everything else, for example:
+Open `machines/<HOST>.yaml` in the app folder (`%LOCALAPPDATA%\Programs\AgentStack\machines\`), or use the tray's
+Settings tab. The `detected:` block is regenerated on refresh. You can change everything else, for example:
 
 - `model_store`: the folder for Ollama models; the installer sets it (and `ollama_env.OLLAMA_MODELS`) for you.
 - `models.primary`: replace the class default model. The reference machine uses `qwen3.5:9b`.
@@ -346,20 +362,14 @@ uv run scripts/stack.py doctor --write-profile --refresh
 
 ## Updating
 
-1. Pull the latest code.
-2. Install any changed dependencies:
+1. Pull the latest code into the repository.
+2. Double-click `install.cmd` in the repository again (or run `.\scripts\setup.ps1 -Args @('--no-pull')`). It stops
+   the app's tray and services, copies the newer code over the app folder, and removes files the repository no
+   longer has. It keeps the app's `.env`, profile, data, traces and `memory/`, and updates the app's `.venv`.
+3. Start the stack again from the Start menu entry **Agent Stack**, or let the installer start it.
 
-   ```powershell
-   uv sync
-   ```
-
-3. Run setup again:
-
-   ```powershell
-   .\scripts\setup.ps1 -Args @('--no-pull')
-   ```
-
-4. Restart the services from the tray (**Stop all**, then **Start all**), or run `down` and then `up`.
+`stack.py tray`, `start.cmd` and `stop.cmd` in the repository use the installed app when there is one. When you
+work on the stack itself, `--here` (on `install`, `setup` and `tray`) runs everything inside the checkout as before.
 
 ## Removing
 
@@ -377,4 +387,6 @@ uv run scripts/stack.py doctor --write-profile --refresh
 
 3. In the tray menu, choose **Stop services and quit**.
 4. Remove the tools: `uv tool uninstall litellm`, `uv tool uninstall arize-phoenix`, `uv tool uninstall open-webui`.
+5. Delete the app folder (`%LOCALAPPDATA%\Programs\AgentStack`, or your `AGENT_STACK_HOME`). It holds the `.env`
+   secrets and Open WebUI's chats, so copy anything you want to keep first.
 5. Delete `.run/` (logs, pid files, Phoenix data) and the models in your `model_store` folder.

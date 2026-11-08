@@ -159,6 +159,10 @@ def checkout_behind(fetch: bool = True) -> str:
 
     An old checkout installs an old stack: on 2026-11-07 a reinstall from a checkout 10 commits behind origin/main
     had no voice typing step and no Start menu entry, with nothing to say why."""
+    from . import deploy
+
+    if deploy.is_app():   # an installed app is no checkout: the source's state was recorded when it was copied here
+        return deploy.read_marker().get("behind") or ""
     if _git("rev-parse", "--is-inside-work-tree") != "true":
         return ""
     ref = (_git("symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD") or "origin/main")
@@ -169,7 +173,8 @@ def checkout_behind(fetch: bool = True) -> str:
     n = int(count)
     stale = "" if fetched else " (as of the last fetch; GitHub could not be reached)"
     return (f"This folder is {n} commit{'s' if n != 1 else ''} behind {ref}{stale}, so setup would install an older "
-            f"stack and miss newer steps. Close the installer, run `git pull` in {REPO}, then start install.cmd again.")
+            f"stack and miss newer steps. Close the installer, run `git pull` in {REPO}, then start install.cmd again "
+            "from there.")
 
 
 def defaults(profile: dict) -> dict:
@@ -864,6 +869,50 @@ def step_start(plan: Plan, profile: dict, report) -> str:
     return f"tray app {msg}"
 
 
+def step_links(plan: Plan, profile: dict, report) -> str:
+    """Point what lives outside the app folder at this app: Claude Desktop's recordings server (its entry names a
+    Python script and the folder its usage records go to), the start-at-login entry, scheduled tasks.
+
+    The recordings step leaves an existing Claude Desktop entry alone, since the config is the owner's. The one
+    rewrite here is in the installed app, for an entry whose usage records still go to another folder (the checkout
+    it was registered from): that is the entry moving with the app, after a backup of the config."""
+    from . import deploy, startup, tasks, usage_log, whisper
+
+    notes, warns = [], []
+    entry = features.desktop_entry()
+    if entry is not None and deploy.is_app():
+        try:
+            want = whisper.server_entry(profile)
+            usage_key = usage_log.ENV
+            if (entry.get("env") or {}).get(usage_key) == (want.get("env") or {}).get(usage_key):
+                notes.append("Claude Desktop's recordings server already records into this app")
+            else:
+                whisper.register_desktop(profile)
+                notes.append("Claude Desktop's recordings server now records into this app (restart Claude Desktop)")
+        except (OSError, ValueError, KeyError, RuntimeError) as e:
+            warns.append(f"could not update Claude Desktop's recordings server: {e}")
+    if not IS_WINDOWS and startup.is_installed():
+        startup.install()   # Windows rewrites its .lnk in the Start step
+        notes.append("start at login now starts this app")
+    try:
+        names = tasks.registered()
+    except Exception:  # noqa: BLE001 - schtasks missing or refused: nothing registered to fix
+        names = set()
+    if IS_WINDOWS and names:
+        here = os.path.normcase(str(REPO))
+        names = {n for n in names
+                 if here not in os.path.normcase(tasks._schtasks("/Query", "/XML", "/TN", tasks.TASK_FOLDER + n).stdout or "")}
+    if names:
+        warns.append(f"{len(names)} scheduled task(s) still start the services from the folder they were registered "
+                     f"in; from an administrator terminal run `stack.py tasks install` with this app's Python "
+                     f"({deploy.venv_python(REPO)}) to point them here")
+    if not deploy.is_app():
+        notes.append("set up inside this checkout (--here): it holds the logs, data and settings")
+    if warns:
+        raise Warn("; ".join(notes + warns))
+    return "; ".join(notes) or "nothing outside the app folder to update"
+
+
 STEPS = (
     ("secrets", "Create local secrets (.env)", step_secrets),
     ("disks", "Check drive speed", step_disks),
@@ -878,6 +927,7 @@ STEPS = (
     ("dictation", "Install voice typing (Whisper)", step_dictation),
     ("recordings", "Install recordings for Claude Desktop (Whisper)", step_recordings),
     ("openclaw", "Install OpenClaw", step_openclaw),
+    ("links", "Point Claude Desktop and start-up entries at this app", step_links),
     ("start", "Start the stack", step_start),
 )
 
