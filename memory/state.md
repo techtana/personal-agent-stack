@@ -1,6 +1,6 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-07 (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+Updated: 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
@@ -248,6 +248,38 @@ once across a session restart.
    Also verified: cancel, a second instance, hold-to-talk with injected Ctrl+Alt+D (live text typed at release). A
    code review's eight findings and its clipboard-owner risk were fixed (owner window per clipboard operation; restore
    after 1 s). At the end of the session the app was left running from the worktree (pid file in the worktree's .run).
+24. Claude security audit (2026-11-07, branch claude/awesome-jackson-45840e): skill `.claude/skills/claude-security-audit`
+   (`scripts/audit.py`, standard library; state and reports in `%LOCALAPPDATA%\claude-security-audit`, outside every
+   repository). Baseline run on this machine: 2 high, 6 medium, 7 low, 9 info.
+   - High: identity in two committed docs; Claude can read 5 credential files.
+   - Medium: secret-file patterns not denied everywhere; no CLAUDE_CODE_SUBPROCESS_ENV_SCRUB; Desktop transcripts kept
+     forever; CLI 2.1.302 and Desktop's Claude Code 2.1.317 behind 2.1.319, which fixes four permission problems; four
+     allow rules that admit any code (`Bash(uv run *)`, two `python -c ' *` rules, a PowerShell one-liner with a
+     wildcard) in `.claude/settings.local.json` of both the main checkout and the worktree.
+   - Low: LITELLM_MASTER_KEY and ORCHESTRATOR_BEARER in plain text in that git-ignored file.
+   - OSV: no advisory for the 7 packages checked.
+
+   Fixed that day by `scrub --apply`: the Windows user name in docs/plans/AGENT-FILE-ISOLATION.md and
+   docs/knowledge/agent-file-isolation.md, and an email and two home paths in old Claude memory notes. The owner's
+   short name was removed from one note by hand. Kept on purpose: the claude.ai-synced job-search skill.
+
+   Written the same day:
+   - The standing rule in `~/.claude/CLAUDE.md` (marker `claude-security-audit:identity-rule`), and AGENTS.md rule 10.
+   - The desktop scheduled task `claude-security-audit`: Mondays at about 09:43, saved in Auto mode. Its prompt stops
+     with "not on main yet" until this branch is merged.
+
+   Not changed (reported to the owner): settings; the computer name in 45 committed files (machine profiles are named
+   after it); 3 pushed commits with the account email.
+
+   Verified:
+   - 19 unit tests, 210 passed in total, run as `uv run --with pytest python -m pytest -q`, because Smart App Control
+     blocked the pytest.exe launcher.
+   - A leak check of every output file (no identifiers, no account UUIDs).
+   - A fresh-agent run of the skill. It found nine problems, all fixed: `scrub` and `collect` disagreed on which
+     repositories they cover, and changelog lines were cut without notice.
+
+   Not verified: a scheduled run end to end (it needs the merge), and the per-checkout fix advice on a repository
+   other than this one.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

@@ -37,7 +37,12 @@ is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `
 9. Private first: never put an external model in a router tier, fallback, default, task or embedding alias; external
    models are explicit aliases behind the privacy gate (`docs/plans/SHARED-COMPONENTS.md` section 2). Do not build
    privacy skills, hooks or MCP add-ons for clients outside the privacy boundary (Claude Code profile A, Claude
-   Desktop): they can only advise and would imply enforcement that does not exist.
+   Desktop): they can only advise and would imply enforcement that does not exist. The exception is an audit that
+   only reports and says plainly what it cannot enforce (`/claude-security-audit`).
+10. Never write the owner's identity (email addresses, full name, account IDs, the OS user name in paths or prose) or
+   guesses about the owner into this public repository, commits, PRs, memory or requests. Use placeholders
+   (`you@example.com`, `Your Name`, `%USERPROFILE%` or `~`, `%USERNAME%`); `/claude-security-audit` finds and
+   replaces leftovers.
 
 ## Everyday commands
 
