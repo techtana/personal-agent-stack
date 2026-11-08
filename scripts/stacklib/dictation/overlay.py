@@ -425,10 +425,11 @@ class Overlay:
                             command=lambda: app.set_option("insert", "type"))
         m.add_cascade(label="Insert by: " + ("pasting" if cfg.insert == "paste" else "typing"), menu=ins)
         m.add_separator()
-        last = "normal" if app.history else "disabled"
+        last = "normal" if app.last_dictation() else "disabled"   # kept for dictation.keep_minutes
         m.add_command(label="Paste last text again", state=last if not busy else "disabled", command=app.paste_last)
         m.add_command(label="Copy last text", state=last, command=lambda: app.copy_last(raw=False))
         m.add_command(label="Copy last transcript as heard", state=last, command=lambda: app.copy_last(raw=True))
+        m.add_command(label="Voice typing history...", command=self.open_voice_history)
         m.add_separator()
         if not self.visible["refine"]:
             m.add_command(label="Show the refine button", command=lambda: app.set_refine_option("button", True))
@@ -546,6 +547,12 @@ class Overlay:
 
         self.hide_bubble()
         HistoryWindow(self.root, self.app)
+
+    def open_voice_history(self) -> None:
+        from .history import VoiceHistoryWindow
+
+        self.hide_bubble()
+        VoiceHistoryWindow(self.root, self.app)
 
     def _menu_rects(self, m: tk.Menu) -> list[tuple[int, int, int, int]]:
         """Where the pointer may be while the menu should stay open: the buttons and every open (sub)menu."""
