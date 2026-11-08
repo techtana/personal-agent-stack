@@ -1,1 +1,2 @@
 - [Commit, push, PR together](commit-push-pr-together.md) — asked to commit means commit + push + open PR in one turn
+- [No closed-source dependencies](no-closed-source-dependencies.md) — the stack app must not depend on Claude Desktop or other closed software; open licences only

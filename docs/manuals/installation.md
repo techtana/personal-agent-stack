@@ -75,8 +75,8 @@ The repository is only the source. Setup first installs the app into its own fol
 The first install copies those from the repository once, while the repository's tray and services are stopped. That
 covers the secrets, the profile, Open WebUI's chats and uploads, and the usage history. Paths saved in the copied
 databases are changed to point into the app folder. The repository keeps its own files; delete them once the app
-works. After that, the Start menu entry, the login shortcut, the tray, the services and Claude Desktop's recordings
-server all run from the app folder. Nothing they do reads or writes the repository.
+works. After that, the Start menu entry, the login shortcut, the tray and the services all run from the app folder.
+Nothing they do reads or writes the repository.
 
 The installer then opens from the app folder. It has two pages, in a window (or the same questions in the terminal when there is no display, or with
 `--no-gui`).
@@ -92,7 +92,7 @@ your choice:
 | Trace viewer (Phoenix) | no | Each request's steps, for debugging. The tray's Usage tab works without it. |
 | Image generation (ComfyUI) | no | ComfyUI with Z-Image-Turbo for the chat's image button. Needs the media folder. |
 | Voice typing (Whisper) | no | A hotkey and a mic button that type what you say into any app ([details](user-guide.md#voice-typing)). |
-| Recordings in Claude Desktop (Whisper) | no | A local Whisper server that Claude Desktop uses to transcribe audio files. Needs the media folder. |
+| Recordings in Claude Desktop (Whisper) | retired | No longer offered (2026-11-08): the stack keeps no ties to closed-source apps. Listed only while an old install is on this PC, with a **Remove** box. |
 | OpenClaw | no | An agent app set up to use only the gateway ([details](choosing-drives.md#openclaw)). |
 
 Each row shows what that feature takes on this PC: **Disk GB**, **GPU memory GB** (held while loaded; a range such as
@@ -110,25 +110,31 @@ below follow each change:
 | Local models | **Chat model** (with its download size), **Context** | `models.primary`, `models.primary_num_ctx`; an MoE model also gets `primary_options: {use_mmap: true}`, and the small model's context follows when it is the same model |
 | Image generation | **Image size**, **Steps** | `media.image_size`, `media.image_steps` |
 | Voice typing | **Whisper model**, **Hotkey** | `dictation.model`, `dictation.hotkey` |
-| Recordings | **Whisper model** | `media.whisper_model` |
 
 Only values you change are written, and only for features you install. Settings in the tray changes them later.
 
 The box **Your choice on this PC** adds up what you ticked and says what does not fit, for example:
 
-- how much setup downloads (installed features count nothing; the Whisper model that voice typing and recordings
-  share counts once);
+- how much setup downloads (installed features count nothing);
 - the GPU memory with everything loaded at once, against what the card has free after Windows;
 - whether an image job fits next to the chat model, or needs **Media** on the tray's GPU card first;
 - the system memory the stack takes, idle and after an image job, against the RAM in this PC;
 - the CPU, and a warning when there is no NVIDIA GPU or Smart App Control may block Phoenix.
 
-Features that are installed and turned on are ticked and cannot be unticked: the installer only adds features. To turn
-one off, use **Settings** in the tray (Open WebUI, Phoenix, ComfyUI, voice typing). A feature that is installed but
-off is unticked; ticking it turns it back on. A feature your profile turns on whose program or model is missing is
-ticked, so setup repairs it. When a check fails (`Not checked`, for example because `uv` did not answer), the installer
-leaves that feature exactly as it is. To add features later, run the installer again (`install.cmd`, or
-**Add features...** in the tray); it starts on this page with what you have.
+Features that are installed and turned on are ticked and cannot be unticked: they stay unless you tick their box in
+the **Remove** column, which marks the row `Will be removed` and lists what goes (with sizes) in the box below the
+table. Removing voice typing removes read aloud too. Under **Local models**, *Not used by the stack, delete* lists
+downloaded models no setting names (on the reference PC, the 22.6 GB qwen3.6:35b-a3b-coding); tick one to delete it.
+With removals ticked, the second page's button reads **Apply changes** and asks first, naming what is deleted; your
+chats, images, transcripts and settings stay. To turn a feature off without removing it, use **Settings** in the
+tray. A feature that is installed but off is unticked; ticking it turns it back on. A feature your profile turns on
+whose program or model is missing is ticked, so setup repairs it. When a check fails (`Not checked`, for example
+because `uv` did not answer), the installer leaves that feature exactly as it is. To add or remove features later,
+use **Install** and **Remove** on the tray's Features card, or run the installer again (`install.cmd`, or
+**Open installer...** in the tray); it starts on this page with what you have.
+
+Versions, download addresses, the models offered and their sizes are in `config/installer.yaml`, the installer's
+catalog: change a pin or add a model there, not in the code.
 
 `uv run scripts/stack.py features` prints the same table, each feature's status and the total for what is installed
 (`--details` adds the explanations).
@@ -141,8 +147,8 @@ leaves that feature exactly as it is. To add features later, run the installer a
 - **Python tools folder**: where uv puts LiteLLM and, when chosen, Open WebUI and Phoenix (`UV_TOOL_DIR`, 0.6 GB for
   LiteLLM, 1.9 GB for Open WebUI, 0.5 GB for Phoenix). Keep the path short; deep Python packages break past Windows'
   260-character limit.
-- **Media folder**, only when you chose images or recordings: ComfyUI, Whisper and their models (about 17 GB for
-  images, 4 GB for recordings). Agent sessions and media tools may use only this folder.
+- **Media folder**, only when you chose images: ComfyUI and its models (about 17 GB). Voice typing's environment goes
+  there too when the folder exists. Agent sessions and media tools may use only this folder.
 
 Which drive to pick for each: [choosing-drives.md](choosing-drives.md). In short, models and the Hugging Face cache
 can go on a second or USB drive that reads at 200 MB/s or more; the Python tools stay on the internal drive.
@@ -181,7 +187,8 @@ Setup does the following, in this order:
 11. **Install voice typing (Whisper)**: only when voice typing is chosen (`services.dictation: native`); it builds
     its environment under the media folder and fetches the Whisper model. Without the installer:
     `uv run scripts/stack.py dictate install` ([details](user-guide.md#voice-typing)).
-12. **Install recordings for Claude Desktop (Whisper)**: only when chosen; it builds Whisper's environment under the
+12. *(Retired 2026-11-08.)* **Install recordings for Claude Desktop (Whisper)**: no longer a step; the stack keeps no
+    ties to closed-source apps. Until then it built Whisper's environment under the
     media folder, fetches the model (shared with voice typing) and registers the server `local-whisper` in Claude
     Desktop's config, after a backup. Quit Claude Desktop from its tray icon and reopen it to load the server. An
     entry Claude Desktop already has is left as it is, and an installer run from a git worktree adds none (the server

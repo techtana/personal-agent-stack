@@ -2,11 +2,12 @@
 """Agent Stack installer window: choose the features, then where the models and Python tools go, then watch setup run
 in the background.
 
-Start it with install.cmd (double-click), `.\\scripts\\setup.ps1`, `uv run scripts/stack.py install`, or Add features in
-the tray. Page 1 lists the features (stacklib/features.py): required ones are always installed, installed ones stay, and
-each row shows what that feature costs on this PC, with the total for the choice underneath. Page 2 asks for the
-folders. The window only asks and watches: the work runs in a separate process (stacklib/install.py), so closing the
-window does not stop it, and opening the installer again shows how far it got.
+Start it with install.cmd (double-click), `.\\scripts\\setup.ps1`, `uv run scripts/stack.py install`, or Open installer in
+the tray. Page 1 lists the features (stacklib/features.py): required ones are always installed, installed ones stay
+unless their Remove box is ticked, and each row shows what that feature costs on this PC, with the total for the choice
+underneath; downloaded models the stack does not use can be ticked for deletion too. Page 2 asks for the folders. The
+window only asks and watches: the work runs in a separate process (stacklib/install.py, and stacklib/uninstall.py for
+removals), so closing the window does not stop it, and opening the installer again shows how far it got.
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stacklib import IS_WINDOWS, REPO  # noqa: E402
-from stacklib import features, install  # noqa: E402
+from stacklib import features, install, uninstall  # noqa: E402
 from stacklib import profile as prof  # noqa: E402
 
 POLL_MS = 500
@@ -33,9 +34,10 @@ FINDING = {"ok": ("✓", OK_FG), "warn": ("!", WARN_FG), "bad": ("✗", ERROR_FG
 COLUMNS = (("disk", "Disk GB"), ("vram", "GPU memory GB"), ("gpu", "GPU work"), ("cpu", "CPU while busy"),
            ("ram", "RAM GB"))
 TOOL_NAMES = {"gateway": "LiteLLM", "chat": "Open WebUI", "tracing": "Phoenix"}
+# Feature states with something on disk to remove although the feature reads as not (fully) installed.
+REPAIRABLE = {"Model missing", "Files missing"}
 # What ticking an installed feature that is off does, when it is not "turn it back on".
-TICK_TO = {"openclaw": "Tick it to make the gateway its only model provider (OpenClaw keeps a backup of its config).",
-           "recordings": "Tick it to add the server to Claude Desktop again."}
+TICK_TO = {"openclaw": "Tick it to make the gateway its only model provider (OpenClaw keeps a backup of its config)."}
 
 
 class NoDisplay(Exception):
@@ -150,6 +152,17 @@ class Installer:
         self.profile = prof.resolve_profile()
         d = self.d = install.defaults(self.profile)
         self.feature_vars = {fid: tk.BooleanVar(value=on) for fid, on in d["choice"].items()}
+        # Remove: installed features that can come off again, and downloaded models the profile does not use.
+        self.remove_vars = {fid: tk.BooleanVar(value=False) for fid in uninstall.REMOVABLE
+                            if d["features"].get(fid) and (d["features"][fid].installed
+                                                           or d["features"][fid].state in REPAIRABLE)}
+        self.removals: dict[str, uninstall.Removal] = {}   # measured on first tick (a big folder takes seconds)
+        self.measured_for: tuple = ()   # the ticked removals self.removals was (or is being) measured for
+        try:
+            unused = [m for m in uninstall.model_rows(self.profile) if m.downloaded and not m.use]
+        except Exception:  # noqa: BLE001 - the list is optional; Ollama may be off and its folder unreadable
+            unused = []
+        self.model_vars = {m.name: (tk.BooleanVar(value=False), m) for m in unused}
         self.option_vars = {k: tk.StringVar(value=v) for k, v in d["options"].items()}   # (section, key) -> value
         self.store = tk.StringVar(value=d["model_store"])
         self.tools = tk.StringVar(value=d["tool_dir"])
@@ -165,7 +178,17 @@ class Installer:
         self._check_checkout()
 
     def chosen(self) -> set[str]:
-        return {fid for fid, v in self.feature_vars.items() if v.get()}
+        return {fid for fid, v in self.feature_vars.items() if v.get()} - self.to_remove()
+
+    def to_remove(self) -> set[str]:
+        """Features ticked for removal (a feature that runs inside one goes with it)."""
+        out = {fid for fid, v in getattr(self, "remove_vars", {}).items() if v.get()}
+        return out | {dep for fid in out for dep in features.dependents(fid) if dep in getattr(self, "remove_vars", {})}
+
+    def models_to_delete(self) -> list[str]:
+        """Models ticked for deletion, less any that the chosen chat model now names."""
+        keep = {self.options().get(("models", "primary")), self.options().get(("models", "small"))}
+        return [name for name, (v, _m) in getattr(self, "model_vars", {}).items() if v.get() and name not in keep]
 
     def options(self) -> dict[tuple[str, str], str]:
         return {k: v.get() for k, v in self.option_vars.items()}
@@ -217,9 +240,9 @@ class Installer:
         d = self.d
         f = self._page()
         ttk.Label(f, text="Which features do you want?", font=("Segoe UI", 13, "bold")).grid(sticky="w")
-        ttk.Label(f, wraplength=WRAP, text="The required parts are always installed, and installed features stay. "
-                  "Tick the others you want; run the installer again later to add more. Settings in the tray turns "
-                  "off Open WebUI, Phoenix, images and voice typing.").grid(sticky="w", pady=(4, 2))
+        ttk.Label(f, wraplength=WRAP, text="The required parts are always installed, and installed features stay "
+                  "unless you tick Remove. Tick the others you want; run the installer again later to add more. "
+                  "Settings in the tray turns features off without removing them.").grid(sticky="w", pady=(4, 2))
         ttk.Label(f, wraplength=WRAP, foreground=MUTED_FG,
                   text=f"This PC: {d['hardware'].describe()}. Each row is one feature on its own; the box at the "
                        "bottom adds up your choice.").grid(sticky="w", pady=(0, 10))
@@ -228,32 +251,42 @@ class Installer:
         table = ttk.Frame(f)
         table.grid(sticky="ew")
         table.columnconfigure(0, weight=1)
-        for c, head in enumerate(("Feature", "Status", *(title for _key, title in COLUMNS))):
+        for c, head in enumerate(("Feature", "Status", *(title for _key, title in COLUMNS), "Remove")):
             ttk.Label(table, text=head, foreground=MUTED_FG, font=("Segoe UI", 9, "bold")).grid(
                 row=0, column=c, sticky="w" if c < 2 else "e", padx=(0 if c == 0 else 14, 0), pady=(0, 4))
+        self.status_labels = {}
         first = None
         self.feature_boxes, self.cell_labels, self.option_boxes, self.option_owner = {}, {}, {}, {}
         r = 0
         for feat in features.FEATURES:
+            if not feat.offered and not features.present(feat.id, d["features"]):
+                continue   # no longer offered, and nothing of it on this PC: not listed at all
             r += 1
             st, is_locked = d["features"][feat.id], features.locked(feat.id, d["features"])
             box = self.feature_boxes[feat.id] = ttk.Checkbutton(
                 table, text=feat.title, command=lambda fid=feat.id: self.feature_ticked(fid),
                 variable=self.feature_vars[feat.id])
-            if is_locked:
-                box.state(["disabled"])   # required, or installed and on: Settings in the tray turns it off
+            if is_locked or not feat.offered:
+                box.state(["disabled"])   # required, or installed and on (Settings turns it off), or remove-only
             elif first is None:
                 first = feat.id
             box.grid(row=r, column=0, sticky="w", pady=2)
             text, fg = status_text(feat, st, is_locked)
             row = [box, ttk.Label(table, text=text, foreground=fg)]
             row[1].grid(row=r, column=1, sticky="w", padx=(14, 0))
+            self.status_labels[feat.id] = (row[1], text, fg)
             values = features.cells(d["estimates"][feat.id], d["hardware"])
             self.cell_labels[feat.id] = {}
             for c, (key, _title) in enumerate(COLUMNS, start=2):
                 row.append(ttk.Label(table, text=values[key]))
                 row[-1].grid(row=r, column=c, sticky="e", padx=(14, 0))
                 self.cell_labels[feat.id][key] = row[-1]
+            if feat.id in self.remove_vars:   # installed: a box to take it off again
+                rm = ttk.Checkbutton(table, variable=self.remove_vars[feat.id],
+                                     command=lambda fid=feat.id: self.remove_ticked(fid))
+                rm.grid(row=r, column=2 + len(COLUMNS), sticky="e", padx=(14, 0))
+                rm.bind("<FocusIn>", lambda _e, fid=feat.id: self.show_detail(fid), add="+")
+                row.append(rm)
             for w in row:   # the box below explains the row under the pointer, or the one with keyboard focus
                 w.bind("<Enter>", lambda _e, fid=feat.id: self.show_detail(fid), add="+")
             box.bind("<FocusIn>", lambda _e, fid=feat.id: self.show_detail(fid), add="+")
@@ -278,6 +311,14 @@ class Installer:
                     combo.pack(side="left", padx=(0, 14))
                     self.option_boxes[(opt.section, opt.key)] = combo
                     self.option_owner[str(combo)] = feat.id
+            if feat.id == "models" and self.model_vars:   # downloaded models nothing uses: delete them?
+                r += 1
+                line = ttk.Frame(table)
+                line.grid(row=r, column=0, columnspan=3 + len(COLUMNS), sticky="w", padx=(28, 0), pady=(0, 4))
+                ttk.Label(line, text="Not used by the stack, delete:", foreground=MUTED_FG).pack(side="left", padx=(0, 4))
+                for name, (var, m) in self.model_vars.items():
+                    ttk.Checkbutton(line, text=f"{name} ({m.size_gb:.1f} GB)", variable=var,
+                                    command=self.update_summary).pack(side="left", padx=(0, 14))
 
         self.detail_box = ttk.LabelFrame(f, text="", padding=10)
         self.detail_box.grid(sticky="ew", pady=(10, 0))
@@ -295,16 +336,78 @@ class Installer:
 
     def feature_ticked(self, fid: str):
         """Keep features with what they run inside: ticking read aloud ticks voice typing, and unticking voice typing
-        unticks read aloud (a locked feature stays as it is)."""
+        unticks read aloud (a locked feature stays as it is). Ticking a feature takes back its Remove tick."""
         v = self.feature_vars
         if v[fid].get():
             for need in features.BY_ID[fid].requires:
                 v[need].set(True)
+                if need in self.remove_vars:
+                    self.remove_vars[need].set(False)
+            if fid in self.remove_vars:
+                self.remove_vars[fid].set(False)
         else:
             for dep in features.dependents(fid):
                 if not features.locked(dep, self.d["features"]):
                     v[dep].set(False)
+        self._mark_removals()
         self.update_summary()
+
+    def remove_ticked(self, fid: str):
+        """A Remove box: the row says "Will be removed", what runs inside it goes too, and what the removal deletes is
+        measured in the background for the detail box and the summary."""
+        on = self.remove_vars[fid].get()
+        for dep in features.dependents(fid):
+            if dep in self.remove_vars and on:
+                self.remove_vars[dep].set(True)
+        if not on:
+            for need in features.BY_ID[fid].requires:   # read aloud stays: voice typing must stay too
+                if need in self.remove_vars:
+                    self.remove_vars[need].set(False)
+        self._mark_removals()
+        self.show_detail(fid)
+        self.update_summary()
+        gone = sorted(self.to_remove())
+        if gone and tuple(gone) != self.measured_for:
+            self.measured_for = tuple(gone)
+            done: list[dict] = []
+            threading.Thread(target=lambda: done.append(self.measure(gone)), daemon=True).start()
+
+            def check():   # Tk only on its own thread: poll for the thread's result
+                if not done:
+                    self.root.after(POLL_MS // 2, check)
+                    return
+                if self.measured_for == tuple(gone):
+                    self.removals = done[0]
+                    self.update_summary()
+                    self.show_detail(fid)
+            self.root.after(POLL_MS // 2, check)
+
+    def measure(self, gone: list[str]) -> dict:
+        """What removing each ticked feature deletes, planned in order, each as if the ones before it were gone: a
+        Whisper model voice typing and recordings share goes with the second, and is counted there once."""
+        status, out = dict(self.d["features"]), {}
+        for f in install.removal_order(gone):
+            try:
+                out[f] = uninstall.plan(self.profile, f, status)
+            except Exception as e:  # noqa: BLE001 - shown in the summary and the confirmation
+                out[f] = uninstall.Removal(f, features.BY_ID[f].title, blocked=f"not checked: {e}")
+            status[f] = features.Status(False, False, "Not installed", level="off")
+        return out
+
+    def _mark_removals(self):
+        """The Status column of every row ticked for removal says so; the others say what they said."""
+        gone = self.to_remove()
+        for fid, (label, text, fg) in getattr(self, "status_labels", {}).items():
+            if not self._alive(label):
+                continue
+            if fid in gone:
+                label.configure(text="Will be removed", foreground=ERROR_FG)
+                if fid in self.feature_vars:
+                    self.feature_vars[fid].set(False)
+            else:
+                label.configure(text=text, foreground=fg)
+                if fid in self.remove_vars and not self.feature_vars[fid].get():
+                    self.feature_vars[fid].set(self.d["choice"].get(fid, False))   # back to its first tick
 
     def show_detail(self, fid: str):
         if not self._alive(getattr(self, "detail", None)):
@@ -326,8 +429,12 @@ class Installer:
         elif st.level in ("warn", "bad"):
             lines.append(f"{st.state}. {st.detail}")
         lines.append(features.detail_text(d["estimates"][fid]))
+        if fid in self.to_remove():
+            r = self.removals.get(fid)
+            lines = [feat.summary, "Ticked for removal. " + (r.text().replace("\n  •  ", " • ").replace("\n", " ")
+                                                                if r else "Measuring what it deletes...")]
         self.detail_box.configure(text=feat.title)
-        self.detail.configure(text="\n".join(lines))
+        self.detail.configure(text=uninstall.short_text("\n".join(lines)))
 
     def update_summary(self):
         if not self._alive(self.summary_box):
@@ -335,8 +442,25 @@ class Installer:
         ttk, d = self.ttk, self.d
         for child in self.summary_box.winfo_children():
             child.destroy()
-        installed = {fid for fid, s in d["features"].items() if s.installed}
-        for i, finding in enumerate(features.assess(self.chosen(), d["estimates"], d["hardware"], installed)):
+        installed = {fid for fid, s in d["features"].items() if s.installed} - self.to_remove()
+        findings = features.assess(self.chosen(), d["estimates"], d["hardware"], installed)
+        gone = self.to_remove()
+        if gone:
+            measured = [self.removals.get(f) for f in gone]
+            # Each folder once: voice typing's plan and read aloud's can both name Kokoro's.
+            size = sum({i.path or f"{r.fid}:{i.what}": i.size_gb or 0.0 for r in measured if r for i in r.deletes}.values())
+            names = ", ".join(x.short for x in features.FEATURES if x.id in gone)
+            blocked = [r.blocked for r in measured if r and r.blocked]
+            text = (f"Removes {names}" + (f": frees about {size:.1f} GB" if all(measured) and size else
+                                          ": measuring what it deletes" if not all(measured) else "")
+                    + ". What you made with them (chats, images, transcripts, settings) stays.")
+            findings.insert(0, features.Finding("bad" if blocked else "warn", text + (f" {' '.join(blocked)}" if blocked else "")))
+        models = self.models_to_delete()
+        if models:
+            gb = sum(self.model_vars[n][1].size_gb for n in models)
+            findings.insert(0, features.Finding("warn", f"Deletes {', '.join(models)}: frees about {gb:.1f} GB. You can "
+                                                        "download a model again later."))
+        for i, finding in enumerate(findings):
             sym, fg = FINDING.get(finding.level, FINDING["ok"])
             ttk.Label(self.summary_box, text=sym, foreground=fg, width=2, font=("Segoe UI", 11)).grid(
                 row=i, column=0, sticky="nw")
@@ -362,11 +486,10 @@ class Installer:
                                       "Each tool gets its own Python environment here. Keep the path short.", self.tools)
         self.media_msg = None
         if install.needs_media(chosen):
-            what = " and ".join(n for fid, n in (("images", "ComfyUI with the image model"),
-                                                 ("recordings", "Whisper for recordings")) if fid in chosen)
-            installed = any(d["features"][fid].installed for fid in ("images", "recordings") if fid in chosen)
-            self.media_msg = self._folder(f, "Media (ComfyUI, Whisper and their models)",
-                                          f"{what[0].upper()}{what[1:]} go here. Agent sessions and media tools may use "
+            what = "ComfyUI with the image model"
+            installed = d["features"]["images"].installed
+            self.media_msg = self._folder(f, "Media (ComfyUI and its models)",
+                                          f"{what[0].upper()}{what[1:]} goes here. Agent sessions and media tools may use "
                                           "only this folder.", self.media_root,
                                           "Installed already: setup checks and updates it." if installed else "")
 
@@ -392,7 +515,9 @@ class Installer:
         self.error.grid(sticky="w", pady=(8, 0))
         ttk.Button(self.footer, text="Back", command=self.show_features).pack(side="left")
         ttk.Button(self.footer, text="Cancel", command=self.root.destroy).pack(side="right")
-        self.install_btn = ttk.Button(self.footer, text="Install", command=self.on_install, default="active")
+        changes = bool(self.to_remove() or self.models_to_delete())
+        self.install_btn = ttk.Button(self.footer, text="Apply changes" if changes else "Install", command=self.on_install,
+                                      default="active")
         self.install_btn.pack(side="right", padx=(0, 8))
         self.root.bind("<Return>", lambda e: self.on_install())
         self.root.bind("<Escape>", lambda e: self.root.destroy())
@@ -461,8 +586,23 @@ class Installer:
         self.install_btn.state(["!disabled"] if ok else ["disabled"])
         return ok
 
-    def on_install(self):
+    def on_install(self, confirmed: bool = False):
         if not self.validate():
+            return
+        gone, models = sorted(self.to_remove()), self.models_to_delete()
+        if gone and (tuple(gone) != self.measured_for or any(f not in self.removals for f in gone)):
+            self.root.configure(cursor="watch")   # not measured yet: measure now, so the question lists everything
+            self.root.update_idletasks()
+            try:
+                self.removals, self.measured_for = self.measure(gone), tuple(gone)
+            finally:
+                self.root.configure(cursor="")
+        blocked = [r.blocked for f in gone for r in [self.removals.get(f)] if r and r.blocked]
+        if blocked:
+            self.error.configure(text=" ".join(blocked))
+            return
+        if (gone or models) and not confirmed:
+            self.confirm_removals(gone, models)
             return
         chosen = self.chosen()
         store = str(Path(self.store.get().strip()).expanduser())
@@ -472,7 +612,7 @@ class Installer:
             for path in (store, tools):
                 Path(path).mkdir(parents=True, exist_ok=True)
             install.save_paths(self.profile, store)
-            install.save_features(self.profile, chosen, media_root, self.d["features"], self.options())
+            install.save_features(self.profile, chosen, media_root, self.d["features"], self.options(), remove=gone)
             plan = install.Plan(
                 model_store=store,
                 tool_dir="" if self.d["tool_dir"] and Path(tools) == Path(self.d["tool_dir"]) else tools,
@@ -483,6 +623,10 @@ class Installer:
                 check_disks=self.disks.get(),
                 setup_huggingface=self.hf.get(),
                 media_root=media_root,
+                remove=gone,
+                remove_models=models,
+                targets=sorted(set(gone) | (chosen - {f for f, s in self.d["features"].items() if s.installed})
+                               | ({"models"} if models else set())),
                 **install.feature_plan(chosen, self.d["features"]),
             )
             install.spawn_worker(plan)
@@ -491,6 +635,43 @@ class Installer:
             return
         self.root.unbind("<Return>")
         self.show_progress()
+
+    def confirm_removals(self, gone: list[str], models: list[str]):
+        """Ask before anything is deleted: what goes, how much, what stays. The safe button has the focus."""
+        tk, ttk = self.tk, self.ttk
+        d = tk.Toplevel(self.root)
+        d.title("Remove features?")
+        d.transient(self.root)
+        d.resizable(False, False)
+        f = ttk.Frame(d, padding=20)
+        f.pack(fill="both", expand=True)
+        names = [features.BY_ID[x].title for x in gone] + models
+        ttk.Label(f, text=f"Remove {', '.join(names)}?", font=("Segoe UI", 12, "bold"), wraplength=520).pack(anchor="w")
+        parts = [self.removals[x].text() if x in self.removals else features.BY_ID[x].title for x in gone]
+        if models:
+            parts.append("Deletes the models " + ", ".join(models) + "; you can download them again later.")
+        ttk.Label(f, text="\n\n".join(parts), wraplength=520, justify="left").pack(anchor="w", pady=(8, 16))
+        buttons = ttk.Frame(f)
+        buttons.pack(fill="x")
+
+        def close():
+            d.grab_release()
+            d.destroy()
+
+        def go():
+            close()
+            self.on_install(confirmed=True)
+
+        back = ttk.Button(buttons, text="Go back", command=close)
+        back.pack(side="right")
+        ttk.Button(buttons, text="Remove and apply", command=go).pack(side="right", padx=(0, 8))
+        d.bind("<Escape>", lambda _e: close())
+        d.bind("<Return>", lambda e: e.widget.invoke() if hasattr(e.widget, "invoke") else close())
+        d.protocol("WM_DELETE_WINDOW", close)
+        d.update_idletasks()
+        d.geometry(f"+{self.root.winfo_rootx() + 80}+{self.root.winfo_rooty() + 80}")
+        d.grab_set()
+        back.focus_set()
 
     # ------------------------------------------------------------ page 3: progress
 
@@ -506,7 +687,9 @@ class Installer:
         steps.grid(sticky="ew")
         steps.columnconfigure(2, weight=1)
         self.step_rows = {}
-        for i, (sid, title, _) in enumerate(install.STEPS):
+        # The steps this run has (removals first, or the few the tray asked for); all of STEPS before the state exists.
+        step_list = [(s["id"], s["title"], None) for s in install.read_state().get("steps") or []] or install.STEPS
+        for i, (sid, title, _) in enumerate(step_list):
             mark = ttk.Label(steps, text=MARK["pending"][0], foreground=MARK["pending"][1], width=2, font=("Segoe UI", 11))
             mark.grid(row=i, column=0, sticky="nw")
             ttk.Label(steps, text=title).grid(row=i, column=1, sticky="nw", padx=(0, 12))

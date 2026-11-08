@@ -1,0 +1,200 @@
+# What the installer can install: where each piece comes from, which version, how big it is, and the choices it
+# offers. Code reads this file through scripts/stacklib/catalog.py; change a version, URL or model here, not in code.
+#
+# Settings a machine can change (which chat model, ports, folders) live in machines/_defaults.yaml and
+# machines/<HOST>.yaml. This file is the same on every machine.
+#
+# Pins: Smart App Control judges every compiled Python module by its download reputation, file by file, so a new
+# version is a new judgement. Test a new pin in a throwaway environment on a PC with Smart App Control on before
+# changing it here (memory/lessons.md, 2026-11-04 and 2026-11-07).
+#
+# Sizes: downloads in GB of 10**9 bytes (as the installer's free-space checks count them); memory in GB of 2**30
+# (as Windows and nvidia-smi count it). "Measured" figures come from the reference PC (RTX 3060 12 GB, Ryzen 5 5500,
+# 32 GB DDR4-2133), 2026-10-25 to 2026-11-08; the rest are estimates.
+
+schema_version: 1
+
+# ---------------------------------------------------------------- Ollama and its models
+
+ollama:
+  winget_id: Ollama.Ollama
+  download_page: https://ollama.com/download
+  linux_install: curl -fsSL https://ollama.com/install.sh | sh
+  server_ram_gb: 0.5          # estimate: the server and a runner's host buffers with every layer on the GPU
+  kv_gb_per_32k: {f16: 4.0, q8_0: 2.0, q4_0: 1.0}   # KV cache of a 7-9B model with grouped-query attention
+  default_chat_model: qwen3.5:9b   # the installer's first choice when the hardware class names no chat model
+
+# Models Ollama pulls (tag -> download size, role, notes). The hardware classes in machines/_defaults.yaml pick from
+# these; Settings and the installer offer the chat-capable ones. Verify a tag with `ollama pull` before adding it:
+# the sizes were read from ollama.com on 2026-10-24.
+# measured: {context: [GPU GB, system-RAM GB, tokens per second]} with `stack.py bench` and Ollama's /api/ps.
+models:
+  qwen2.5-coder:1.5b-base: {size_gb: 1.0, role: fim, notes: "Apache-2.0 FIM/autocomplete; always resident (~1.3 GB VRAM)"}
+  nomic-embed-text: {size_gb: 0.3, role: embed, notes: "local embeddings for RAG/eval similarity"}
+  qwen3.5:9b:
+    size_gb: 6.6
+    role: small
+    notes: "dense 9B, fits 12 GB fully at 16k ctx with q8_0 KV; tools+thinking"
+    measured: {32768: [5.7, 0.0, 51], 16384: [5.5, 0.0, 51]}
+  qwen3.6:35b-a3b-coding:
+    size_gb: 23
+    role: primary
+    notes: "MoE 35B/3B-active coding tune; experts offloaded to RAM by llama.cpp fit; needs >=28 GB RAM"
+    measured: {32768: [8.7, 11.8, 25]}   # the experts of 28 layers sit in memory-mapped system RAM
+  qwen3.6:35b-a3b: {size_gb: 23, role: primary, notes: "general MoE sibling of the coding tune"}
+  flint:40b-a2b: {size_gb: 23, role: reviewer, notes: "Apache-2.0 MoE 40B/2.5B-active (Recursive); vendor SWE-bench Verified 74.2; second-opinion reviewer"}
+  gpt-oss:20b: {size_gb: 13, role: reviewer, notes: "different-family reviewer; spills ~1-2 GB to CPU on 12 GB"}
+
+context_choices: [8192, 16384, 32768, 65536]   # tokens; the installer's and Settings' context drop-downs
+
+# ---------------------------------------------------------------- Python tools (uv tool environments)
+
+# install: the arguments after `uv tool install --force --python <python>`. LiteLLM's otel callback imports
+# opentelemetry.sdk, which litellm[proxy] does not pull in, hence the --with lines.
+python_tools:
+  litellm:
+    env: litellm
+    script: litellm
+    install: ["litellm[proxy]==1.106.3", --with, opentelemetry-sdk, --with, opentelemetry-exporter-otlp]
+    python: "3.12"
+  phoenix:
+    env: arize-phoenix
+    script: phoenix
+    install: [arize-phoenix]
+    python: "3.12"
+  open-webui:
+    env: open-webui
+    script: open-webui
+    install: [open-webui]
+    python: "3.11"
+  hf:                     # the `hf` command for the Hugging Face cache
+    env: huggingface-hub
+    script: hf
+    install: [huggingface_hub]
+    python: "3.12"
+
+# ---------------------------------------------------------------- images (ComfyUI)
+
+images:
+  comfyui_git: https://github.com/comfyanonymous/ComfyUI.git
+  clone_depth: 50
+  torch: [torch, torchvision, torchaudio]   # from media.torch_index (machines/_defaults.yaml)
+  pins: ["av==17.0.0"]   # Smart App Control refused PyAV 19.0.2 and 16.0.1 on 2026-11-04 and allowed 17.0.0
+  open_licences: [apache-2.0, mit, bsd-3-clause, creativeml-openrail-m, openrail++]   # decision D-M3
+  sizes: [512x512, 768x768, 1024x1024, 1280x1280]
+  steps: [4, 6, 8, 12]
+  seconds_per_image: 11.0   # measured: 1024 x 1024 at 8 steps; other sizes and steps scale from it
+  # Workflows in config/comfyui/workflows/<name>.json and the files each needs (also listed in
+  # config/comfyui/MODELS.md). Open licences only.
+  workflows:
+    z_image_turbo:
+      label: Z-Image-Turbo int8
+      models:
+        # Z-Image-Turbo 6B (Tongyi-MAI, Apache-2.0), ComfyUI repack. int8 weights: 6.2 GB instead of 12.3 GB in bf16,
+        # so the model fits the card next to a small chat model; Ampere (RTX 30xx) runs int8 natively.
+        - {file: z_image_turbo_int8_convrot.safetensors, folder: diffusion_models, repo: Comfy-Org/z_image_turbo,
+           path: split_files/diffusion_models/z_image_turbo_int8_convrot.safetensors, licence: apache-2.0, size_gb: 6.2}
+        - {file: qwen_3_4b_fp8_mixed.safetensors, folder: text_encoders, repo: Comfy-Org/z_image_turbo,
+           path: split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors, licence: apache-2.0, size_gb: 5.63}
+        - {file: ae.safetensors, folder: vae, repo: Comfy-Org/z_image_turbo,
+           path: split_files/vae/ae.safetensors, licence: apache-2.0, size_gb: 0.34}
+
+# ---------------------------------------------------------------- Whisper (voice typing)
+
+whisper:
+  # faster-whisper models offered in Settings and the installer: Hugging Face repository, download GB, GPU GB in
+  # int8_float16, seconds per 15 s of speech on the reference GPU. large-v3-turbo was measured; the others are scaled
+  # from it by model size.
+  models:
+    large-v3-turbo: {repo: mobiuslabsgmbh/faster-whisper-large-v3-turbo, download_gb: 1.6, vram_gb: 1.2, s_per_15s: 0.6}
+    large-v3: {repo: Systran/faster-whisper-large-v3, download_gb: 3.1, vram_gb: 2.1, s_per_15s: 1.4}
+    medium: {repo: Systran/faster-whisper-medium, download_gb: 1.5, vram_gb: 1.1, s_per_15s: 0.8}
+    small: {repo: Systran/faster-whisper-small, download_gb: 0.5, vram_gb: 0.5, s_per_15s: 0.3}
+    base: {repo: Systran/faster-whisper-base, download_gb: 0.15, vram_gb: 0.3, s_per_15s: 0.2}
+  # Other names faster-whisper knows (faster_whisper.utils._MODELS), for a name typed into machines/<HOST>.yaml.
+  other_repos:
+    tiny: Systran/faster-whisper-tiny
+    small.en: Systran/faster-whisper-small.en
+    medium.en: Systran/faster-whisper-medium.en
+    turbo: mobiuslabsgmbh/faster-whisper-large-v3-turbo
+    distil-large-v3.5: distil-whisper/distil-large-v3.5-ct2
+  # Voice typing's own environment (python.org Python 3.14); versions that loaded under Smart App Control on
+  # 2026-11-07. onnxruntime runs Silero VAD (and Kokoro, for read aloud).
+  voice_typing_packages:
+    - faster-whisper==1.2.1
+    - ctranslate2==4.8.5
+    - onnxruntime==1.31.1
+    - av==17.0.0
+    - numpy==2.5.4
+    - tokenizers==0.23.3
+    - pyyaml>=6.0
+  cuda_packages: [nvidia-cublas-cu12]   # only when Ollama's lib\ollama\cuda_v12 has no cublas64_12.dll
+
+# ---------------------------------------------------------------- read aloud (Kokoro)
+
+kokoro:
+  # Kokoro-82M as ONNX (onnx-community's export of hexgrad/Kokoro-82M v1.0), pinned like the packages: a new revision
+  # is a new download to check.
+  repo: onnx-community/Kokoro-82M-v1.0-ONNX
+  revision: 1939ad2a8e416c0acfeecc08a694d14ef25f2231
+  # read_aloud.kokoro: file in the repository, measured download (MB, voices aside), download GB with the voices,
+  # RAM GB while loaded and reading (working set after a sentence, 2026-11-08).
+  variants:
+    fp32: {file: onnx/model.onnx, download_mb: 326, download_gb: 0.35, ram_gb: 0.5}
+    int8: {file: onnx/model_quantized.onnx, download_mb: 92, download_gb: 0.12, ram_gb: 0.3}
+  # Voices offered (0.5 MB each). Japanese and Chinese voices exist too, but Kokoro reads them through its own G2P
+  # (misaki with pyopenjtalk or jieba), not espeak-ng, so they are not offered.
+  voices: [af_heart, af_bella, af_nicole, af_aoede, af_kore, af_sarah, af_nova, af_sky, af_alloy, af_jessica, af_river,
+           am_michael, am_fenrir, am_puck, am_echo, am_eric, am_liam, am_onyx, am_adam, am_santa,
+           bf_emma, bf_isabella, bf_alice, bf_lily, bm_george, bm_fable, bm_lewis, bm_daniel,
+           ef_dora, em_alex, em_santa, ff_siwis, hf_alpha, hf_beta, hm_omega, hm_psi,
+           if_sara, im_nicola, pf_dora, pm_alex, pm_santa]
+  packages:
+    - espeakng-loader==0.2.4   # espeak-ng 1.52 (DLL and data, GPL-3.0); loaded under Smart App Control 2026-11-08
+    - comtypes==1.4.17         # pure Python COM, for Windows' own voices (SAPI)
+  # Read aloud on the GPU: onnxruntime-gpu in place of onnxruntime, built for CUDA 13, and cuDNN 9 for CUDA 13 without
+  # its dependencies (cuBLAS 13 and the CUDA runtime come from Ollama's lib/ollama/cuda_v13).
+  gpu_packages: [onnxruntime-gpu==1.31.1, nvidia-cudnn-cu13==9.28.1.4]
+  gpu_libraries_gb: 0.8       # measured 2026-11-08: onnxruntime-gpu 0.23 GB and cuDNN 0.58 GB
+  gpu_vram_gb: 1.0            # measured: Kokoro fp32 on an RTX 3060
+
+# ---------------------------------------------------------------- OpenClaw
+
+openclaw:
+  npm: openclaw@latest
+  node_winget_id: OpenJS.NodeJS.LTS
+  node_download_page: https://nodejs.org
+  # Node.js versions openclaw 2026.10.9 accepts (engines.node ">=24.22.1 <25 || >=26.12.1"): [from, below]; an empty
+  # "below" means no upper limit.
+  node_versions: [["24.22.1", "25.0.0"], ["26.12.1", ""]]
+
+# ---------------------------------------------------------------- winget configuration (stack.py build)
+
+# winget/configuration.winget (owner mode) and configuration.edge.winget (edge mode, adds edge_packages). elevated:
+# the package installs machine-wide and asks for administrator rights. Keep in step with docs/plans/INSTALL.md 2.1.
+winget:
+  packages:
+    - {id: uv, package: astral-sh.uv, description: "uv: Python, project environment and uv tools"}
+    - {id: git, package: Git.Git, description: Git, elevated: true}
+    - {id: ollama, package: Ollama.Ollama, description: Ollama (local models on the GPU)}
+    - {id: postgresql, package: PostgreSQL.PostgreSQL.17, description: "PostgreSQL 17 (LiteLLM request log, privacy-gate audit)", elevated: true}
+    - {id: ffmpeg, package: Gyan.FFmpeg, description: ffmpeg (video frames for the privacy gate)}
+    - {id: tesseract, package: UB-Mannheim.TesseractOCR, description: Tesseract OCR (Presidio Image Redactor), elevated: true}
+    - {id: exiftool, package: OliverBetz.ExifTool, description: "ExifTool (image, video and PDF metadata stripping)"}
+    - {id: qpdf, package: QPDF.QPDF, description: qpdf (drops old PDF revisions after metadata edits), elevated: true}
+  edge_packages:
+    - {id: openjdk, package: Microsoft.OpenJDK.25, description: OpenJDK 25 for Keycloak 26.8, elevated: true}
+    - {id: caddy, package: CaddyServer.Caddy, description: Caddy (TLS for the auth and chat domains)}
+
+# ---------------------------------------------------------------- what each feature's program takes
+
+# Disk and memory of each feature's own program, models aside (those are counted from the tables above).
+# ram_busy_gb and vram_busy_gb: more while it works (ComfyUI keeps its models after a job until Chat frees them).
+features:
+  gateway: {disk_gb: 0.6, ram_gb: 0.5}       # measured: LiteLLM 0.57 GB on disk, 0.3 GB working set
+  chat: {disk_gb: 1.9, ram_gb: 0.7}          # measured: 1.94 GB on disk
+  tracing: {disk_gb: 0.5, ram_gb: 0.4}       # measured: 0.54 GB on disk
+  images: {disk_gb: 16.8, ram_gb: 1.5, ram_busy_gb: 8.0, vram_gb: 0.4, vram_busy_gb: 10.5}   # measured: 16.8 GB, 11.6 GB peak
+  voice_typing: {disk_gb: 0.3, ram_gb: 0.4}  # measured: 0.25 GB environment
+  recordings: {disk_gb: 2.4, ram_gb: 0.5, vram_gb: 1.1}   # no longer offered; its figures size an old install
+  openclaw: {disk_gb: 0.5, ram_gb: 0.3}      # measured: 0.50 GB

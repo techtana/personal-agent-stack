@@ -58,7 +58,7 @@ Docker is optional (`infrastructure/docker-compose.yml`); the reference machine 
 # window asks which features to install (each row shows its disk, GPU, CPU and RAM load on this PC; the local
 # models and the gateway are required) and where the models and the Python tools go, and setup runs in the
 # background: .env secrets, Ollama env, uv tools, configs, model downloads. Run install.cmd again after a pull
-# to update the app, or Add features in the tray to add more.
+# to update the app, or Install / Remove on the tray's Features card to add or remove features.
 uv run scripts/stack.py up   # start phoenix, litellm, orchestrator, open_webui
 uv run scripts/stack.py smoke
 ```

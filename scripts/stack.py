@@ -692,22 +692,11 @@ def cmd_read_aloud(a):
 
 
 def cmd_whisper(a):
+    """Recordings for Claude Desktop are no longer set up (the stack keeps no ties to closed-source apps); this only
+    takes the server out of Claude Desktop's config. Remove on the tray's Features card also deletes its files."""
     from stacklib import whisper
 
-    p = prof.resolve_profile()
-    if a.action in ("install", "register") and (REPO / ".git").is_file():
-        warn("this checkout is a git worktree: the recordings server would write its usage records into this "
-             "worktree's traces/usage, which the tray in the main checkout does not read. Run this from the main "
-             "checkout to count recordings in the Usage tab.")
-    if a.action == "install":
-        info(whisper.install(p, info))
-    if a.action in ("install", "register"):
-        info(whisper.register_desktop(p))
-    if a.action == "unregister":
-        info(whisper.unregister_desktop())
-    if a.action == "entry":
-        import json
-        print(json.dumps({whisper.SERVER_NAME: whisper.server_entry(p)}, indent=2))
+    info(whisper.unregister_desktop())
 
 
 def cmd_retro(a):
@@ -775,8 +764,8 @@ def main(argv=None):
     s.add_argument("action", choices=["install", "off", "voices", "speak", "read", "stop"]); s.add_argument("text", nargs="?")
     s.add_argument("--voice"); s.add_argument("--speed", type=float); s.add_argument("--out", help="speak: write a WAV file")
     s.set_defaults(f=cmd_read_aloud)
-    s = sub.add_parser("whisper", help="local Whisper for recordings: install, register|unregister in Claude Desktop, entry")
-    s.add_argument("action", choices=["install", "register", "unregister", "entry"]); s.set_defaults(f=cmd_whisper)
+    s = sub.add_parser("whisper", help="take the old recordings server out of Claude Desktop's config (no longer set up)")
+    s.add_argument("action", choices=["unregister"]); s.set_defaults(f=cmd_whisper)
     s = sub.add_parser("retro"); s.add_argument("rest", nargs=argparse.REMAINDER); s.set_defaults(f=cmd_retro)
     s = sub.add_parser("tray", help="background tray app that runs the services and shows their status")
     s.add_argument("--foreground", action="store_true"); s.add_argument("--status", action="store_true"); s.add_argument("--stop", action="store_true")

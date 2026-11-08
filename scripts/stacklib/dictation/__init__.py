@@ -19,36 +19,30 @@ import subprocess
 from dataclasses import dataclass, fields
 from pathlib import Path
 
-from .. import IS_WINDOWS, REPO, info, warn, which
+from .. import IS_WINDOWS, REPO, catalog, info, warn, which
 
 MODES = ("polish", "live")
 STYLES = ("verbatim", "clean", "concise")
 INSERTS = ("paste", "type")
 DEVICES = ("auto", "cuda", "cpu")
 
-# Versions that loaded under Smart App Control on the reference machine (2026-11-07; Python 3.14 from python.org). Smart App
-# Control judges compiled modules file by file, so a new version is a new judgement: test it in a throwaway venv first.
-PACKAGES = (
-    "faster-whisper==1.2.1",
-    "ctranslate2==4.8.5",
-    "onnxruntime==1.31.1",
-    "av==17.0.0",          # 19.0.2 and 16.0.1 were refused in ComfyUI's venv (memory/lessons.md, 2026-11-04)
-    "numpy==2.5.4",
-    "tokenizers==0.23.3",
-    "pyyaml>=6.0",
-)
+# Versions that loaded under Smart App Control on the reference machine (2026-11-07; Python 3.14 from python.org), from
+# config/installer.yaml whisper.voice_typing_packages. Smart App Control judges compiled modules file by file, so a new
+# version is a new judgement: test it in a throwaway venv first.
+PACKAGES = tuple(str(p) for p in catalog.whisper().get("voice_typing_packages") or ())
+CUDA_PACKAGES = tuple(str(p) for p in catalog.whisper().get("cuda_packages") or ("nvidia-cublas-cu12",))
 IMPORT_CHECK = ("import ctranslate2, onnxruntime, av, numpy, tokenizers, faster_whisper, yaml, tkinter; "
                 "print(ctranslate2.__version__, ctranslate2.get_cuda_device_count())")
 # Read aloud, an optional feature installed into the same environment (install_read_aloud). Kokoro runs on the
-# onnxruntime and numpy above; these two add espeak-ng's phonemes and Windows' own voices.
-READ_PACKAGES = (
-    "espeakng-loader==0.2.4",   # espeak-ng 1.52 (DLL and data, GPL-3.0); loaded under Smart App Control 2026-11-08
-    "comtypes==1.4.17",         # pure Python COM, for Windows' own voices (SAPI)
-)
+# onnxruntime and numpy above; these add espeak-ng's phonemes and Windows' own voices (config/installer.yaml
+# kokoro.packages).
+READ_PACKAGES = tuple(str(p) for p in catalog.kokoro().get("packages") or ())
 # Read aloud on the GPU (read_aloud.device gpu, or auto on a PC with an NVIDIA card): onnxruntime-gpu in place of
 # onnxruntime, built for CUDA 13, and cuDNN 9 for CUDA 13 without its dependencies (cuBLAS 13 and the CUDA runtime come
 # from Ollama's lib/ollama/cuda_v13). About 0.8 GB. Measured 2026-11-08: 12-20x real time on an RTX 3060, 1.0 GB VRAM.
-READ_GPU_PACKAGES = ("onnxruntime-gpu==1.31.1", "nvidia-cudnn-cu13==9.28.1.4")
+# The first is the ONNX Runtime package, the second cuDNN (kokoro.gpu_packages).
+READ_GPU_PACKAGES = tuple(sorted((str(p) for p in catalog.kokoro().get("gpu_packages") or ()),
+                                key=lambda p: not p.startswith("onnxruntime")))
 READ_GPU_CHECK = ("import onnxruntime, sys; from stacklib.dictation import gpu; "
                   "ok = 'CUDAExecutionProvider' in onnxruntime.get_available_providers() and gpu.add_kokoro_cuda_dlls(); "
                   "print('cuda' if ok else 'missing'); sys.exit(0 if ok else 3)")
@@ -293,8 +287,8 @@ def install(profile: dict, report=lambda *a: None, download_model: bool = True) 
             notes.append("GPU ready (cuBLAS 12 found)")
         else:
             report("installing NVIDIA cuBLAS 12 for the GPU (about 0.5 GB)")
-            _run([uv, "pip", "install", "--python", python, "nvidia-cublas-cu12"], env=env)
-            notes.append("GPU libraries installed (nvidia-cublas-cu12)")
+            _run([uv, "pip", "install", "--python", python, *CUDA_PACKAGES], env=env)
+            notes.append(f"GPU libraries installed ({', '.join(CUDA_PACKAGES)})")
     cfg = Config.from_profile(profile)
     if download_model and not model_cached(profile, cfg.model):
         report(f"downloading the Whisper model {cfg.model} into {hf_home(profile) or 'the Hugging Face cache'}")

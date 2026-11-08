@@ -23,8 +23,10 @@ Hover over the icon to see `Agent Stack: N/M up`. The tray checks the services e
 
 - **Show status**: opens the status window on the Overview tab (a left-click does the same).
 - **Usage by model**, **Settings**: open the window on that tab.
-- **Add features...**: opens the installer on its features page (see *Features* below).
-- One line for each service: `● up`, `○ down`, `not installed` (its feature was not installed) or `not available yet`.
+- **Open installer...**: opens the installer on its features page (see *Features* below).
+- One line for each module, named for what it does (**Local models**, **Gateway**, **Agent tools**, **Chat in the
+  browser**, **Trace viewer**, **Image generation**, **Voice typing**, **Read aloud**): `● up`, `○ down`,
+  `not installed` (its feature was not installed) or `not available yet`.
 - **Open chat (Open WebUI)**, **Open traces (Phoenix)**, **Open gateway admin (LiteLLM)**: open each one in your browser.
 - **Start all services**, **Stop all services**.
 - **Open logs folder**: opens `.run/logs`.
@@ -35,32 +37,62 @@ Hover over the icon to see `Agent Stack: N/M up`. The tray checks the services e
 **Status window** (since 2026-10-27)
 
 The window is titled **Agent Stack** and follows Windows light or dark mode. The header shows the machine name, the
-primary model and its context size, and `cloud tiers on` or `local only`. The pill on the right shows
-`N/M running · checked HH:MM:SS`. Closing the window only hides it. It has three tabs.
+primary model and its context size, and `private only` or `external models allowed`. The pill on the right shows
+`N/M running · checked HH:MM:SS`. Closing the window only hides it. It has four tabs: Overview, Usage, Settings and
+Resources.
 
 *Overview*
 
-- **Services**: one row per service with its role, port and state: `Running (pid N)`, `Stopped`,
-  `Off in settings` (turned off in the Settings tab), `Not installed` (its feature was not installed; **Start** is
-  greyed out, amber when the profile still has it turned on) or `Not available yet` (Kokoro, which has no installer
-  yet). Open WebUI, Phoenix and LiteLLM have an **Open** button. Every service except Ollama has **Start**/**Stop**;
-  the Ollama app runs Ollama.
-- **Loaded in Ollama**: each loaded model with **Size**, **On GPU** (share of the model in VRAM), **Context** and
-  **Unloads** (when Ollama will drop it). "No model is loaded" is normal: the first request loads one.
+- **Services**: one row per module, named for what it does, with the program behind it, its port and its state on
+  the line below: **Local models** (Ollama), **Gateway** (LiteLLM), **Agent tools** (the orchestrator), **Chat in the
+  browser** (Open WebUI), **Trace viewer** (Phoenix), **Image generation** (ComfyUI), **Voice typing** (Whisper) and
+  **Read aloud** (Kokoro, inside voice typing). The state reads `Running · pid N`, `Stopped`, `Off in settings`
+  (turned off in the Settings tab), `Not installed` (its feature was not installed; amber when the profile still has
+  it turned on) or `Not available yet`. On the right are two columns:
+  - **Open**, **Hide**/**Show** (one per line): Open opens the module in your browser; voice typing has **Hide mic**
+    and **Hide pencil**, read aloud **Hide speaker**;
+  - **Start**/**Stop**, blank where the stack does not start or stop the module: Ollama belongs to the Ollama app
+    (its row shows **Start** only while it is down), and read aloud starts and stops with voice typing.
+
+  A model that runs in a process of its own gets a row of its own with that process's pid: every model Ollama has
+  loaded runs in a runner process (`qwen3.5:9b · model runner · 32k context · 5.7 GB on the GPU`, `Loaded · pid N`)
+  with **Unload** (the next request loads it again). Models that run inside their module's process (voice typing's
+  Whisper, read aloud's Kokoro, ComfyUI's image models) share its pid; the GPU card lists them.
+- **GPU: loaded models**: each model on the card with **Used by**, **Size**, **On GPU** (share of the model in VRAM),
+  **Context** and **Unloads** (when it will be dropped), and the **Chat** and **Media** switch. "No model is loaded" is
+  normal: the first request loads one.
 - **Features**: one row per feature the installer offers, checked once a minute. Each row shows what the feature
   takes on this PC (`GPU 1.2 GB · RAM 0.4 GB · disk 0.3 GB · ~0.6 s per phrase`; the same figures as the installer)
   and its state:
-  - `Installed` (green), or `Linked` for recordings (Claude Desktop starts the Whisper server) and `Gateway only`
-    for OpenClaw;
+  - `Installed` (green), or `Gateway only` for OpenClaw;
   - `Installed, off` (grey): turned off in Settings;
-  - `Not installed` (grey), or amber when the profile turns it on but its program is missing: run the installer again;
+  - `Not installed` (grey), or amber when the profile turns it on but its program is missing;
   - `Models missing` or `Model missing` (amber): the program is there, a model is not;
   - for OpenClaw, `Not set up`, `Bypasses the gateway` or `Uses an outside model`, with a **Use gateway** button that
     makes the gateway its only model provider ([details](choosing-drives.md#openclaw)).
 
-  Under the rows, **Add features...** opens the installer, which starts on its features page with what you have. It
-  reads **Open installer...** when everything is installed; the installer then checks and repairs what is there.
-- **Hugging Face cache**: where `HF_HOME` points and how much it holds.
+  Each row has **Install**, **Remove** or **Repair** (where a model or files are missing). Install and Repair run setup
+  for that feature alone, with the folders the installer chose before; a feature that needs a folder the installer has
+  not asked for yet (images need the media folder) opens the installer instead. **Remove** first shows what it deletes, with sizes, and what it keeps: your chats and uploads,
+  traces, the images and transcripts you made, OpenClaw's own settings and every setting in your machine profile stay.
+  Removing voice typing removes read aloud too, which runs inside it.
+
+  The stack keeps no ties to closed-source apps, so **Recordings in Claude Desktop** (a Whisper server for Claude
+  Desktop, offered until 2026-11-08) is no longer installed. Its row shows only while an old install is on this PC
+  (`Linked`, amber), with **Remove**: it takes the server out of Claude Desktop's config (after a backup), and deletes
+  the server, its environment and the Whisper models voice typing does not use. Quit Claude Desktop first, which keeps
+  the server's files in use. `uv run scripts/stack.py whisper unregister` takes out only the config entry.
+
+  Under **Local models** is every model in the installer's catalog (`config/installer.yaml`) and any other model
+  Ollama has, each with its size and what the stack uses it for, and **Download** or **Remove**. A model the stack uses
+  cannot be removed until Settings names another one. While setup runs, a line under the features shows its step and
+  progress; one setup runs at a time. **Open installer...** opens the installer, which changes folders and options.
+- **Storage**: everything the stack keeps on disk, measured when the window opens (at most every 10 minutes) and on
+  **Refresh**: a bar split into **Models**, **Programs** and **Data**, the total per drive with the space left, and a
+  table of every item with its size, a note and its folder. Items the stack does not use (an Ollama model no setting
+  names, a Hugging Face download from another tool) are grey; download caches say they can be deleted. Double-click a
+  row, or select it and press **Open folder**, to open its folder. A missing drive (the Hugging Face cache on an
+  unplugged USB drive) shows in amber.
 - At the bottom: **Open chat**, **Start all**, **Stop all**, **Logs** and the **Start at login** checkbox.
 
 *Usage*
@@ -73,7 +105,7 @@ Counts every model the stack ran, local or outside API:
   - Whisper in voice typing (the live previews shown while you speak re-read the phrase so far, so they are listed
     under the table and kept out of the totals), including the microphone in Open WebUI's chat box once it uses voice
     typing's Whisper (client **Open WebUI**);
-  - Whisper in the recordings server that Claude Desktop uses;
+  - Whisper in the recordings server Claude Desktop used (records written before it was retired);
   - images made by ComfyUI (the tray reads ComfyUI's job history every few seconds while ComfyUI runs);
   - `stack.py bench` and the start-up warm-up.
 
@@ -117,29 +149,33 @@ Two steps apply this to an existing install:
   voice typing's Whisper while voice typing is on (see [Voice typing](#voice-typing)); both are counted. On an
   existing install, run `uv run scripts/stack.py media provision`: it backs up Open WebUI's database, then writes both
   settings. Restart Open WebUI for the embeddings; the microphone switches with the next recording.
-- Recordings are counted once `uv run scripts/stack.py whisper install` has been run again from the main checkout
-  (a worktree would point the records at its own folder): it copies the new server and adds its usage folder to
+- *(Retired 2026-11-08: the recordings server for Claude Desktop is no longer set up; its old records still show.)*
+  Recordings were counted once `uv run scripts/stack.py whisper install` had been run again from the main checkout
+  (a worktree would point the records at its own folder): it copied the new server and added its usage folder to
   Claude Desktop's config. Restart Claude Desktop afterwards.
 
 *Settings*
 
-Changes the most common values in your machine profile, `machines/<HOST>.yaml`, without editing the file.
+Changes the most common values in your machine profile, `machines/<HOST>.yaml`, without editing the file. Each group
+is a card of its own with a line on what it covers; in a card, each setting has its name and help on the left and its
+control on the right.
 
 | Group | Setting | What it does |
 |---|---|---|
 | Models | **Primary model**, **Primary context (tokens)** | The model behind `local-primary` and every `<department>-local`, and its context size. |
 | Models | **Memory-map primary weights** | Needed for the 35B MoE model; leave off for dense models. |
 | Models | **Small model**, **Small context (tokens)** | The model behind `local-small`. Keep the context equal to the primary's when both use the same model. |
-| Tracing and services | **Write usage traces** | Writes `traces/litellm/` and `traces/usage/`. The Usage tab and `retro` need it. |
-| Tracing and services | **Phoenix tracing** | Runs Phoenix. Leave off on the reference machine: Smart App Control blocks it. |
-| Tracing and services | **Open WebUI (chat)** | Runs the chat at http://127.0.0.1:3000. |
+| Services and tracing | **Write usage traces** | Writes `traces/litellm/` and `traces/usage/`. The Usage tab and `retro` need it. |
+| Services and tracing | **Trace viewer (Phoenix)** | Runs Phoenix. Leave off on the reference machine: Smart App Control blocks it. |
+| Services and tracing | **Chat in the browser (Open WebUI)**, **Image generation (ComfyUI)**, **Voice typing** | Runs the module (off keeps it installed; **Remove** on the Features card takes it off this PC). |
 | Voice typing | **Voice typing hotkey**, **When to type**, **Cleanup**, **Stop after quiet**, **Language**, **Whisper model**, **Insert text by**, **Show the mic button** | See [Voice typing](#voice-typing). |
 | Voice typing, under **Show advanced** | **Cleanup prompt** | The instructions the local model follows when it cleans up a dictation. See [Your own cleanup instructions](#your-own-cleanup-instructions). |
 | Ollama runtime | **Keep models loaded for**, **KV cache precision**, **Flash attention**, **Parallel requests per model** | Ollama's memory and speed options. |
 
 A changed row is marked **changed**. The bar at the bottom says what **Apply** will do. **Apply** saves the changed
 lines (comments are kept), rebuilds the configs and restarts only what the change needs. Changing an Ollama runtime
-option asks **Restart Ollama?** first, because requests in progress will fail. **Revert** discards unsaved changes;
+option asks **Restart Ollama?** first (**Restart Ollama and apply** or **Not now**), because requests in progress
+will fail. **Revert** discards unsaved changes;
 **Open profile file** opens the YAML.
 
 Cloud tiers are shown but cannot be changed here. Turning them on is a deliberate `.env` decision.
@@ -405,7 +441,7 @@ Good to know:
 ## Read aloud
 
 Have the text you selected in any app read to you by a voice on this PC. It is an optional part of the voice typing
-app: tick **Read aloud (Kokoro)** in the installer (the tray's **Add features...**), or run
+app: **Install** on its row in the tray's Features card, tick **Read aloud (Kokoro)** in the installer, or run
 
 ```
 uv run scripts/stack.py read-aloud install
