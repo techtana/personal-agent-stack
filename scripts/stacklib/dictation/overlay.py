@@ -24,7 +24,8 @@ FONT = "Segoe UI" if IS_WINDOWS else "TkDefaultFont"
 BG, BORDER, FG, MUTED = "#1f1f1f", "#3d3d3d", "#f3f3f3", "#b4b4b4"
 STATE_FILL = {"idle": "#2d2d2d", "listening": "#c42b1c", "working": "#0f6cbd", "done": "#107c10", "error": "#c42b1c"}
 STATE_INK = {"idle": FG, "listening": "#ff9a8f", "working": "#8cc8ff", "done": "#7fd67f", "error": "#ff9a8f"}
-GLYPHS = {"mic": "", "pen": "", "check": "", "error": ""}
+# Segoe Fluent Icons / MDL2 Assets code points: Microphone, Edit (pencil), CheckMark, Warning.
+GLYPHS = {"mic": "\ue720", "pen": "\ue70f", "check": "\ue73e", "error": "\ue783"}
 FALLBACK_GLYPHS = {"mic": "●", "pen": "✎", "check": "✓", "error": "!"}
 BUTTONS = ("refine", "mic")   # left to right
 MENU_POLL_MS = 100    # how often the open right-click menu checks the pointer
