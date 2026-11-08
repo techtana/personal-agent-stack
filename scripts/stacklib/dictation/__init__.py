@@ -165,6 +165,15 @@ def control_url(profile: dict) -> str:
     return f"http://127.0.0.1:{profile['ports']['dictation']}"
 
 
+def transcription_url(profile: dict) -> str:
+    """Base URL of voice typing's OpenAI-compatible speech to text (POST <url>/audio/transcriptions), for Open WebUI's
+    microphone. Built from the port alone, so it can only point at this machine."""
+    port = int(profile["ports"]["dictation"])
+    if not 0 < port < 65536:
+        raise ValueError(f"ports.dictation {port} is not a TCP port")
+    return f"http://127.0.0.1:{port}/v1"
+
+
 def hotkey_label(profile: dict) -> str:
     """'Ctrl+Alt+Space' for menus and help text."""
     return "+".join(part.strip().capitalize() for part in Config.from_profile(profile).hotkey.split("+"))

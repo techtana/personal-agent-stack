@@ -235,9 +235,11 @@ class Summary(unittest.TestCase):
             con = sqlite3.connect(Path(tmp) / "open-webui" / "webui.db")
             con.execute("create table config (key text primary key, value text)")
             con.executemany("insert into config values (?, ?)",
-                            [("rag.embedding_engine", '"ollama"'), ("audio.stt.engine", '"openai"')])
+                            [("rag.embedding_engine", '"ollama"'), ("audio.stt.engine", '"openai"'),
+                             ("audio.stt.openai.api_base_url", '"http://127.0.0.1:8790/v1"')])  # voice typing's
             con.commit()
-            p = {"services": {"open_webui": "native"}, "data_dir": tmp, "models": {"embed": "nomic-embed-text"}}
+            p = {"services": {"open_webui": "native"}, "data_dir": tmp, "models": {"embed": "nomic-embed-text"},
+                 "ports": {"dictation": 8790}}
             notes = usage.uncounted(p)
             self.assertEqual(len(notes), 1)
             self.assertIn("document embeddings", notes[0])
@@ -508,6 +510,16 @@ class VoiceTypingEngine(unittest.TestCase):
         self.assertEqual(final["detail"], {"device": "cuda", "language": "en"})
         self.assertEqual((preview["client"], preview["detail"]["preview"]), ("Voice typing", True))
         self.assertNotIn("Hello", json.dumps(final))
+
+    def test_a_call_for_open_webui_is_recorded_under_its_client(self):
+        import numpy as np
+
+        e = self.engine([SimpleNamespace(text=" Hi.", tokens=[1, 2], no_speech_prob=0.0, avg_logprob=-0.1)])
+        with mock.patch.object(usage_log, "write") as write:
+            e.transcribe(np.zeros(16000, dtype=np.float32), client="Open WebUI")
+            e.transcribe(np.zeros(16000, dtype=np.float32))
+        shared, own = (c.args[0] for c in write.call_args_list)
+        self.assertEqual((shared["source"], shared["client"], own["client"]), ("voice-typing", "Open WebUI", "Voice typing"))
 
     def test_a_failed_call_is_recorded_and_still_raises(self):
         import numpy as np

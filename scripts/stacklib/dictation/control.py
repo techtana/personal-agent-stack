@@ -1,11 +1,14 @@
-"""Local control endpoint of the voice typing app: the tray's health check and its "Dictate now" menu item.
+"""Local control endpoint of the voice typing app: the tray's health check and its "Dictate now" menu item, and speech
+to text for Open WebUI's microphone.
 
-    GET  /health                 -> {"ok": true, "state": "idle", "engine": "ready", "device": "cuda", ...}
+    GET  /health                    -> {"ok": true, "state": "idle", "engine": "ready", "device": "cuda", ...}
     POST /toggle|start|stop|cancel|show|hide|quit
+    POST /v1/audio/transcriptions   OpenAI-compatible, with a bearer key (transcriptions.py)
 
 It listens on 127.0.0.1 only. A web page could still aim a request at 127.0.0.1 (cross-site request forgery, or DNS
 rebinding with its own host name), so requests with an Origin header or a Host other than this address are refused,
-and actions need POST. Local programs are trusted as much as any program that can already press keys.
+and actions need POST. Local programs are trusted as much as any program that can already press keys; the
+transcription endpoint, which runs Whisper on whatever audio it is sent, also wants the gateway's key.
 """
 from __future__ import annotations
 
@@ -16,6 +19,8 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable, Mapping
+
+from . import transcriptions
 
 ACTIONS = ("toggle", "start", "stop", "cancel", "show", "hide", "quit")
 
@@ -31,7 +36,7 @@ def check_request(method: str, path: str, headers: Mapping[str, str], port: int)
     name = path.split("?", 1)[0].strip("/")
     if name == "health":
         return None if method == "GET" else (405, "use GET")
-    if name in ACTIONS:
+    if name in ACTIONS or name == transcriptions.ROUTE:
         return None if method == "POST" else (405, "use POST")
     return 404, "unknown path"
 
@@ -44,9 +49,14 @@ class _Server(ThreadingHTTPServer):
 
 
 class ControlServer:
-    def __init__(self, port: int, health: Callable[[], dict], act: Callable[[str], dict]) -> None:
+    """`transcribe` (audio file bytes, language=, prompt=, client=) -> text serves /v1/audio/transcriptions for callers
+    with `api_key`; without it that path answers 503."""
+
+    def __init__(self, port: int, health: Callable[[], dict], act: Callable[[str], dict],
+                 transcribe: transcriptions.Transcriber | None = None, api_key: str = "",
+                 log: Callable[[str], None] = lambda m: None) -> None:
         self.port = port
-        handler = _handler(port, health, act)
+        handler = _handler(port, health, act, transcribe, api_key, log)
         self.httpd = _Server(("127.0.0.1", port), handler)
         self.thread = threading.Thread(target=self.httpd.serve_forever, name="dictation-control", daemon=True)
 
@@ -58,25 +68,36 @@ class ControlServer:
         self.httpd.server_close()
 
 
-def _handler(port: int, health: Callable[[], dict], act: Callable[[str], dict]):
+def _handler(port: int, health: Callable[[], dict], act: Callable[[str], dict],
+             transcribe: transcriptions.Transcriber | None, api_key: str, log: Callable[[str], None]):
     class Handler(BaseHTTPRequestHandler):
         server_version = "agent-stack-voice-typing"
+        timeout = 60  # seconds per socket read or write, so a client that stops sending frees its thread
 
-        def _reply(self, status: int, body: dict) -> None:
-            data = json.dumps(body).encode("utf-8")
+        def _send(self, status: int, content_type: str, data: bytes) -> None:
             self.send_response(status)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(data)
 
+        def _reply(self, status: int, body: dict) -> None:
+            self._send(status, "application/json", json.dumps(body).encode("utf-8"))
+
         def _handle(self) -> None:
+            name = self.path.split("?", 1)[0].strip("/")
             refused = check_request(self.command, self.path, dict(self.headers.items()), port)
             if refused:
-                self._reply(refused[0], {"ok": False, "error": refused[1]})
+                if name == transcriptions.ROUTE:  # read to the end so the caller sees why, in OpenAI's error shape
+                    transcriptions.discard_body(self.rfile, self.headers)
+                    self._reply(refused[0], transcriptions.ApiError(*refused).body())
+                else:
+                    self._reply(refused[0], {"ok": False, "error": refused[1]})
                 return
-            name = self.path.split("?", 1)[0].strip("/")
+            if name == transcriptions.ROUTE:
+                self._send(*transcriptions.respond(self.headers, self.rfile, api_key, transcribe, log))
+                return
             try:
                 self._reply(200, health() if name == "health" else act(name))
             except Exception as e:  # noqa: BLE001 - report, never kill the server thread

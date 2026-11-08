@@ -59,6 +59,10 @@ NOT_RECORDED = {
     "scripts/stacklib/dictation/__main__.py": "imports the libraries to report their versions (dictate check); "
                                               "its transcribe command goes through engine.py, which records",
     "scripts/stacklib/media.py": "keep_alive 0 unloads Ollama models for the GPU switch; nothing runs",
+    "scripts/stacklib/dictation/transcriptions.py": "serves /v1/audio/transcriptions for Open WebUI and decodes the "
+                                                    "upload; the Whisper call goes through engine.py, which records "
+                                                    "it with the caller as client",
+    "scripts/stacklib/dictation/control.py": "routes /v1/audio/transcriptions to transcriptions.py; runs no model",
 }
 
 SOURCE_DIRS = ("scripts", "orchestrator", "infrastructure")

@@ -414,12 +414,20 @@ def cmd_media(a):
         info(media.install_comfyui(p, info))
         info(media.install_models(p, p["media"].get("image_workflow") or "z_image_turbo", lambda d=None, f=None: info(d) if d else None))
     if a.action in ("install", "provision"):
-        # Images through ComfyUI, and document embeddings through the gateway (counted in the tray's Usage tab).
+        # Images through ComfyUI, document embeddings through the gateway, and the chat box's microphone through voice
+        # typing's Whisper (all counted in the tray's Usage tab). One transaction, after one backup.
         embed = services.openwebui_embedding_settings(p)
         if not embed and p["models"].get("embed"):
             warn("LITELLM_MASTER_KEY is empty: Open WebUI's document embeddings stay on Ollama, outside the Usage tab")
-        keys = media.provision_openwebui(media.openwebui_db(p), {**embed, **media.image_settings(p)})
-        info(f"Open WebUI: {len(keys)} settings changed" + ("; restart it (`stack.py down open_webui` then `up open_webui`)" if keys else ""))
+        stt = services.openwebui_stt_settings(p)
+        if not stt and p["services"].get("dictation") == "native":
+            warn("LITELLM_MASTER_KEY is empty: Open WebUI's microphone stays on its own Whisper, outside the Usage tab")
+        keys = media.provision_openwebui(media.openwebui_db(p), {**embed, **stt, **media.image_settings(p)})
+        # Open WebUI reads its speech-to-text rows on every request; the embedding function needs a restart.
+        restart = [k for k in keys if not k.startswith("audio.stt.")]
+        info(f"Open WebUI: {len(keys)} settings changed" + (
+            "; restart it (`stack.py down open_webui` then `up open_webui`)" if restart
+            else "; its microphone uses voice typing's Whisper from the next recording" if keys else ""))
     if a.action == "gpu":
         info(media.gpu_mode(p, a.mode))
 
@@ -531,7 +539,7 @@ def main(argv=None):
     s.add_argument("--clients", action="store_true", help="also list each row's clients (aliases with --by client)"); s.set_defaults(f=cmd_usage)
     s = sub.add_parser("skills-sync", help="copy new or changed personal skills into skills/ (rules: skills/sync.yaml)")
     s.add_argument("--dry-run", action="store_true"); s.set_defaults(f=cmd_skills_sync)
-    s = sub.add_parser("media", help="ComfyUI and media models under media.root: check, install, provision (Open WebUI's image and embedding settings), gpu chat|media")
+    s = sub.add_parser("media", help="ComfyUI and media models under media.root: check, install, provision (Open WebUI's image, embedding and microphone settings), gpu chat|media")
     s.add_argument("action", choices=["check", "install", "provision", "gpu"]); s.add_argument("mode", nargs="?", choices=["chat", "media"])
     s.set_defaults(f=cmd_media)
     s = sub.add_parser("dictate", help="voice typing in any app: install, run, start/stop, status, transcribe a WAV")

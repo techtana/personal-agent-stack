@@ -22,7 +22,7 @@ import numpy as np
 
 from .. import env_value
 from .. import profile as prof
-from . import Config, cleanup, control, hotkey, read_state, save_setting, write_state
+from . import Config, cleanup, control, hotkey, read_state, save_setting, transcriptions, write_state
 from .audio import RATE, Recorder, RecorderError
 from .engine import Engine
 from .segment import FRAME, Event, Segmenter
@@ -189,7 +189,11 @@ class App:
         self.hotkey_error = ""
         self.last_target = 0
         self.last_external = 0            # last foreground window that is not ours (see _track_focus)
-        self.server = control.ControlServer(self.port, self.health, self.act)  # raises when another copy runs
+        # Raises when another copy runs. Also serves Open WebUI's microphone (transcriptions.py) on the same Whisper,
+        # for callers with the gateway key.
+        self.server = control.ControlServer(
+            self.port, self.health, self.act, api_key=self.api_key, log=log,
+            transcribe=lambda data, **kw: transcriptions.transcribe_with(self.engine, data, **kw))
         state = read_state(profile)
         pos = (int(state["x"]), int(state["y"])) if "x" in state and "y" in state else None
         winsys.set_dpi_aware()
@@ -260,6 +264,7 @@ class App:
                 "model": self.engine.model_name, "note": self.engine.note, "vad": self.vad.name,
                 "hotkey": self.cfg.hotkey, "hotkey_ok": not self.hotkey_error, "mode": self.cfg.mode,
                 "style": self.cfg.style, "language": self.cfg.language, "button": bool(self.cfg.button),
+                "transcriptions": bool(self.api_key),  # Open WebUI's microphone needs the gateway key to check callers
                 "pid": os.getpid()}
 
     def act(self, name: str) -> dict:
