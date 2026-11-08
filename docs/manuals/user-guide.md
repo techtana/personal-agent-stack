@@ -23,7 +23,8 @@ Hover over the icon to see `Agent Stack: N/M up`. The tray checks the services e
 
 - **Show status**: opens the status window on the Overview tab (a left-click does the same).
 - **Usage by model**, **Settings**: open the window on that tab.
-- One line for each service: `● up` or `○ down`.
+- **Add features...**: opens the installer on its features page (see *Features* below).
+- One line for each service: `● up`, `○ down`, `not installed` (its feature was not installed) or `not available yet`.
 - **Open chat (Open WebUI)**, **Open traces (Phoenix)**, **Open gateway admin (LiteLLM)**: open each one in your browser.
 - **Start all services**, **Stop all services**.
 - **Open logs folder**: opens `.run/logs`.
@@ -39,11 +40,27 @@ primary model and its context size, and `cloud tiers on` or `local only`. The pi
 
 *Overview*
 
-- **Services**: one row per service with its role, port and state: `Running (pid N)`, `Stopped`, or
-  `Off in settings` (turned off in the Settings tab). Open WebUI, Phoenix and LiteLLM have an **Open** button. Every
-  service except Ollama has **Start**/**Stop**; the Ollama app runs Ollama.
+- **Services**: one row per service with its role, port and state: `Running (pid N)`, `Stopped`,
+  `Off in settings` (turned off in the Settings tab), `Not installed` (its feature was not installed; **Start** is
+  greyed out, amber when the profile still has it turned on) or `Not available yet` (Kokoro, which has no installer
+  yet). Open WebUI, Phoenix and LiteLLM have an **Open** button. Every service except Ollama has **Start**/**Stop**;
+  the Ollama app runs Ollama.
 - **Loaded in Ollama**: each loaded model with **Size**, **On GPU** (share of the model in VRAM), **Context** and
   **Unloads** (when Ollama will drop it). "No model is loaded" is normal: the first request loads one.
+- **Features**: one row per feature the installer offers, checked once a minute. Each row shows what the feature
+  takes on this PC (`GPU 1.2 GB · RAM 0.4 GB · disk 0.3 GB · ~0.6 s per phrase`; the same figures as the installer)
+  and its state:
+  - `Installed` (green), or `Linked` for recordings (Claude Desktop starts the Whisper server) and `Gateway only`
+    for OpenClaw;
+  - `Installed, off` (grey): turned off in Settings;
+  - `Not installed` (grey), or amber when the profile turns it on but its program is missing: run the installer again;
+  - `Models missing` or `Model missing` (amber): the program is there, a model is not;
+  - for OpenClaw, `Not set up`, `Bypasses the gateway` or `Uses an outside model`, with a **Use gateway** button that
+    makes the gateway its only model provider ([details](choosing-drives.md#openclaw)).
+
+  Under the rows, **Add features...** opens the installer, which starts on its features page with what you have. It
+  reads **Open installer...** when everything is installed; the installer then checks and repairs what is there.
+- **Hugging Face cache**: where `HF_HOME` points and how much it holds.
 - At the bottom: **Open chat**, **Start all**, **Stop all**, **Logs** and the **Start at login** checkbox.
 
 *Usage*
@@ -235,7 +252,7 @@ Good to know:
   it in the tray's Settings tab. If another program already has the key, the bubble says so at start; the button still
   works.
 - **Starting and hiding.** The tray starts voice typing with the other services. **Hide button** in the button's
-  menu keeps only the hotkey; bring it back with **Show button** on the **Voice typing** row of the tray window's
+  menu keeps only the hotkey; bring it back with **Show mic** on the **Voice typing** row of the tray window's
   Overview tab, or the tray menu's **Voice typing button** check item. Either one switches it at once and remembers
   the choice (`dictation.button`).
 - **Try it on a recording.** `uv run scripts/stack.py dictate transcribe note.wav --style concise` prints each phrase,
@@ -287,17 +304,18 @@ became "green" every time).
 ## Refine selected text
 
 Rewrite text you selected in any app (Word, Logseq, Notion, a browser field) with the local model, and put the
-original back whenever you want. It is part of the voice typing app, so it runs whenever voice typing runs.
+original back within 30 minutes. It is part of the voice typing app, so it runs whenever voice typing runs.
 
 1. Select the text.
 2. Click the pencil button left of the mic button, or press **Ctrl+Alt+R**.
 3. The pencil turns blue while the model works (about 1 to 2 seconds for a paragraph). Then the selection is replaced
    and the bubble shows the new text.
 
-To undo it right away, press **Ctrl+Z** in the app, as for any paste. To undo it later, select the refined text,
-right-click the pencil and choose **Revert selected text to the original**. **Refine history...** in the same menu lists
-every refine, newest first: the text before and after side by side, removed words struck through and added words
-underlined. **Copy original**, **Copy suggestion** and **Revert in the app** work on the entry you pick.
+To undo it right away, press **Ctrl+Z** in the app, as for any paste. To undo it later (within 30 minutes), select the
+refined text, right-click the pencil and choose **Revert selected text to the original**. **Refine history...** in the
+same menu lists the refines of the last 30 minutes, newest first: the text before and after side by side, removed
+words struck through and added words underlined. **Copy original**, **Copy suggestion** and **Revert in the app** work
+on the entry you pick. After 30 minutes an entry is deleted, and only the app's own undo can bring the original back.
 
 Styles, all in the pencil's right-click menu: **Polish** (the default: fixes mistakes and smooths sentences), **Fix
 spelling and grammar only**, **Concise**, **Professional**, **Friendly**, **Plain language** and **Bullet points**.
@@ -331,8 +349,10 @@ How it works, all on this PC:
 
 The log is `.run\dictation\refine-log.jsonl`, one line per refine: time, app, window title, style, model, the text
 before, the suggestion and what happened to it (replaced, rejected, copied, unchanged, cancelled). Unlike the voice
-typing log it holds your words; that is its job. It stays on this PC and is never trimmed. To forget entries, delete
-their lines or the file.
+typing log it holds your words, so it holds them briefly: an entry is kept for 30 minutes (`refine.keep_minutes`, or
+**Keep refine history for** in the tray's Settings tab), then deleted. The app checks once a minute, so an entry is
+gone from the file within a minute of expiring, and the file itself goes when its last entry does. Deleted text can
+stay in the drive's free space until it is overwritten. To forget everything at once, delete the file.
 
 Good to know:
 
@@ -355,9 +375,10 @@ Good to know:
   the clipboard instead.
 - **Limits.** Up to 10,000 characters at a time (`refine.max_chars`). Esc cancels while the model works; nothing is
   replaced then.
-- **Settings.** The tray's Settings tab has a **Refine selected text** group: hotkey, default style, model and whether
-  the pencil button shows. Every setting is under `refine:` in `machines/_defaults.yaml`. **Hide this button** in the
-  pencil's menu keeps only the hotkey; **Show the refine button** in the mic button's menu brings it back.
+- **Settings.** The tray's Settings tab has a **Refine selected text** group: hotkey, default style, model, how long
+  the history keeps an entry, and whether the pencil button shows. Every setting is under `refine:` in `machines/_defaults.yaml`. **Hide this button** in the
+  pencil's menu keeps only the hotkey; **Show pencil** on the tray's **Voice typing** row, the tray menu's **Refine
+  button (pencil)** item or **Show the refine button** in the mic button's menu brings it back.
 
 ## Working with the departments
 

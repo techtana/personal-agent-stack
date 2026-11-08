@@ -114,6 +114,14 @@ class Configuration(unittest.TestCase):
         self.assertEqual((cfg.max_chars, cfg.button, cfg.timeout_s, cfg.default), (5000, False, 30.0, "grammar"))
         self.assertEqual(refine.Config.from_profile({}).hotkey, "ctrl+alt+r")
 
+    def test_keep_minutes(self):
+        self.assertEqual(refine.Config.from_profile({}).keep_minutes, 30.0)
+        self.assertEqual(refine.Config.from_profile({"refine": {"keep_minutes": "15"}}).keep_minutes, 15.0)
+        self.assertEqual(refine.Config.from_profile({"refine": {"keep_minutes": 0}}).keep_minutes, 1.0)
+        self.assertEqual(refine.Config.from_profile({"refine": {"keep_minutes": 99999}}).keep_minutes, 43200.0)
+        self.assertEqual([refine.keep_text(m) for m in (1, 5, 30, 60, 90, 240, 1440, 2880)],
+                         ["1 minute", "5 minutes", "30 minutes", "1 hour", "90 minutes", "4 hours", "1 day", "2 days"])
+
     def test_invalid_values_fall_back(self):
         warnings: list[str] = []
         cfg = refine.Config.from_profile({"refine": {"default": "shouting", "max_chars": "lots", "prompts": "x",
@@ -187,6 +195,28 @@ class Request(unittest.TestCase):
                            ("sure no problem", "Sure, no problem."), ("i cant attend", "I can't attend."),
                            ("heres the plan: a then b", "Here's the plan: a, then b.")):
             self.assertTrue(refine.check(src, fixed, polish)[0], src)
+
+    def test_garbled_replies_are_rejected(self):
+        # Seen live (2026-11-08, qwen3.6 35B with Ollama's MTP draft decoding): junk tokens spliced into the text.
+        polish = refine.style_named(refine.Config(), "polish")
+        src = "And then we ended up also talking about work and how to lead. Goals. Or house design."
+        ok, why = refine.check(src, "And then we ended up also talking aboutHA work and\u664b how to lead.", polish)
+        self.assertFalse(ok)
+        self.assertIn("CJK", why)
+        self.assertIn("CYRILLIC", refine.check(src, "And then we talked about work \u043c\u0435\u043d\u043e\u0432.",
+                                               polish)[1])
+        uuid = "[[6af00b01-ced5-4be9-90b9-82504d440504]]"
+        self.assertIn("link or reference", refine.check(uuid, "[[6af00b01-ced5eberg9-90b_lo4d440504]]", polish)[1])
+        loop = src + " " + "is a stability and as a manager " * 6
+        self.assertIn("repeats itself", refine.check(src, loop, polish)[1])
+
+    def test_scripts_and_links_that_were_there_pass(self):
+        polish = refine.style_named(refine.Config(), "polish")
+        thai = "\u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35 team, meet [[Anna]] about #project-x at https://example.com/a."
+        self.assertTrue(refine.check(thai, thai.replace("team", "Team"), polish)[0])
+        mine = refine.style_named(refine.Config(prompts={"to-japanese": "Translate into Japanese."}), "to-japanese")
+        self.assertTrue(refine.check("Good morning", "\u304a\u306f\u3088\u3046", mine)[0])  # your own style may
+        self.assertEqual(refine.kept_tokens("see [[A b]], ((x-1)) and #tag."), ["[[A b]]", "((x-1))", "#tag"])
 
     def test_same_text(self):
         self.assertTrue(refine.same_text("a  b\nc ", "a b c"))
@@ -293,6 +323,64 @@ class Log(unittest.TestCase):
         self.assertIsNone(self.log.find("Rejected suggestion."))          # never reached the document
         self.assertIsNone(self.log.find("Something else entirely."))
         self.assertEqual(self.log.reverted_ids(), {a["id"]})
+
+    def test_entries_expire_after_keep_minutes(self):
+        now = [1_800_000_000.0]
+        log = RefineLog(Path(self.tmp.name) / "timed.jsonl", keep_minutes=30, clock=lambda: now[0])
+        a = log.append({"kind": "refine", "before": TEXT, "after": FIXED, "status": "replaced"})
+        self.assertEqual((a["ts"], [e["id"] for e in log.entries()]), (now[0], [a["id"]]))
+        now[0] += 29 * 60
+        self.assertEqual(log.find(FIXED)[0]["id"], a["id"])          # still kept: revert works
+        now[0] += 2 * 60                                              # 31 minutes old
+        self.assertEqual((log.entries(), log.find(FIXED), log.get(a["id"])), ([], None, None))
+        self.assertTrue(log.path.exists())                           # hidden at once, deleted by the next prune
+        self.assertEqual(log.prune(), 1)
+        self.assertFalse(log.path.exists())                          # nothing left: the file goes too
+        self.assertEqual(log.prune(), 0)
+
+    def test_prune_keeps_fresh_entries_and_drops_broken_lines(self):
+        now = [1_800_000_000.0]
+        log = RefineLog(Path(self.tmp.name) / "timed.jsonl", keep_minutes=30, clock=lambda: now[0])
+        old = log.append({"kind": "refine", "before": "old text", "after": "Old text.", "status": "replaced"})
+        now[0] += 20 * 60
+        new = log.append({"kind": "refine", "before": "new text", "after": "New text.", "status": "replaced"})
+        with open(log.path, "a", encoding="utf-8") as f:
+            f.write("{half a line\n")
+        now[0] += 15 * 60                                             # old is 35 minutes old, new 15
+        self.assertEqual(log.prune(), 2)                              # the old entry and the broken line
+        text = log.path.read_text(encoding="utf-8")
+        self.assertNotIn("old text", text)
+        self.assertIn("new text", text)
+        self.assertEqual([e["id"] for e in log.entries()], [new["id"]])
+        self.assertNotEqual(old["id"], new["id"])
+
+    def test_append_prunes_and_a_shorter_window_applies_at_once(self):
+        now = [1_800_000_000.0]
+        log = RefineLog(Path(self.tmp.name) / "timed.jsonl", keep_minutes=30, clock=lambda: now[0])
+        log.append({"kind": "refine", "before": "first", "after": "First.", "status": "replaced"})
+        now[0] += 40 * 60
+        log.append({"kind": "refine", "before": "second", "after": "Second.", "status": "replaced"})
+        self.assertNotIn("first", log.path.read_text(encoding="utf-8"))   # gone before the new line was written
+        now[0] += 10 * 60
+        log.keep_minutes = 5                                           # the tray lowered refine.keep_minutes
+        self.assertEqual(log.entries(), [])
+        self.assertEqual(log.prune(), 1)
+
+    def test_entries_without_a_readable_time_are_dropped(self):
+        log = RefineLog(Path(self.tmp.name) / "timed.jsonl", keep_minutes=30)
+        log.path.write_text(json.dumps({"id": "x", "before": "no time"}) + "\n" +
+                            json.dumps({"id": "y", "time": "2026-11-07T14:22:33-07:00", "before": "an old one"}) + "\n",
+                            encoding="utf-8")
+        self.assertEqual(log.entries(), [])
+        self.assertEqual(log.prune(), 2)
+        self.assertFalse(log.path.exists())
+
+    def test_a_leftover_temp_file_is_removed(self):
+        log = RefineLog(Path(self.tmp.name) / "timed.jsonl")
+        tmp = log.path.with_name(log.path.name + ".tmp")
+        tmp.write_text('{"id": "z", "before": "text from an interrupted prune"}\n', encoding="utf-8")
+        log.prune()
+        self.assertFalse(tmp.exists())
 
     def test_similarity(self):
         self.assertEqual(similarity("a b", " a\nb "), 1.0)
@@ -633,7 +721,8 @@ class Flow(unittest.TestCase):
         self.assertEqual(self.ui.last("done"), "Replaced with Polish")
         self.assertEqual(self.esc, [True, False])
         self.assertEqual(self.sent, [(TEXT, "polish")])
-        self.assertEqual(self.refiner.last["id"], entry["id"])
+        self.assertEqual(self.refiner.last_id, entry["id"])
+        self.assertIn("keeps the original for 30 minutes", self.ui.hint("done"))
 
     def test_other_style_from_the_menu(self):
         self.refiner.start("bullets", "menu")
@@ -803,8 +892,16 @@ class Wiring(unittest.TestCase):
         call.assert_called_once_with(8790, "hide_refine")
         stop.assert_not_called()
 
+    def test_keep_minutes_setting(self):
+        keep = next(s for s in settings.SETTINGS if settings.setting_id(s) == "refine.keep_minutes")
+        self.assertEqual((keep.effect, settings._to_file_value(keep, "60")), ("refine", 60))
+        self.assertIn(str(int(refine.Config().keep_minutes)), keep.choices)
+        values = settings.current_values({"models": {}, "observability": {}, "services": {}, "ollama_env": {},
+                                          "dictation": {}, "refine": {"keep_minutes": 30}})
+        self.assertEqual(values["refine.keep_minutes"], "30")
+
     def test_style_and_model_need_no_restart(self):
-        for sid in ("refine.default", "refine.model"):
+        for sid in ("refine.default", "refine.model", "refine.keep_minutes"):
             setting = next(s for s in settings.SETTINGS if settings.setting_id(s) == sid)
             new = {"name": "T", "services": {"dictation": "native"}, "ports": {"dictation": 8790}, "dictation": {},
                    "refine": {}}
