@@ -88,7 +88,7 @@ entry stays and gets a "Done <date>" note.
 - **UX reviews use a researched rule catalog packaged as a skill (`/ux-rules`).** 122 rules in 14 categories plus 15
   contested or debunked ones; each rule carries an evidence grade, limits, how to detect it, how to build it and how
   to measure it. The skill refuses to A/B-test deceptive patterns. Why: the owner asked for proven UX rules, organised
-  by category, and a way to check a UI against them. Source: [PR #13](https://github.com/techtana/personal-agent-stack/pull/13),
+  by category, and a way to check a UI against them. Source: PR #13,
   [.claude/skills/ux-rules/references/](../../.claude/skills/ux-rules/references/README.md).
 - **Pending: `ux-rules` belongs in the `skills/` library** (convention of 2026-10-31). The commit that moves it
   (`a8400c9`) is on the PR branch but landed after PR #13 merged, so on `main` the skill is still in `.claude/skills/`.
@@ -101,7 +101,7 @@ entry stays and gets a "Done <date>" note.
 - **The owner's own skills are versioned in `skills/`, copied by `stack.py skills-sync`.** One way: a skill deleted
   at its source is reported `orphaned` and removed only in a reviewed commit. Files compare by sha256 with line
   endings ignored. Why: keep skills versioned and reusable by the stack's other clients. Source:
-  [PR #11](https://github.com/techtana/personal-agent-stack/pull/11), [skills/README.md](../../skills/README.md).
+  PR #11, [skills/README.md](../../skills/README.md).
 - **Never sync Anthropic's skills, `license: Proprietary` skills, or names under `exclude`.** `job-search-agent` is
   excluded because it holds personal data and the repository is public. Source: PR #11, `skills/sync.yaml`.
 - **A weekly Claude desktop scheduled task runs the sync in a throwaway worktree, scans for personal data, runs the
@@ -116,14 +116,13 @@ entry stays and gets a "Done <date>" note.
   Rejected: app deny rules as the boundary; WSL2 with the Claude Code sandbox (RAM); a Hyper-V VM per agent (2-4 GB
   RAM, no GPU) except for untrusted one-off runs. Open: D1-D4. The 2026-10-30 checks found D: is exFAT with no
   permissions, so personal data there must move or the drive be reformatted first. Source:
-  [PR #12](https://github.com/techtana/personal-agent-stack/pull/12), [AGENT-FILE-ISOLATION.md](../plans/AGENT-FILE-ISOLATION.md).
+  PR #12, [AGENT-FILE-ISOLATION.md](../plans/AGENT-FILE-ISOLATION.md).
 
 ## 2026-10-28
 
 - **PR #8 merged:** the private-only gateway build, the per-process view and the hidden-console service start below
   are on `main` since 2026-10-28. The build also checks Claude Code profile B aliases, and profile B sets
-  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and denies WebFetch and WebSearch. Source:
-  [PR #8](https://github.com/techtana/personal-agent-stack/pull/8).
+  `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and denies WebFetch and WebSearch. Source: PR #8.
 - **`stack.py down` leaves Task Scheduler-supervised services to `stack.py tasks stop`.** Source: PR #8 (merge
   conflict resolution); the reason is not recorded there (the 2026-10-26 entry says `tasks stop` disables the task so
   the watchdog does not revive it).
@@ -132,7 +131,7 @@ entry stays and gets a "Done <date>" note.
 
 - **Tray window has Overview, Usage and Settings tabs.** Settings writes only the changed keys of
   `machines/<HOST>.yaml` (comments kept), rebuilds, and restarts only what the change affects. Why: the owner wanted
-  to change settings and see usage per model without editing YAML or reading traces. Source: [PR #9](https://github.com/techtana/personal-agent-stack/pull/9),
+  to change settings and see usage per model without editing YAML or reading traces. Source: PR #9,
   [plan](plans/2026-10-26-tray-status-window.md).
 - **Cloud tiers are read-only in the tray.** Turning them on stays a `.env` decision. Why: private first. Rejected:
   a cloud toggle in Settings. Source: PR #9.
@@ -149,7 +148,7 @@ entry stays and gets a "Done <date>" note.
 - **Pending (PR #8; done 2026-10-28): the gateway build is private only.** Routers, fallbacks and defaults name private deployments
   only; the build fails on an external target and refuses `external.enabled: true` until the privacy gate exists.
   Why: enforce private first in generated config, not only in docs. Rejected: `cloud.enabled: auto` (PR #2).
-  Source: [PR #8](https://github.com/techtana/personal-agent-stack/pull/8), SHARED-COMPONENTS S6.
+  Source: PR #8, SHARED-COMPONENTS S6.
 - **No privacy add-ons for clients outside the boundary** (Claude Code on a subscription, Claude Desktop). A client
   counts as protected only when its sole model endpoint is the gated gateway. Why: such add-ons can only advise but
   suggest enforcement. Source: AGENTS.md rule 9, `memory/lessons.md`.
@@ -191,7 +190,7 @@ entry stays and gets a "Done <date>" note.
 - **One scheduled task per service, with a 2-minute repeating watchdog trigger (IgnoreNew); `tasks stop` disables the
   task.** Why: Task Scheduler's restart on failure did not restart a killed supervisor within 2.5 minutes. Default
   trigger is `startup` (S4U, elevated); `logon` registers without elevation. Source:
-  [PR #7](https://github.com/techtana/personal-agent-stack/pull/7), SHARED-COMPONENTS V10.
+  PR #7, SHARED-COMPONENTS V10.
 - **The supervisor joins a kill-on-close job object before it starts the service.** Why: the service tree dies with
   it and there is no spawn-to-assign race. Source: `459904b`, `memory/lessons.md`.
 - **Windows dependencies come from a generated winget configuration file**, not from `stack.py setup`. Why:
@@ -202,7 +201,7 @@ entry stays and gets a "Done <date>" note.
 
 - **A windowless tray app launched through Explorer owns the services; start at login is a Startup-folder shortcut.**
   Why: services must outlive any terminal or agent session. Rejected: starting services from an agent shell with
-  `CREATE_BREAKAWAY_FROM_JOB` (tried the same day, unreliable). Source: [PR #3](https://github.com/techtana/personal-agent-stack/pull/3),
+  `CREATE_BREAKAWAY_FROM_JOB` (tried the same day, unreliable). Source: PR #3,
   [plan](plans/2026-10-25-tray-app.md).
 - **Pending (PR #8; done 2026-10-28): services run in a hidden console (`CREATE_NO_WINDOW`).** Why: closing a visible console killed a
   server. Source: `d259e76`.
@@ -218,7 +217,7 @@ entry stays and gets a "Done <date>" note.
   tier switch. Source: `memory/lessons.md`.
 - **LiteLLM 1.106.3 (pinned) is the gateway, one complexity router per department; the custom router is removed.**
   Why: a hand-rolled proxy broke tool-using clients. Rejected: custom FastAPI router, Modelfiles, Docker stack.
-  Source: [PR #2](https://github.com/techtana/personal-agent-stack/pull/2), ORCHESTRATOR-DESIGN section 2.
+  Source: PR #2, ORCHESTRATOR-DESIGN section 2.
 - **Departments are defined once in `agents/*.yaml` and generated into every tool.** Why: duplicated prompts drifted.
   Source: PR #2.
 - **Machine profiles in `machines/`** (hardware class plus host overrides; `doctor --write-profile` adds a host).
@@ -251,6 +250,6 @@ entry stays and gets a "Done <date>" note.
 ## Earlier
 
 - 2026-06-07: local-first router with cloud escalation by token count and keyword, in Docker Compose
-  ([PR #1](https://github.com/techtana/personal-agent-stack/pull/1)). Superseded by 2026-10-25 (LiteLLM gateway).
+  (PR #1). Superseded by 2026-10-25 (LiteLLM gateway).
 - 2026-05-02: the "Deep-Architect" design, with a message bus and an Ollama adapter. Superseded by 2026-10-24
   (archived in [archive/DESIGN-2025.md](../archive/DESIGN-2025.md)).

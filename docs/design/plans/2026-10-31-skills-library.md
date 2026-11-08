@@ -1,4 +1,4 @@
-**Status:** done 2026-10-31 ([PR #11](https://github.com/techtana/personal-agent-stack/pull/11)); the weekly scheduled
+**Status:** done 2026-10-31 (PR #11); the weekly scheduled
 task is not created yet (open item 12 in `memory/state.md`).
 
 # Skills library and `skills-sync`
