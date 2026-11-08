@@ -1,6 +1,6 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-08 (voice typing history kept for dictation.keep_minutes; open item 33). Before that, the same day (the installer makes an app apart from the repository; open item 32). Before that, the same day (the installer asks which features to install, with their load on this PC, and the tray's Features card; open item 30). Before that, 2026-11-08 (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+Updated: 2026-11-08 (voice typing history kept for dictation.keep_minutes; open item 35). Before that, the same day (the installer makes an app apart from the repository; open item 32). Before that, the same day (the installer asks which features to install, with their load on this PC, and the tray's Features card; open item 30). Before that, 2026-11-08 (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
@@ -550,7 +550,28 @@ once across a session restart.
    After merging, run install.cmd from the main checkout once. Then check that the Start menu entry and the login
    shortcut start `%LOCALAPPDATA%\Programs\AgentStack`, and that Open WebUI shows the old chats and images. Then
    restart Claude Desktop (recordings). Delete the checkout's `.run`, `traces` and `.env` when the app works.
-33. Voice typing history (2026-11-08, branch claude/voice-typing-history-edd081). Each dictation that produced text
+33. Tray GPU card lists every model on the card (2026-11-08, branch claude/whisper-gpu-memory-44134a). It was
+   "GPU: loaded in Ollama" and asked only Ollama, so voice typing's Whisper (loaded on cuda that day, ~1.2 GB) and
+   ComfyUI's models never showed. Now "GPU: loaded models" (stacklib/gpu_models.py) adds a "Used by" column and merges
+   Ollama's /api/ps, voice typing's /health (size is the measured figure per model, shown with ~; new health fields
+   idle_s and unload_after_min give "Unloads") and ComfyUI's /system_stats torch_vram_total (listed above 256 MB).
+   Not listed: the recordings server's Whisper inside Claude Desktop (no port to ask). Verified: unit tests; rows built
+   from the live services (qwen3.5:9b 5.7 GB + whisper large-v3-turbo ~1.2 GB; nvidia-smi 9.1 of 12 GB used); the
+   card's rows rendered in a hidden Tk frame. Not verified: the live tray (restart it from the main checkout after
+   merging; restart voice typing for the Unloads column).
+34. Models folder vs the Ollama app's Model location (2026-11-08, branch claude/voice-typing-manual-command-3e6665).
+   After install.cmd the tray showed "Models missing" although `ollama list` had all three models: the new profile
+   named ~\.ollama\models, but the Ollama app's own Settings > Model location (`%LOCALAPPDATA%\Ollama\db.sqlite`) is
+   D:\ollama\models, which wins over OLLAMA_MODELS, so the pulls went to D:. Now:
+   - the Features card asks the running Ollama (/api/tags, cached 5 s) and falls back to manifests in the folder
+     Ollama really reads; a profile that differs from the app's setting shows as a warning on the row;
+   - the installer offers the app's folder first (with a note), refuses another models folder while the app setting
+     differs, and `stack.py setup` adopts it and writes it into the profile;
+   - the move step does not move models where Ollama would not read them, and the env step warns.
+   Verified: unit tests (tests/test_ollama_location.py and the full suite); on this PC, read-only, the status reads
+   Installed with the override note and the installer's default is D:\ollama\models. Not run: the installer itself.
+   This PC's profile still says ~\.ollama\models: rerun install.cmd (it now offers D:) or set the folder in Settings.
+35. Voice typing history (2026-11-08, branch claude/voice-typing-history-edd081). Each dictation that produced text
    goes to `.run/dictation/voice-history.jsonl` (stacklib/dictation/voicelog.py, the refine log's store): app, window,
    the transcript as heard, the text typed, status, seconds of speech. Entries expire after `dictation.keep_minutes`
    (30; tray: Keep voice typing history for, applied through `POST /reload` without a restart) and are pruned at

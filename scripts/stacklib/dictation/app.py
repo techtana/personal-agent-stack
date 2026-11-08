@@ -359,6 +359,7 @@ class App:
     def health(self) -> dict:
         return {"ok": True, "state": self.state, "engine": self.engine.state, "device": self.engine.device,
                 "model": self.engine.model_name, "note": self.engine.note, "vad": self.vad.name,
+                "idle_s": round(time.monotonic() - self.engine.last_used), "unload_after_min": self.cfg.unload_after_min,
                 "hotkey": self.cfg.hotkey, "hotkey_ok": not self.hotkey_error, "mode": self.cfg.mode,
                 "style": self.cfg.style, "language": self.cfg.language, "button": bool(self.cfg.button),
                 "refine": {"hotkey": self.rcfg.hotkey, "hotkey_ok": not self.refine_hotkey_error,
