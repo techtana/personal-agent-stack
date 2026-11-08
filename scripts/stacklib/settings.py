@@ -117,6 +117,10 @@ SETTINGS = [
     Setting("refine", "keep_minutes", "Keep refine history for (minutes)", "choice",
             "How long each suggestion and the text it replaced stay in the refine log for History and Revert; older "
             "entries are deleted.", "refine", ["5", "15", "30", "60", "240", "1440"]),
+    Setting("refine", "auto_copy", "Copy refined text to the clipboard", "bool",
+            "Off: what you copied stays on the clipboard, and the bubble's Copy button puts the refined text there "
+            "when you want it. On: the refined text always ends up on the clipboard too, replacing what you copied.",
+            "refine"),
     Setting("refine", "button", "Show the refine button", "bool",
             "The pencil button next to the mic; the hotkey works without it.", "dictation"),
     Setting("read_aloud", "enabled", "Read aloud", "bool",

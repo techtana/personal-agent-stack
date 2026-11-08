@@ -140,13 +140,17 @@ def capture(ws, clip, target: int, *, elevated: bool, copy_wait: float = 2.0, pu
 
 
 def replace(ws, clip, sel: Selection, new_text: str, *, ours=lambda hwnd: False, copy_wait: float = 1.0,
-            settle: float = 1.0) -> tuple[str, str]:
+            settle: float = 1.0, auto_copy: bool = False) -> tuple[str, str]:
     """Paste `new_text` over the selection if the same text is still selected in the same window.
-    Returns (outcome, detail): "replaced"; "copied" when the new text went to the clipboard instead; "skipped" when
-    nothing was touched. It never pulls the focus back from another app you moved to while the model worked, only
-    from a window of ours (`ours(hwnd)`: a menu, the bubble, the history window)."""
+    Returns (outcome, detail): "replaced"; "skipped" when nothing was replaced and your clipboard was left as it was
+    (the bubble's Copy button puts the new text there); "copied" when nothing was replaced and `auto_copy` put the new
+    text on the clipboard. With `auto_copy` a replaced text also stays on the clipboard instead of what you had copied.
+    It never pulls the focus back from another app you moved to while the model worked, only from a window of ours
+    (`ours(hwnd)`: a menu, the bubble, the history window)."""
 
     def to_clipboard(why: str) -> tuple[str, str]:
+        if not auto_copy:   # what you copied stays yours; the bubble offers Copy
+            return "skipped", why + " Your clipboard was left alone; Copy in the bubble puts the new text on it."
         clip.set_text(new_text, hide=False)  # you will paste it yourself, so clipboard history may keep it
         return "copied", why + " The new text is on the clipboard: select the old text and press Ctrl+V."
 
@@ -191,5 +195,8 @@ def replace(ws, clip, sel: Selection, new_text: str, *, ours=lambda hwnd: False,
     if not ok:
         return to_clipboard("Windows refused the simulated keys.")
     if ws.sequence() == seq:
-        clip.restore(snap)
+        if auto_copy:
+            clip.set_text(new_text, hide=False)   # keep it there, and let clipboard history have it
+        else:
+            clip.restore(snap)
     return "replaced", f"{len(new_text)} characters into {sel.app or 'the window'}"

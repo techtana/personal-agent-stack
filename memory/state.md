@@ -419,6 +419,12 @@ once across a session restart.
    probe). Verified: unit tests; a harness in the voice typing venv with a stub app opened the real menu, a scripted
    "2" key picked Fix spelling and grammar only with the right window, Esc returned focus. Not verified: the live
    app's hotkey, the menu's look, the caret position in Word, Logseq and Notion.
+   2026-11-08 (branch claude/refine-copy-button): refine no longer puts text on the clipboard by itself. The result
+   bubble has a **Copy** button (also when nothing was replaced, and **Copy suggestion** for a rejected reply); the
+   pointer over the bubble holds it open. `refine.auto_copy` (tray: Copy refined text to the clipboard, off by default)
+   puts every refined text there, replaced or not. Not-replaced refines are logged as `skipped` and Revert still finds
+   them. Verified: unit tests (590 passed); a Tk harness in the voice typing venv (button shown, click copied and read
+   "Copied", hover paused the hide, the bubble dropped the text when it closed). Not verified: a refine in the live app.
 28. Privacy cleanup (2026-11-07, branch claude/personal-info-cleanup-0f23d8). The repository is public, and
    it named the computer and the Windows account. Now machine profiles are local: `machines/*.yaml` except
    `_defaults.yaml` is ignored, the installer writes the profile, and a linked worktree reads the main checkout's

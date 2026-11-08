@@ -591,21 +591,39 @@ class Replace(unittest.TestCase):
         sel = grab(win)
         win.select("another sentence")
         outcome, detail = self.put(win, sel, FIXED)
-        self.assertEqual(outcome, "copied")
+        self.assertEqual(outcome, "skipped")
         self.assertIn("selection changed", detail)
+        self.assertIn("clipboard was left alone", detail)
+        self.assertEqual((win.pastes, win.board["text"]), ([], "another sentence"))   # the check's copy, put back
+
+    def test_auto_copy_puts_unreplaced_text_on_the_clipboard(self):
+        win = FakeWin()
+        sel = grab(win)
+        win.select("another sentence")
+        outcome, detail = selection.replace(win, FakeClip(win), sel, FIXED, copy_wait=0.05, settle=0, auto_copy=True)
+        self.assertEqual(outcome, "copied")
+        self.assertIn("on the clipboard", detail)
         self.assertEqual((win.pastes, win.board["text"], win.board["hidden"]), ([], FIXED, False))
+
+    def test_auto_copy_keeps_a_replaced_text_on_the_clipboard(self):
+        win = FakeWin()
+        sel = grab(win)
+        outcome, _ = selection.replace(win, FakeClip(win), sel, FIXED, copy_wait=0.05, settle=0, auto_copy=True)
+        self.assertEqual((outcome, win.document), ("replaced", FIXED))
+        self.assertEqual((win.board["text"], win.board["hidden"]), (FIXED, False))   # in clipboard history too
 
     def test_selection_gone_or_window_switched(self):
         win = FakeWin()
         sel = grab(win)
         win.select("")
-        self.assertEqual(self.put(win, sel, FIXED)[0], "copied")
+        self.assertEqual(self.put(win, sel, FIXED)[0], "skipped")
         win = FakeWin()
         sel = grab(win)
         win.fg, win.refuse_activation = 777, True
         outcome, detail = self.put(win, sel, FIXED)
-        self.assertEqual(outcome, "copied")
+        self.assertEqual(outcome, "skipped")
         self.assertIn("another window", detail)
+        self.assertEqual(win.board["text"], "what you copied earlier")
         self.assertEqual(win.pastes, [])
 
     def test_never_pulls_the_focus_back_from_another_app(self):
@@ -613,7 +631,7 @@ class Replace(unittest.TestCase):
         sel = grab(win)
         win.fg = 777                                 # you moved on to another app while the model worked
         outcome, _detail = self.put(win, sel, FIXED)
-        self.assertEqual((outcome, win.fg, win.activations, win.pastes), ("copied", 777, 0, []))
+        self.assertEqual((outcome, win.fg, win.activations, win.pastes), ("skipped", 777, 0, []))
         win = FakeWin()
         sel = grab(win)
         win.fg = 555                                 # one of our windows (a menu): hand the focus back
@@ -626,7 +644,7 @@ class Replace(unittest.TestCase):
         sel = grab(win)
         win.after_copy = lambda w: setattr(w, "fg", 777)
         outcome, detail = self.put(win, sel, FIXED)
-        self.assertEqual((outcome, win.pastes), ("copied", []))
+        self.assertEqual((outcome, win.pastes), ("skipped", []))
         self.assertIn("another window", detail)
 
     def test_whole_line_copy_at_the_check(self):
@@ -634,7 +652,7 @@ class Replace(unittest.TestCase):
         sel = grab(win)
         win.custom = '{"isFromEmptySelection":true}'   # the selection is gone; VS Code copied the caret's line
         outcome, detail = self.put(win, sel, FIXED)
-        self.assertEqual((outcome, win.pastes), ("copied", []))
+        self.assertEqual((outcome, win.pastes), ("skipped", []))
         self.assertIn("no longer selected", detail)
 
     def test_unsaveable_clipboard_leaves_everything_alone(self):
@@ -660,8 +678,18 @@ class RecordingUI:
 
     def __getattr__(self, kind):
         if kind in ("working", "done", "error", "cancelled", "note"):
-            return lambda title, body="", hint="": self.calls.append((kind, title, hint))
+            def call(title, body="", hint="", copy="", copy_label="Copy"):
+                self.calls.append((kind, title, hint))
+                self.copies.append((kind, copy, copy_label))
+            return call
         raise AttributeError(kind)
+
+    @property
+    def copies(self) -> list:
+        return self.__dict__.setdefault("_copies", [])
+
+    def copy_of(self, kind: str) -> tuple[str, str]:
+        return next(((c, label) for k, c, label in reversed(self.copies) if k == kind), ("", ""))
 
     def last(self, kind: str) -> str:
         return next((t for k, t, _h in reversed(self.calls) if k == kind), "")
@@ -749,6 +777,42 @@ class Flow(unittest.TestCase):
         self.assertTrue(self.refiner.revert("", "style-menu", target=100))
         self.wait()
         self.assertEqual(self.win.document, TEXT)
+
+    def test_done_bubble_offers_copy_and_leaves_the_clipboard(self):
+        self.refiner.start("", "test")
+        self.wait()
+        self.assertEqual(self.ui.copy_of("done"), (FIXED, "Copy"))
+        self.assertEqual(self.win.board["text"], "what you copied earlier")
+        self.assertNotIn("clipboard too", self.ui.hint("done"))
+
+    def test_auto_copy_setting(self):
+        self.cfg = refine.Config(auto_copy=True)
+        self.refiner.start("", "test")
+        self.wait()
+        self.assertEqual((self.win.document, self.win.board["text"]), (FIXED, FIXED))
+        self.assertIn("clipboard too", self.ui.hint("done"))
+
+    def test_not_replaced_offers_copy(self):
+        self.gate = threading.Event()
+        self.refiner.start("", "test")
+        deadline = time.monotonic() + 5
+        while not self.sent and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.win.select("another sentence")          # you selected something else while the model worked
+        self.gate.set()
+        self.wait()
+        self.assertEqual(self.ui.last("error"), "Nothing was replaced")
+        self.assertEqual(self.ui.copy_of("error"), (FIXED, "Copy"))
+        self.assertEqual(self.win.board["text"], "another sentence")   # your clipboard, not the new text
+        self.assertEqual(self.log.entries()[0]["status"], "skipped")
+        self.win.select(FIXED)                       # pasted with Copy: Revert still finds it
+        self.assertIsNotNone(self.log.find(FIXED))
+
+    def test_rejected_reply_offers_copy_suggestion(self):
+        self.reply = refine.Result(TEXT, False, "the model answered instead of rewriting", 0.4, suggestion="Sure!")
+        self.refiner.start()
+        self.wait()
+        self.assertEqual(self.ui.copy_of("error"), ("Sure!", "Copy suggestion"))
 
     def test_other_style_from_the_menu(self):
         self.refiner.start("bullets", "menu")
@@ -952,7 +1016,7 @@ class Wiring(unittest.TestCase):
         self.assertEqual(values["refine.keep_minutes"], "30")
 
     def test_style_and_model_need_no_restart(self):
-        for sid in ("refine.default", "refine.model", "refine.keep_minutes"):
+        for sid in ("refine.default", "refine.model", "refine.keep_minutes", "refine.auto_copy"):
             setting = next(s for s in settings.SETTINGS if settings.setting_id(s) == sid)
             new = {"name": "T", "services": {"dictation": "native"}, "ports": {"dictation": 8790}, "dictation": {},
                    "refine": {}}

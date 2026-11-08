@@ -28,6 +28,7 @@ FONT = "Segoe UI" if IS_WINDOWS else "TkDefaultFont"
 BG, BORDER, FG, MUTED = "#1f1f1f", "#3d3d3d", "#f3f3f3", "#b4b4b4"
 STATE_FILL = {"idle": "#2d2d2d", "listening": "#c42b1c", "working": "#0f6cbd", "done": "#107c10", "error": "#c42b1c",
               "speaking": "#0f6cbd", "paused": "#2d2d2d"}
+ACTION_BG, ACTION_HOVER = "#2d2d2d", "#3a3a3a"   # buttons in the bubble (Copy)
 STATE_INK = {"idle": FG, "listening": "#ff9a8f", "working": "#8cc8ff", "done": "#7fd67f", "error": "#ff9a8f",
              "speaking": "#8cc8ff", "paused": FG}
 # Segoe Fluent Icons / MDL2 Assets code points: Microphone, Edit (pencil), Volume (speaker), Stop, Play, CheckMark,
@@ -114,6 +115,12 @@ class Overlay:
         self.hint = tk.Label(inner, text="", bg=BG, fg=MUTED, font=(FONT, 8), anchor="w", justify="left",
                              wraplength=self.wrap)
         self.hint.pack(anchor="w", fill="x", pady=(int(4 * self.scale), 0))
+        # Buttons under the text (refine's Copy). Packed only while a bubble has some.
+        self.actions = tk.Frame(inner, bg=BG)
+        self.action_buttons: list[tk.Label] = []
+        # The pointer over the bubble holds it open, so there is time to reach a button.
+        self.bubble.bind("<Enter>", lambda _e: self._hold_bubble(True))
+        self.bubble.bind("<Leave>", lambda _e: self._hold_bubble(False))
 
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         width = self._bar_width()
@@ -246,7 +253,7 @@ class Overlay:
     # ---------------------------------------------------------------- state (call through post())
 
     def set_state(self, state: str, title: str = "", body: str = "", hint: str = "", hide_after: float = 0.0,
-                  which: str = "mic") -> None:
+                  which: str = "mic", actions=None) -> None:
         self.states[which] = state
         c = self.canvases[which]
         c.configure(bg=STATE_FILL.get(state, STATE_FILL["idle"]))
@@ -259,7 +266,8 @@ class Overlay:
         if state != "working":
             c.itemconfigure(self.arcs[which], extent=0)
         if title or body:
-            self.show_bubble(title, body, hint, ink=STATE_INK.get(state, FG), owner=state, source=which)
+            self.show_bubble(title, body, hint, ink=STATE_INK.get(state, FG), owner=state, source=which,
+                             actions=actions)
         if hide_after:
             self._schedule_hide(hide_after, which)
         elif self.hide_jobs[which]:
@@ -288,9 +296,11 @@ class Overlay:
             self._place_bubble()
 
     def show_bubble(self, title: str, body: str = "", hint: str = "", ink: str = FG, owner: str = "",
-                    source: str = "mic") -> None:
+                    source: str = "mic", actions=None) -> None:
+        """actions: [(label, fn)] buttons under the text, e.g. refine's Copy; None or [] shows none."""
         self.bubble_owner = owner
         self.bubble_from = source
+        self._set_actions(actions or [])
         self.title.configure(text=title, fg=ink)
         self.body.configure(text=_tail(body, 260))
         self.body.pack_forget() if not body else self.body.pack(anchor="w", fill="x", pady=(int(3 * self.scale), 0))
@@ -314,6 +324,50 @@ class Overlay:
         self.bubble.withdraw()
         self.bubble_owner = ""
         self.bubble_from = ""
+        self._set_actions([])   # drops the text a Copy button held
+
+    def _set_actions(self, actions) -> None:
+        for b in self.action_buttons:
+            b.destroy()
+        self.action_buttons = []
+        if not actions:
+            self.actions.pack_forget()
+            return
+        for label, fn in actions:
+            b = tk.Label(self.actions, text=label, bg=ACTION_BG, fg=FG, font=(FONT, 9), cursor="hand2",
+                         padx=int(10 * self.scale), pady=int(3 * self.scale), highlightthickness=1,
+                         highlightbackground=BORDER)
+            b.bind("<Enter>", lambda _e, b=b: b.configure(bg=ACTION_HOVER))
+            b.bind("<Leave>", lambda _e, b=b: b.configure(bg=ACTION_BG))
+            b.bind("<ButtonRelease-1>", lambda _e, b=b, fn=fn, label=label: self._action(b, fn, label))
+            b.pack(side="left", padx=(0, int(6 * self.scale)))
+            self.action_buttons.append(b)
+        self.actions.pack(anchor="w", pady=(int(7 * self.scale), 0))
+
+    def _action(self, button: tk.Label, fn, label: str) -> None:
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001 - say so in the bubble, keep the app
+            print(f"[dictation] {label} failed: {e}", flush=True)
+            button.configure(text=f"{label} failed")
+            return
+        done = "Copied" if label.lower().startswith("copy") else "Done"
+        button.configure(text=f"{done} \u2713", fg=STATE_INK["done"])
+        which = self.bubble_from or "mic"
+        if which in self.hide_jobs:
+            self._schedule_hide(2.5, which)
+
+    def _hold_bubble(self, inside: bool) -> None:
+        """Pause the bubble's auto-hide while the pointer is over it; once it leaves, hide it a little later."""
+        which = self.bubble_from
+        if which not in self.hide_jobs or not self.action_buttons:
+            return
+        if inside:
+            if self.hide_jobs[which]:
+                self.root.after_cancel(self.hide_jobs[which])
+                self.hide_jobs[which] = None
+        elif self.states.get(which) in ("done", "error") and not self.hide_jobs[which]:
+            self._schedule_hide(3, which)
 
     def _schedule_hide(self, seconds: float, which: str = "mic") -> None:
         if self.hide_jobs[which]:

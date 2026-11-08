@@ -149,6 +149,8 @@ refine:
   max_chars: 10000           # longest selection sent in one go
   timeout_s: 120             # give up waiting for the model after this long; nothing is replaced
   keep_minutes: 30           # minutes the refine log keeps an entry (1 to 43200); older ones are deleted
+  auto_copy: false           # true: the refined text also goes on the clipboard (replacing what you copied);
+                             # false: only the Copy button in the bubble puts it there
   prompts: {}                # your own styles, shown in the button's menu: id: instructions, or id: {name, prompt}.
                              # A built-in id replaces that style's instructions. Example (in machines/<HOST>.yaml):
                              #   prompts:
