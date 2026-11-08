@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from . import IS_WINDOWS, REPO, info, which
-from . import paths
+from . import paths, usage_log
 from .media import _run, _uv_env, media, system_python
 
 SERVER_SRC = REPO / "scripts" / "whisper_mcp.py"
@@ -44,6 +44,9 @@ def server_env(profile: dict) -> dict[str, str]:
         "WHISPER_COMPUTE": m.get("whisper_compute") or "int8_float16",
         "WHISPER_CPU_MODEL": m.get("whisper_cpu_model") or "small",
         "HF_HUB_DISABLE_TELEMETRY": "1",
+        # One usage record per transcription into this checkout's traces/usage, for the tray's Usage tab.
+        **usage_log.env_for(profile),
+        "AGENT_STACK_CLIENT": "Claude Desktop",
     }
     if m.get("hf_home"):
         env["HF_HOME"] = m["hf_home"]

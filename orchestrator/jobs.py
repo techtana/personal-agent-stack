@@ -86,7 +86,9 @@ class JobStore:
         payload = {"model": job["model_alias"], "max_tokens": MAX_OUTPUT_TOKENS, "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user}], "metadata": {"department": job["department"], "job_id": job_id, "source": "orchestrator-mcp"}}
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(900.0, connect=10.0)) as client:
-                r = await client.post(f"{LITELLM}/v1/chat/completions", json=payload, headers={"Authorization": f"Bearer {MASTER_KEY}"})
+                r = await client.post(f"{LITELLM}/v1/chat/completions", json=payload,
+                                      headers={"Authorization": f"Bearer {MASTER_KEY}",
+                                               "User-Agent": "agent-stack-orchestrator"})  # named in the Usage tab
             if r.status_code != 200:
                 self.update(job_id, status="failed", error=f"HTTP {r.status_code}: {r.text[:500]}", finished_at=now())
                 return

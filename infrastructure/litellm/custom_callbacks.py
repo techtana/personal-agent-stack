@@ -144,6 +144,21 @@ def _model_location(data: dict) -> str | None:
     return None
 
 
+def _deployment_info(kwargs: dict) -> Mapping:
+    """model_info of the deployment that served a request: data_class (private | external) and location (onprem |
+    confidential-cloud), written by stacklib/litellm_build.py. The Usage tab marks outside APIs with them."""
+    params = kwargs.get("litellm_params")
+    if not isinstance(params, Mapping):
+        return {}
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata = params.get(metadata_key)
+        info = metadata.get("model_info") if isinstance(metadata, Mapping) else None
+        if isinstance(info, Mapping) and (info.get("data_class") or info.get("location")):
+            return info
+    info = params.get("model_info")
+    return info if isinstance(info, Mapping) else {}
+
+
 def _flag(name: str) -> bool:
     """Environment switches written by `stack.py up` from machines/<HOST>.yaml; on unless set to 0."""
     return os.environ.get(name, "1").strip().lower() not in ("0", "false", "no", "off")
@@ -278,6 +293,7 @@ class TraceLogger(CustomLogger):
             hidden = slo.get("hidden_params") or {}
             provider = slo.get("custom_llm_provider") or (kwargs.get("litellm_params") or {}).get("custom_llm_provider")
             is_ollama = str(provider or "").startswith("ollama")
+            deployment = _deployment_info(kwargs)
             rec = {
                 "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "status": status,
@@ -286,6 +302,8 @@ class TraceLogger(CustomLogger):
                 "provider": provider,
                 "process": "ollama" if is_ollama else str(provider or "unknown"),
                 "api_base": slo.get("api_base"),
+                "data_class": deployment.get("data_class"),
+                "location": deployment.get("location"),
                 "call_type": slo.get("call_type") or kwargs.get("call_type"),
                 "stream": bool(kwargs.get("stream") or (kwargs.get("optional_params") or {}).get("stream")),
                 "prompt_tokens": slo.get("prompt_tokens") or usage.get("prompt_tokens") or 0,
