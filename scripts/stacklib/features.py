@@ -460,6 +460,7 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
     if fid == "read_aloud":
         variant = str((profile.get("read_aloud") or {}).get("kokoro") or "fp32")
         name, disk, ram = KOKORO.get(variant, KOKORO["fp32"])
+        disk += _packs_gb(profile)   # the more voices chosen (Piper), on top of Kokoro
         cached = _kokoro_cached(profile, variant)
         idle = float((profile.get("read_aloud") or {}).get("unload_after_min") or 0)
         if not name:
@@ -513,6 +514,14 @@ KOKORO = {**{name: (name, float(v.get("download_gb") or 0), float(v.get("ram_gb"
           "off": ("", 0.0, 0.0)}
 # onnxruntime-gpu (0.23 GB) and cuDNN 9 for CUDA 13 (0.58 GB), measured 2026-11-08
 KOKORO_GPU_GB = float(catalog.kokoro().get("gpu_libraries_gb") or 0.8)
+
+
+def _packs_gb(profile: dict) -> float:
+    """Download size of the Piper voices read_aloud.packs names."""
+    from .dictation.speak import PIPER_VOICES
+
+    chosen = (profile.get("read_aloud") or {}).get("packs") or []
+    return sum(float((PIPER_VOICES.get(str(k)) or {}).get("size_mb") or 0) for k in chosen) / 1000
 
 
 def _kokoro_cached(profile: dict, variant: str) -> bool:
@@ -883,9 +892,13 @@ def _status_read_aloud(profile: dict, **_) -> Status:
     from . import dictation
     from .dictation.hotkey import label
 
+    from .dictation.speak import PIPER_VOICES, language_label
+
     key = (profile.get("read_aloud") or {}).get("hotkey") or "ctrl+alt+s"
+    more = [language_label(str(PIPER_VOICES[k].get("language") or "")) for k in dictation.installed_packs(profile)]
+    extra = f" More voices: {', '.join(dict.fromkeys(more))}." if more else ""
     return _switch(dictation.read_aloud_installed(profile), switch_on("read_aloud", profile), "Read aloud",
-                   f"Select text, then press {label(str(key))} or click the speaker button.", "Read aloud")
+                   f"Select text, then press {label(str(key))} or click the speaker button.{extra}", "Read aloud")
 
 
 def _status_voice_typing(profile: dict, **_) -> Status:

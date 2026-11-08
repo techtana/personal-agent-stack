@@ -3,9 +3,11 @@ library only (plus the installer catalog, read with PyYAML, which both environme
 cover it without the app's environment. tts.py runs the voices, player.py plays
 the audio, reader.py runs the flow behind the speaker button and its hotkey.
 
-Two kinds of voice speak, both on this machine; nothing leaves it:
+Three kinds of voice speak, all on this machine; nothing leaves it:
   - Kokoro-82M (Apache-2.0) through ONNX Runtime on the CPU: natural voices in US and UK English, Spanish, French,
     Hindi, Italian and Brazilian Portuguese. espeak-ng turns the text into phonemes first, as kokoro-onnx does.
+  - Piper (VITS) voices for more languages (German, Russian, Vietnamese, and more voices for Italian, Spanish,
+    Portuguese and French), from config/installer.yaml voice_packs: optional downloads, run the same way.
   - Windows' own voices (SAPI, and the OneCore voices Windows installs with a language's speech pack): instant and
     flatter, in every language that has one (Settings > Time & language > Speech > Add voices).
 
@@ -21,6 +23,7 @@ import os
 import re
 import unicodedata
 from dataclasses import dataclass, field, fields
+from pathlib import Path
 
 from .. import catalog
 
@@ -60,10 +63,10 @@ DEVICES = ("auto", "gpu", "cpu")   # where Kokoro runs: auto = the GPU when its 
 
 @dataclass(frozen=True)
 class Voice:
-    id: str           # af_heart, or windows:<Name> for a Windows voice
+    id: str           # af_heart, piper:<voice file>[:<speaker>], or windows:<Name> for a Windows voice
     name: str         # what menus show: Heart, Zira
     language: str     # en-us, en-gb, fr-fr, th-th, ...
-    engine: str       # kokoro | windows
+    engine: str       # kokoro | piper | windows
     gender: str = ""  # female | male | ""
     token: str = ""   # Windows: the SAPI token's registry path
 
@@ -75,8 +78,8 @@ class Voice:
     def label(self) -> str:
         """'Heart (US English, female)', 'Zira (US English, female, Windows)'."""
         bits = [language_label(self.language)] + ([self.gender] if self.gender else [])
-        if self.engine == "windows":
-            bits.append("Windows")
+        if self.engine in ("windows", "piper"):
+            bits.append(self.engine.title())
         return f"{self.name} ({', '.join(bits)})"
 
 
@@ -85,8 +88,13 @@ def family(language: str) -> str:
     return (language or "").lower().split("-", 1)[0]
 
 
+REGIONAL = {"es-ar": "Spanish, Argentina", "pt-pt": "Portuguese, Portugal"}
+
+
 def language_label(language: str) -> str:
     lang = (language or "").lower()
+    if lang in REGIONAL:
+        return REGIONAL[lang]
     for _letter, (code, _fam, name) in KOKORO_LANGUAGES.items():
         if code == lang or (lang == "fr" and code == "fr-fr"):
             return name
@@ -105,6 +113,74 @@ def kokoro_voice(vid: str) -> Voice | None:
 
 def kokoro_voices() -> list[Voice]:
     return [v for v in (kokoro_voice(i) for i in KOKORO_VOICE_IDS) if v]
+
+
+# ---------------------------------------------------------------- more languages: Piper voices (installer catalog)
+
+_PACKS = catalog.section("voice_packs")
+PIPER_VOICES: dict[str, dict] = {str(k): dict(v) for k, v in (_PACKS.get("voices") or {}).items()}
+
+
+def default_packs_dir(profile: dict) -> str:
+    """Where Piper voices go: <media.root>\\voices, else <data_dir>\\voices (inside the folders the owner allowed)."""
+    root = (profile.get("media") or {}).get("root") or str(profile.get("data_dir") or "")
+    return str(Path(root) / "voices") if root else ""
+
+
+def pack_files(key: str) -> tuple[str, str]:
+    """A Piper voice's model and its config, as named in the repository."""
+    return f"{key}.onnx", f"{key}.onnx.json"
+
+
+def pack_installed(packs_dir: str, key: str) -> bool:
+    if not packs_dir or key not in PIPER_VOICES:
+        return False
+    folder = Path(packs_dir) / key
+    return all((folder / name).is_file() for name in pack_files(key))
+
+
+def piper_voice_id(key: str, speaker: int, speakers: int) -> str:
+    return f"piper:{key}" if speakers == 1 else f"piper:{key}:{speaker}"
+
+
+def piper_key(voice_id: str) -> tuple[str, int]:
+    """'piper:fr_FR-upmc-medium:1' -> ('fr_FR-upmc-medium', 1); 'piper:de_DE-thorsten-high' -> (..., 0)."""
+    rest = voice_id.split(":", 1)[1] if voice_id.startswith("piper:") else voice_id
+    key, _, sid = rest.partition(":")
+    return key, int(sid) if sid.isdigit() else 0
+
+
+def piper_voices(keys) -> list[Voice]:
+    """The voices of these Piper voice files, one per speaker, in the catalog's order."""
+    out = []
+    for key in PIPER_VOICES:
+        if key not in set(keys):
+            continue
+        meta = PIPER_VOICES[key]
+        speakers = meta.get("speakers") or {0: [key, ""]}
+        for sid, who in speakers.items():
+            name, gender = (list(who) + ["", ""])[:2]
+            out.append(Voice(piper_voice_id(key, int(sid), len(speakers)), str(name), str(meta.get("language") or ""),
+                             "piper", str(gender or "")))
+    return out
+
+
+def installed_piper_voices(packs_dir: str) -> list[Voice]:
+    return piper_voices([k for k in PIPER_VOICES if pack_installed(packs_dir, k)])
+
+
+PIPER_PAD, PIPER_BOS, PIPER_EOS = "_", "^", "$"
+
+
+def piper_ids(ps: str, id_map: dict[str, list[int]]) -> list[int]:
+    """Phonemes as a Piper voice's input ids, the way piper-phonemize makes them: the start id and a pad, then each
+    phoneme (one character) followed by a pad, then the end id. Characters outside the voice's map are dropped."""
+    pad = id_map.get(PIPER_PAD, [0])
+    ids = [*id_map.get(PIPER_BOS, [1]), *pad]
+    for ch in ps:
+        if ch in id_map and ch not in (PIPER_PAD, PIPER_BOS, PIPER_EOS):
+            ids += [*id_map[ch], *pad]
+    return ids + list(id_map.get(PIPER_EOS, [2]))
 
 
 # ---------------------------------------------------------------- settings
@@ -129,6 +205,8 @@ class Config:
     break_ms: int = 1500
     unload_after_min: float = 30.0
     voices: dict = field(default_factory=dict)   # language family -> voice id, for auto_language
+    packs: list = field(default_factory=list)    # Piper voices chosen to download (config/installer.yaml voice_packs)
+    packs_dir: str = ""                          # where they go; "" = <media.root>\voices or <data_dir>\voices
 
     @classmethod
     def from_profile(cls, profile: dict, warn=lambda msg: None) -> "Config":
@@ -143,6 +221,13 @@ class Config:
                     if not isinstance(value, dict):
                         raise TypeError("expected a mapping of language to voice id")
                     value = {str(k).strip().lower(): str(v).strip() for k, v in value.items() if v}
+                elif f.name == "packs":
+                    if not isinstance(value, (list, tuple)):
+                        raise TypeError("expected a list of voice files")
+                    unknown = [str(k) for k in value if str(k) not in PIPER_VOICES]
+                    if unknown:
+                        warn(f"read_aloud.packs: {', '.join(unknown)} not in config/installer.yaml voice_packs; ignored")
+                    value = [str(k) for k in value if str(k) in PIPER_VOICES]
                 elif f.type in ("int", int):
                     value = int(value)
                 elif f.type in ("float", float):
@@ -173,6 +258,7 @@ class Config:
             cfg.device = "auto"
         if not cfg.voice:
             cfg.voice = cls.voice
+        cfg.packs_dir = cfg.packs_dir or default_packs_dir(profile)
         return cfg
 
 
@@ -253,10 +339,11 @@ def windows_voices() -> list[Voice]:
     return out
 
 
-def voice_choices(installed_windows: list[Voice] | None = None) -> list[tuple[str, str]]:
-    """(id, label) of every voice the menus and the tray offer: Kokoro's, then this PC's Windows voices."""
+def voice_choices(installed_windows: list[Voice] | None = None, packs_dir: str = "") -> list[tuple[str, str]]:
+    """(id, label) of every voice the menus and the tray offer: Kokoro's, the Piper voices downloaded to packs_dir,
+    then this PC's Windows voices."""
     win = windows_voices() if installed_windows is None else installed_windows
-    return [(v.id, v.label) for v in [*kokoro_voices(), *win]]
+    return [(v.id, v.label) for v in [*kokoro_voices(), *installed_piper_voices(packs_dir), *win]]
 
 
 def find_voice(vid: str, voices: list[Voice]) -> Voice | None:
@@ -490,10 +577,12 @@ STOPWORDS = {
     "de": set("der die das und ist nicht ein eine zu den mit von sich auf für im dem des auch es sie wir ich "
               "aber oder wird sind".split()),
     "nl": set("de het een en is van dat niet op te zijn met voor er maar ook als bij aan om dit deze wordt".split()),
+    "vi": set("và của là có không một những các được cho với này trong người đã để khi thì cũng như từ đến".split()),
 }
 # Letters that mark a language: (characters, language, weight per letter).
 MARKS = (("ñ¿¡", "es", 2.0), ("çœ", "fr", 2.0), ("êâîûëïÿ", "fr", 1.0), ("ãõ", "pt", 2.0), ("ß", "de", 3.0),
-         ("äöü", "de", 1.0), ("ìòù", "it", 1.0))
+         ("äöü", "de", 1.0), ("ìòù", "it", 1.0), ("ăđơư", "vi", 3.0),
+         ("ạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ", "vi", 2.0))
 # Writing system -> languages that use it, most likely first.
 SCRIPT_LANGUAGES = {"DEVANAGARI": ["hi"], "THAI": ["th"], "CYRILLIC": ["ru", "uk", "bg"], "ARABIC": ["ar", "fa"],
                     "HEBREW": ["he"], "GREEK": ["el"], "HANGUL": ["ko"], "KANA": ["ja"], "HAN": ["zh", "ja"],

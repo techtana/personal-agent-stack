@@ -190,6 +190,22 @@ EFFECT_TEXT = {
 }
 
 
+def refresh_voice_choices(profile: dict) -> None:
+    """The read aloud voice picker's list, again: Kokoro's, the Piper voices downloaded to this PC (Download and
+    Remove on the tray's Features card change them), and the Windows voices."""
+    from .dictation.speak import Config as ReadConfig, voice_choices
+
+    try:
+        choices = voice_choices(packs_dir=ReadConfig.from_profile(profile).packs_dir)
+    except OSError:
+        return
+    for s in SETTINGS:
+        if (s.section, s.key) == ("read_aloud", "voice"):
+            s.choices[:] = [vid for vid, _ in choices]
+            s.labels.clear()
+            s.labels.update(dict(choices))
+
+
 def setting_id(s: Setting) -> str:
     return f"{s.section}.{s.key}"
 
