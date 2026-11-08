@@ -1,9 +1,11 @@
-"""Installer back end: where the models and tools go, then the setup steps in a background worker.
+"""Installer back end: which features, where the models and tools go, then the setup steps in a background worker.
 
-The installer window (scripts/installer.py) or `stack.py install --no-gui` asks for the folders, checks them, writes the
-choice into machines/<HOST>.yaml and starts `stack.py install --worker` as a detached process. The worker runs STEPS
-and records its progress in .run/install/state.json, so the window can be closed and opened again while it works.
-`stack.py setup` runs the same steps in the foreground with the folders already in the profile.
+The installer window (scripts/installer.py) or `stack.py install --no-gui` asks which optional features to install
+(stacklib/features.py: what each costs on this PC, and what is installed already) and for the folders, checks them,
+writes the choice into machines/<HOST>.yaml (save_paths, save_features) and starts `stack.py install --worker` as a
+detached process. The worker runs STEPS and records its progress in .run/install/state.json, so the window can be
+closed and opened again while it works. `stack.py setup` runs the same steps in the foreground with the folders and
+features already in the profile.
 """
 from __future__ import annotations
 
@@ -22,7 +24,7 @@ from pathlib import Path
 import yaml
 
 from . import ENV_FILE, IS_WINDOWS, REPO, info, load_dotenv, warn, which
-from . import agents_build, claude_env, clients, disks, litellm_build, media, ollama, procname, services, winget_build
+from . import agents_build, claude_env, clients, disks, features, litellm_build, media, ollama, procname, services, winget_build
 from . import profile as prof
 
 INSTALL_DIR = REPO / ".run" / "install"   # under the repository, not data_dir: it must not move while setup runs
@@ -37,7 +39,7 @@ TOOLS = (
     ("phoenix", "arize-phoenix", ["arize-phoenix"], "3.12"),
     ("open-webui", "open-webui", ["open-webui"], "3.11"),
 )
-TOOLS_GB = 3.0      # the three environments measured 2.85 GB on the reference machine (2026-11-01)
+TOOL_FEATURES = ("gateway", "chat", "tracing")   # the features whose programs are uv tools (LiteLLM, Open WebUI, Phoenix)
 LONG_PATH = 60      # Python packages with deep trees (spaCy, HF cache) break past 260 characters on Windows
 HF_TOOL = ("huggingface-hub", ["huggingface_hub"], "3.12")   # environment name, install spec, python: the `hf` command
 HF_CACHE_DIRS = ("hub", "xet", "datasets", "assets")       # what moves from an earlier HF_HOME; the token stays put
@@ -61,6 +63,7 @@ class Plan:
     setup_openclaw: bool = False    # onboard OpenClaw if needed and make the gateway its only model endpoint
     setup_media: bool = True        # ComfyUI and the image model under media.root, when the profile has one
     media_root: str = ""            # chosen in the installer: written to media.root and agent_access.allowed_roots
+    setup_recordings: bool = False  # Whisper for recordings, registered in Claude Desktop's config: only when chosen
 
 
 @dataclass
@@ -126,9 +129,7 @@ def same_drive(a: str, b: str) -> bool:
     return Path(a).anchor.lower() == Path(b).anchor.lower()
 
 
-def models_to_pull(profile: dict) -> list[str]:
-    m = profile["models"]
-    return list(dict.fromkeys(x for x in (m.get("fim"), m.get("embed"), m.get("small"), m.get("primary")) if x))
+models_to_pull = features.models_to_pull
 
 
 def pull_size_gb(profile: dict, models: list[str]) -> float:
@@ -188,20 +189,84 @@ def defaults(profile: dict) -> dict:
             move_from = cand
             break
     models = models_to_pull(profile)
+    hw = features.hardware(profile)
+    status = features.statuses(profile)
     return {
         "model_store": store,
         "model_note": note,
         "move_from": move_from,
         "move_gb": dir_size_gb(move_from) if move_from else 0.0,
         "tool_dir": current_tool_dir(),
-        "tools_missing": tools_missing(profile, current_tool_dir()),
         "ollama_missing": not which("ollama"),
-        "openclaw_installed": bool(which("openclaw")),
-        "openclaw_state": openclaw_state(profile),
         "models": models,
         "models_gb": pull_size_gb(profile, models),
         "media_root": default_media_root(profile, store),
         "media_installed": media.comfyui_installed(profile),
+        # The features page: this PC, what each feature costs on it, what is installed, and what to tick first.
+        "hardware": hw,
+        "features": status,
+        "estimates": features.estimates(profile, hw),
+        "choice": features.initial_choice(status, hw),
+        "options": features.current_options(profile),
+    }
+
+
+def chosen_with_required(chosen) -> set[str]:
+    return set(chosen) | {f.id for f in features.FEATURES if f.required}
+
+
+def tools_need_gb(chosen, est: dict, status: dict, moving: bool = False) -> float:
+    """Space the Python tools folder needs for the chosen features: the tools not installed yet, or all of them when
+    the folder moves (uv installs them again there). 0.1 GB when nothing is new, so a full drive still shows."""
+    chosen = chosen_with_required(chosen)
+    need = sum(est[f].disk_gb for f in TOOL_FEATURES if f in chosen and (moving or not status[f].installed))
+    return need or 0.1
+
+
+def media_need_gb(chosen, est: dict, status: dict, moved: bool = False) -> float:
+    """Space the media folder needs: ComfyUI and Whisper for recordings, plus voice typing's environment, which goes
+    there when the profile has a media folder. Shared downloads (the Whisper model) count once. `moved`: the folder
+    differs from the profile's media.root, so what is installed in the old one is installed again."""
+    ids = [f for f in ("images", "recordings", "voice_typing") if f in set(chosen)]
+    installed = set() if moved else {f for f in ids if status[f].installed}
+    return features.download_gb(ids, est, installed, full=moved) or 0.1
+
+
+def media_moved(profile: dict, root: str) -> bool:
+    current = (profile.get("media") or {}).get("root") or ""
+    return bool(current and root) and Path(root) != Path(current)
+
+
+def store_need_gb(d: dict, profile: dict, store: str, pull: bool, move_from: str = "") -> float:
+    """Space the models folder needs: the models not pulled yet when it is the profile's folder, all of them in another
+    one, plus the models that move there from another drive."""
+    models = d["estimates"]["models"]
+    same = bool(store) and Path(store) == Path(features.model_store(profile))
+    if not pull:
+        need = 0.1
+    elif same and models.todo_gb is not None:
+        need = max(models.todo_gb, 0.1)
+    else:
+        need = d["models_gb"]
+    if move_from and store and Path(store) != Path(move_from) and not same_drive(move_from, store):
+        need += d["move_gb"]
+    return need
+
+
+def needs_media(chosen) -> bool:
+    return any(features.BY_ID[f].needs_media for f in chosen if f in features.BY_ID)
+
+
+def feature_plan(chosen, status: dict) -> dict:
+    """Plan fields for the features chosen on the installer's first page. The switches that the machine profile holds
+    (Open WebUI, Phoenix, ComfyUI, voice typing) are written by save_features before the worker starts."""
+    chosen = set(chosen)
+    openclaw = status.get("openclaw")
+    return {
+        "setup_media": "images" in chosen,
+        "install_openclaw": "openclaw" in chosen and not (openclaw and openclaw.installed),
+        "setup_openclaw": "openclaw" in chosen,
+        "setup_recordings": "recordings" in chosen,
     }
 
 
@@ -244,9 +309,6 @@ def save_paths(profile: dict, model_store: str) -> Path:
     return path
 
 
-MEDIA_GB = 16.0    # ComfyUI with PyTorch (~4 GB) and the Z-Image-Turbo files (~12 GB)
-
-
 def default_media_root(profile: dict, model_store: str) -> str:
     """The profile's media.root, else <models drive>\\media on Windows (next to the other large model files)."""
     if (profile.get("media") or {}).get("root"):
@@ -256,25 +318,100 @@ def default_media_root(profile: dict, model_store: str) -> str:
     return str(Path.home() / "media")
 
 
-def save_media(profile: dict, root: str) -> Path:
-    """Write the owner's media folder into machines/<HOST>.yaml: media.root, services.comfyui native, and the folder
-    (plus HF_HOME's, when set) added to agent_access.allowed_roots, the path guard's list."""
-    from .settings import set_key
+def _with_media_root(text: str, profile: dict, root: str) -> tuple[str, list[str]]:
+    """media.root, and the folder (plus HF_HOME's, when set) added to agent_access.allowed_roots, the path guard's list."""
+    from .yamledit import set_key
 
-    path = prof.machine_file(profile["name"])
-    text = path.read_text(encoding="utf-8")
-    parsed = yaml.safe_load(text) or {}
-    roots = list(((parsed.get("agent_access") or {}).get("allowed_roots")) or [])
+    roots = list((((yaml.safe_load(text) or {}).get("agent_access") or {}).get("allowed_roots")) or [])
     for want in (root, (profile.get("media") or {}).get("hf_home") or ""):
         if want and not any(Path(want) == Path(r) for r in roots):
             roots.append(want)
     text = set_key(text, "media", "root", root)
-    text = set_key(text, "services", "comfyui", "native")
-    text = set_key(text, "agent_access", "allowed_roots", roots)
-    parsed = yaml.safe_load(text)
-    if (parsed.get("media") or {}).get("root") != root or (parsed.get("agent_access") or {}).get("allowed_roots") != roots:
-        raise ValueError(f"could not write the media folder into {path.name} safely; edit it by hand")
+    return set_key(text, "agent_access", "allowed_roots", roots), roots
+
+
+def _write_checked(path: Path, text: str, want: dict[tuple[str, str], object], what: str) -> None:
+    """Write the machine file only when every (section, key) reads back as wanted: a layout the line editor cannot
+    handle must not leave a half-changed profile."""
+    parsed = yaml.safe_load(text) or {}
+    for (section, key), value in want.items():
+        if (parsed.get(section) or {}).get(key) != value:
+            raise ValueError(f"could not write {what} into {path.name} safely ({section}.{key}); edit it by hand")
     path.write_text(text, encoding="utf-8", newline="\n")
+
+
+def save_media(profile: dict, root: str) -> Path:
+    """Write the owner's media folder into machines/<HOST>.yaml: media.root, services.comfyui native, and the folder
+    (plus HF_HOME's, when set) added to agent_access.allowed_roots, the path guard's list."""
+    from .yamledit import set_key
+
+    path = prof.machine_file(profile["name"])
+    text, roots = _with_media_root(path.read_text(encoding="utf-8"), profile, root)
+    text = set_key(text, "services", "comfyui", "native")
+    _write_checked(path, text, {("media", "root"): root, ("agent_access", "allowed_roots"): roots}, "the media folder")
+    return path
+
+
+FEATURE_SWITCHES = features.SWITCHES   # (section, key, on, off) per optional feature the profile switches
+
+
+def option_edits(profile: dict, chosen, options: dict[tuple[str, str], str]) -> dict[tuple[str, str], object]:
+    """The (section, key) values that the chosen features' options change. A new chat model also sets
+    models.primary_options (memory-mapped experts for an MoE model, as Settings' "Memory-map primary weights"), and the
+    small model's context follows the primary's when both are one model, or Ollama reloads it between tiers."""
+    out: dict[tuple[str, str], object] = {}
+    now = features.current_options(profile)   # the profile's values, defaults filled in
+    for fid in chosen:
+        for opt, _fn in features.OPTIONS.get(fid, []):
+            k = (opt.section, opt.key)
+            if k in options and str(options[k]) != now[k]:
+                out[k] = features.option_value(opt.section, opt.key, options[k])
+    m = profile.get("models") or {}
+    primary = out.get(("models", "primary"), m.get("primary"))
+    ctx = out.get(("models", "primary_num_ctx"), m.get("primary_num_ctx"))
+    if ("models", "primary") in out:
+        mmap = {"use_mmap": True} if features.is_moe(profile, primary) else {}
+        if (m.get("primary_options") or {}) != mmap:
+            out[("models", "primary_options")] = mmap
+    if out.keys() & {("models", "primary"), ("models", "primary_num_ctx")} and m.get("small") == primary \
+            and m.get("small_num_ctx") != ctx:
+        out[("models", "small_num_ctx")] = ctx
+    return out
+
+
+def save_features(profile: dict, chosen, media_root: str = "", status: dict | None = None,
+                  options: dict[tuple[str, str], str] | None = None) -> Path | None:
+    """Write what the installer's features page chose into machines/<HOST>.yaml, keeping comments: the switches in
+    FEATURE_SWITCHES, the options chosen next to the features (option_edits), and the media folder when a chosen
+    feature installs there. Only values that change are written.
+
+    A feature that is installed and on stays on, whatever `chosen` says: the installer adds features and never turns
+    one off (the tray's Settings does). A feature whose check failed keeps its switch as it is. Returns the file, or
+    None when nothing changed."""
+    from .yamledit import set_key
+
+    status = features.statuses(profile) if status is None else status
+    chosen = chosen_with_required(chosen) | {fid for fid in status if features.locked(fid, status)}
+    path = prof.machine_file(profile["name"])
+    text = original = path.read_text(encoding="utf-8")
+    want: dict[tuple[str, str], object] = {}
+    current = {"services": profile.get("services") or {}, "observability": profile.get("observability") or {}}
+    for fid, (section, key, on, off) in FEATURE_SWITCHES.items():
+        if fid in status and status[fid].unknown:
+            continue
+        value = on if fid in chosen else off
+        if current[section].get(key) != value:
+            text = set_key(text, section, key, value)
+            want[(section, key)] = value
+    if media_root and needs_media(chosen) and (profile.get("media") or {}).get("root") != media_root:
+        text, roots = _with_media_root(text, profile, media_root)
+        want.update({("media", "root"): media_root, ("agent_access", "allowed_roots"): roots})
+    for (section, key), value in option_edits(profile, chosen, options or {}).items():
+        text = set_key(text, section, key, value)
+        want[(section, key)] = value
+    if text == original:
+        return None
+    _write_checked(path, text, want, "the chosen features")
     return path
 
 
@@ -552,10 +689,45 @@ def step_dictation(plan: Plan, profile: dict, report) -> str:
     """Voice typing's environment, only where it is turned on (services.dictation: native); it is opt-in because it
     holds a microphone hotkey and about 1.2 GB of VRAM while loaded."""
     if profile["services"].get("dictation") != "native":
-        raise Skip("off in the machine profile; `uv run scripts/stack.py dictate install` turns it on")
+        raise Skip("not chosen; tick Voice typing in the installer, or run `uv run scripts/stack.py dictate install`")
     from . import dictation
 
     return dictation.install(profile, report)
+
+
+def step_recordings(plan: Plan, profile: dict, report) -> str:
+    """Whisper for recordings, registered as an MCP server in Claude Desktop (as `stack.py whisper install` does).
+
+    Claude Desktop's config is the owner's: an entry that is already there is left alone (`stack.py whisper install`
+    updates it on purpose), and a git worktree never writes one, since the entry would send the server's usage
+    records to the worktree's traces/usage, which the main checkout's tray does not read."""
+    if not plan.setup_recordings:
+        raise Skip("not chosen")
+    if not (profile.get("media") or {}).get("root"):
+        raise Skip("needs the media folder; choose one in the installer")
+    from . import whisper
+
+    installed, linked = features.recordings_installed(profile), features.desktop_entry() is not None
+    if installed and linked:
+        raise Skip("already installed and in Claude Desktop; `uv run scripts/stack.py whisper install` updates it")
+    if installed:
+        whisper.guarded(profile)
+        server = whisper.whisper_dir(profile) / "whisper_mcp.py"
+        notes = ["already installed"]
+        if server.read_bytes() != whisper.SERVER_SRC.read_bytes():
+            shutil.copy2(whisper.SERVER_SRC, server)
+            notes = ["updated the server"]
+    else:
+        notes = [whisper.install(profile, report)]
+    if (REPO / ".git").is_file():
+        raise Warn("; ".join(notes) + ". Not added to Claude Desktop: this folder is a git worktree, and the server "
+                   "would record its usage here, where the main checkout's tray does not look. Run "
+                   "`uv run scripts/stack.py whisper register` from the main checkout.")
+    if linked:
+        return "; ".join(notes) + "; Claude Desktop already lists the server, so its entry was left as it is"
+    report("registering the server in Claude Desktop")
+    notes.append(whisper.register_desktop(profile))
+    return "; ".join(notes)
 
 
 def _version(text: str) -> tuple[int, int, int] | None:
@@ -698,12 +870,13 @@ STEPS = (
     ("ollama_install", "Install Ollama", step_ollama_install),
     ("models_move", "Move models already downloaded", step_models_move),
     ("ollama_env", "Point Ollama at the models folder", step_ollama_env),
-    ("tools", "Install LiteLLM, Phoenix and Open WebUI", step_tools),
+    ("tools", "Install the gateway and the chosen Python tools", step_tools),
     ("build", "Generate gateway and agent configs", step_build),
     ("pull", "Download models", step_pull),
     ("huggingface", "Set up the Hugging Face cache", step_huggingface),
     ("media", "Install ComfyUI and the image model", step_media),
     ("dictation", "Install voice typing (Whisper)", step_dictation),
+    ("recordings", "Install recordings for Claude Desktop (Whisper)", step_recordings),
     ("openclaw", "Install OpenClaw", step_openclaw),
     ("start", "Start the stack", step_start),
 )
@@ -783,6 +956,22 @@ def spawn_worker(plan: Plan) -> int:
         "steps": [{"id": i, "title": t, "status": "pending", "detail": "", "fraction": None} for i, t, _ in STEPS],
     }), encoding="utf-8")
     return proc.pid
+
+
+def launch_window() -> int:
+    """Open the installer window in a process of its own, as install.cmd does: the tray's Add features button runs
+    this, and the window (and the setup worker it starts) must not depend on the tray. Returns the pid."""
+    cmd = [_console_python(), str(REPO / "scripts" / "installer.py")]
+    kwargs: dict = {"cwd": REPO, "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+                    "stderr": subprocess.DEVNULL, "env": {**os.environ, "AGENT_STACK_HIDE_CONSOLE": "1"}}
+    if not IS_WINDOWS:
+        return subprocess.Popen(cmd, start_new_session=True, **kwargs).pid
+    kwargs["creationflags"] = services.WINDOWS_FLAGS
+    try:
+        return subprocess.Popen(cmd, **kwargs).pid
+    except PermissionError:   # the tray's job forbids breakaway; the window then closes with the tray
+        kwargs["creationflags"] &= ~services.CREATE_BREAKAWAY_FROM_JOB
+        return subprocess.Popen(cmd, **kwargs).pid
 
 
 def run_worker(plan_file: Path) -> bool:

@@ -6,8 +6,11 @@ Commands
   profile       print the resolved profile (hardware class, models, Ollama env, cloud on/off)
   build         regenerate .claude/agents, .opencode/agents, config/openwebui, evals, infrastructure/litellm/config.yaml,
                 winget/configuration*.winget
-  install       installer window: asks where models and Python tools go, then runs setup in the background
-                (--no-gui asks in the terminal; --status shows the background run's progress)
+  install       installer window: asks which features to install (with their load on this PC) and where models and
+                Python tools go, then runs setup in the background (--no-gui asks in the terminal; --status shows the
+                background run's progress)
+  features      every feature: required or optional, installed and linked or not, and its disk, GPU, CPU and RAM load
+                on this PC, then what the installed ones take together (--details for the reasoning)
   setup         profile + .env secrets + Ollama env + uv tools + build + settings.local.json (+ pull core models unless --no-pull)
   disks         measure each drive's read/write speed and say which drive should hold models, tools and caches
   pull          pull the profile's models (--all includes the reviewer)
@@ -123,6 +126,60 @@ def cmd_install(a):
     install_in_terminal()
 
 
+def print_features(d: dict, chosen: set[str]) -> None:
+    """The installer's features table in a terminal: one line per feature, ticked when chosen."""
+    from stacklib import features
+
+    hw, status, est = d["hardware"], d["features"], d["estimates"]
+    info(f"This PC: {hw.describe()}.")
+    info(f"  {'':>6} {'Feature':<40} {'Status':<22} {'Disk GB':>7} {'GPU mem GB':>11} {'RAM GB':>11}  GPU work; CPU while busy")
+    for n, f in enumerate(features.FEATURES, 1):
+        c = features.cells(est[f.id], hw)
+        state = "Required" if f.required else status[f.id].state
+        info(f"  {n:>2} [{'x' if f.id in chosen else ' '}] {f.title:<40} {state:<22} {c['disk']:>7} {c['vram']:>11} "
+             f"{c['ram']:>11}  {c['gpu']}; {c['cpu']}")
+
+
+def print_findings(d: dict, chosen: set[str]) -> None:
+    from stacklib import features
+
+    installed = {fid for fid, s in d["features"].items() if s.installed}
+    for finding in features.assess(chosen, d["estimates"], d["hardware"], installed):
+        info(f"  {dict(ok='ok  ', warn='WARN', bad='BAD ').get(finding.level, finding.level)} {finding.text}")
+
+
+def ask_features(d: dict) -> set[str] | None:
+    """Which features, in the terminal. Required and installed-and-on features stay ticked; None means cancel."""
+    from stacklib import features
+
+    status = d["features"]
+    chosen = {fid for fid, on in d["choice"].items() if on}
+    fixed = {f.id for f in features.FEATURES if features.locked(f.id, status)}
+    while True:
+        print_features(d, chosen)
+        optional = [str(n) for n, f in enumerate(features.FEATURES, 1) if f.id not in fixed]
+        ticked = ",".join(str(n) for n, f in enumerate(features.FEATURES, 1) if f.id in chosen and f.id not in fixed)
+        info("Required and installed features stay. `uv run scripts/stack.py features --details` explains each row.")
+        ans = input(f"Optional features to install, by number ({', '.join(optional) or 'none left'}; Enter keeps "
+                    f"{ticked or 'none'}; 0 for none): ").strip().lower()
+        if ans:
+            parts = [p for p in ans.replace(" ", ",").split(",") if p]
+            bad = [p for p in parts if p not in ("0", "none")
+                   and not (p.isdigit() and 1 <= int(p) <= len(features.FEATURES))]
+            if bad:
+                warn(f"{', '.join(map(repr, bad))}: give the numbers in the first column; nothing changed")
+                continue
+            chosen = fixed | {features.FEATURES[int(p) - 1].id for p in parts if p.isdigit() and p != "0"}
+        info("Together on this PC:")
+        print_findings(d, chosen)
+        ans = input("Install this choice? [Y/n, or c to change it]: ").strip().lower()
+        if ans in ("", "y", "yes"):
+            return chosen
+        if ans in ("n", "no"):
+            info("cancelled; nothing was written or installed")
+            return None
+
+
 def install_in_terminal():
     """Terminal version of the installer window: same questions, same background worker."""
     import time
@@ -138,13 +195,17 @@ def install_in_terminal():
             warn(behind)
             if not input("Install this older version anyway? [y/N]: ").strip().lower().startswith("y"):
                 return
+        chosen = ask_features(d)
+        if chosen is None:
+            return
         if d["model_note"]:
             warn(d["model_note"])
 
         def ask_dir(label, default, need):
+            """need(answer): the GB that folder needs, which can depend on whether it is the current one."""
             while True:
                 ans = input(f"{label} [{default}]: ").strip().strip('"') or default
-                chk = install.check_dir(ans, need)
+                chk = install.check_dir(ans, need(ans))
                 info(f"  {chk.message}")
                 if chk.ok:
                     return ans
@@ -153,34 +214,32 @@ def install_in_terminal():
             ans = input(f"{q} [{'Y/n' if default else 'y/N'}]: ").strip().lower()
             return default if not ans else ans.startswith("y")
 
+        est, status = d["estimates"], d["features"]
         pull = ask_yes(f"Download models now ({', '.join(d['models'])}, about {d['models_gb']:.1f} GB)?")
-        store = ask_dir("Models folder", d["model_store"], d["models_gb"] if pull else 0.1)
+        store = ask_dir("Models folder", d["model_store"], lambda ans: install.store_need_gb(d, p, ans, pull))
         move = ""
         if d["move_from"] and Path(d["move_from"]) != Path(store):
             if ask_yes(f"Move the {d['move_gb']:.1f} GB of models already in {d['move_from']}?"):
                 move = d["move_from"]
-        tools_need = install.TOOLS_GB if d["tools_missing"] else 0.1
-        tool_dir = ask_dir("Python tools folder (LiteLLM, Phoenix, Open WebUI)", d["tool_dir"], tools_need)
+        tool_dir = ask_dir("Python tools folder", d["tool_dir"], lambda ans: install.tools_need_gb(
+            chosen, est, status, moving=bool(d["tool_dir"]) and Path(ans) != Path(d["tool_dir"])))
         tool_dir = "" if d["tool_dir"] and Path(tool_dir) == Path(d["tool_dir"]) else tool_dir
-        if not d["openclaw_installed"]:
-            openclaw = ask_yes("Install OpenClaw with npm and point it at this stack's gateway "
-                               "(upgrades Node.js with winget first if it is too old)?")
-        else:
-            openclaw = bool(d["openclaw_state"]) and ask_yes(
-                f"OpenClaw: {d['openclaw_state'].lower()}. Point it at this stack's gateway (keeps a backup)?")
+        media_root = ""
+        if install.needs_media(chosen):
+            media_root = ask_dir("Media folder (ComfyUI, Whisper and their models; agent sessions and media tools may "
+                                 "use only this folder)", d["media_root"],
+                                 lambda ans: install.media_need_gb(chosen, est, status, install.media_moved(p, ans)))
         plan = install.Plan(model_store=store, tool_dir=tool_dir, move_models_from=move,
                             install_ollama=d["ollama_missing"] and ask_yes("Ollama is not installed. Install it with winget?"),
                             pull=pull,
                             check_disks=ask_yes("Check how fast each drive is (writes a 256 MB test file per drive)?"),
                             setup_huggingface=ask_yes(f"Put the Hugging Face cache in {install.default_hf_home(store)} "
                                                       "and install the hf command?"),
-                            install_openclaw=not d["openclaw_installed"] and openclaw,
-                            setup_openclaw=openclaw,
-                            setup_media=ask_yes(f"Install ComfyUI and the image model (about {install.MEDIA_GB:.0f} GB) "
-                                                f"in {d['media_root']}? Agent sessions and media tools may use only that folder."),
-                            media_root=d["media_root"],
-                            start_stack=ask_yes("Start the stack when setup finishes?"))
+                            media_root=media_root,
+                            start_stack=ask_yes("Start the stack when setup finishes?"),
+                            **install.feature_plan(chosen, d["features"]))
         install.save_paths(p, store)
+        install.save_features(p, chosen, media_root, d["features"])
         install.spawn_worker(plan)
         info(f"setup runs in the background (log: {install.LOG_FILE.relative_to(REPO)}). Ctrl+C stops watching, not setup.")
     seen: dict[str, str] = {}
@@ -197,6 +256,29 @@ def install_in_terminal():
             time.sleep(1)
     except KeyboardInterrupt:
         info("stopped watching; `uv run scripts/stack.py install --status` shows progress")
+
+
+def cmd_features(a):
+    """What the installer's features page and the tray's Features card show, in a terminal."""
+    from stacklib import features
+
+    p = prof.resolve_profile()
+    hw = features.hardware(p)
+    status = features.statuses(p)
+    loaded = ollama.ps(f"http://127.0.0.1:{p['ports']['ollama']}")   # the chat model's real GPU memory, when loaded
+    d = {"hardware": hw, "features": status, "estimates": features.estimates(p, hw, loaded)}
+    in_use = {f.id for f in features.FEATURES if features.locked(f.id, status)}
+    print_features(d, in_use)
+    info("")
+    for f in features.FEATURES:
+        s = status[f.id]
+        info(f"{f.title}: {'required; ' if f.required else ''}{s.state.lower()}. {s.detail}")
+        if a.details:
+            info(f"    {f.summary} {features.detail_text(d['estimates'][f.id])}")
+    info("")
+    info("Installed and on, together on this PC:")
+    print_findings(d, in_use)
+    info("Add features with the installer (install.cmd, or Add features in the tray); turn them off in the tray's Settings.")
 
 
 def cmd_disks(a):
@@ -522,6 +604,9 @@ def main(argv=None):
     s = sub.add_parser("install", help="ask where models and tools go, then run setup in the background")
     s.add_argument("--no-gui", action="store_true"); s.add_argument("--status", action="store_true")
     s.add_argument("--worker", help=argparse.SUPPRESS); s.set_defaults(f=cmd_install)
+    s = sub.add_parser("features", help="each feature: required or optional, installed or not, and its load on this PC")
+    s.add_argument("--details", action="store_true", help="also print what each feature does and where its figures come from")
+    s.set_defaults(f=cmd_features)
     s = sub.add_parser("disks", help="measure drive speeds and suggest where models, tools and caches go")
     s.add_argument("drives", nargs="*", help="drive roots such as C:\\ D:\\ (default: every local drive)"); s.set_defaults(f=cmd_disks)
     s = sub.add_parser("openclaw", help="make the gateway OpenClaw's only model endpoint (onboards it if needed)")
