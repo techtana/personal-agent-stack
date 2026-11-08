@@ -57,6 +57,7 @@ LANGUAGE_NAMES = {
 }
 SPEEDS = ("0.75", "0.9", "1.0", "1.1", "1.25", "1.5", "1.75", "2.0")
 KOKORO_CHOICES = ("fp32", "int8", "off")
+DEVICES = ("auto", "gpu", "cpu")   # where Kokoro runs: auto = the GPU when its CUDA libraries are installed
 
 
 @dataclass(frozen=True)
@@ -121,6 +122,7 @@ class Config:
     button: bool = True
     esc_stops: bool = True
     kokoro: str = "fp32"          # fp32 | int8 | off (Windows voices only)
+    device: str = "auto"          # auto | gpu | cpu
     max_chars: int = 20000
     unload_after_min: float = 30.0
     voices: dict = field(default_factory=dict)   # language family -> voice id, for auto_language
@@ -159,6 +161,10 @@ class Config:
         if cfg.kokoro not in KOKORO_CHOICES:
             warn(f"read_aloud.kokoro: {cfg.kokoro!r} is not one of {', '.join(KOKORO_CHOICES)}; using 'fp32'")
             cfg.kokoro = "fp32"
+        cfg.device = cfg.device.lower()
+        if cfg.device not in DEVICES:
+            warn(f"read_aloud.device: {cfg.device!r} is not one of {', '.join(DEVICES)}; using 'auto'")
+            cfg.device = "auto"
         if not cfg.voice:
             cfg.voice = cls.voice
         return cfg
@@ -344,9 +350,10 @@ ABBREVIATIONS = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc",
                  "sgt", "capt", "lt", "col", "cmdr", "adm", "hon", "u.s", "u.k", "a.m", "p.m"}
 _END = re.compile(r"[.!?…]+[\"”’)\]]*(?=\s)|[。！？]+[」』”）]*")
 _CLAUSE = re.compile(r"(?<=[,;:—–])\s+|(?<=\))\s+")
-FIRST_CHARS = 180    # the first piece: short, so the voice starts quickly
-PIECE_CHARS = 320    # later pieces join sentences up to about this long (Kokoro reads up to 510 phonemes at once)
-HARD_CHARS = 420     # longer sentences are split at commas, then between words
+FIRST_CHARS = 120    # the first piece: one short sentence or clause, so the voice starts quickly
+PIECE_CHARS = 160    # later pieces: a sentence, or short sentences joined up to about this long, so each is ready
+                     # long before the one before it finishes playing (several are prepared at once)
+HARD_CHARS = 260     # longer sentences are split at commas, then between words
 
 
 @dataclass(frozen=True)
@@ -401,8 +408,9 @@ def _split_long(sentence: str, limit: int) -> list[str]:
 
 
 def pieces(text: str) -> list[Piece]:
-    """Speech text (speech_text) in the pieces the voice reads one at a time: the first is one short sentence, later
-    ones join the sentences of a paragraph up to PIECE_CHARS; no piece crosses a paragraph or list item."""
+    """Speech text (speech_text) in the pieces the voice reads one at a time: the first is one short sentence (or its
+    first clause), later ones a sentence each, short ones joined up to PIECE_CHARS; no piece crosses a paragraph or
+    list item. Sentence-sized pieces keep every wait short: the reader prepares several ahead, in parallel."""
     out: list[Piece] = []
     for paragraph in (text or "").split("\n"):
         paragraph = paragraph.strip()

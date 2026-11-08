@@ -422,10 +422,18 @@ turn that off with **Esc stops reading** under Show advanced). Right-click the b
 Voices:
 
 - **Kokoro** (Apache-2.0, 82 million parameters) speaks naturally in US and UK English, Spanish, French, Hindi,
-  Italian and Brazilian Portuguese. It runs on the CPU, about three times faster than real time on the reference
-  machine's Ryzen 5 5500, and uses no GPU memory. It holds about 0.5 GB of RAM while loaded and is freed after 30 idle
-  minutes (`read_aloud.unload_after_min`). **Kokoro weights** under Show advanced picks fp32 (326 MB), int8 (92 MB and
-  0.3 GB of RAM, as fast on this CPU) or off.
+  Italian and Brazilian Portuguese. **Runs on** (`read_aloud.device`) picks where it works:
+  - **gpu**: about 0.3 s per sentence on the reference machine's RTX 3060, 12-20 times faster than real time, holding
+    1.0 GB of GPU memory. It needs the GPU libraries (onnxruntime-gpu and cuDNN, about 0.8 GB), which
+    `read-aloud install` adds for gpu, or for auto on a PC with an NVIDIA card. If the card is full (ComfyUI working),
+    Kokoro moves to the CPU until voice typing restarts.
+  - **cpu**: about 1.5 s per sentence on the Ryzen 5 5500 (3-4 times faster than real time), no GPU memory, 0.5 GB of
+    RAM.
+  - **auto** (the default): the GPU when its libraries are installed, else the CPU.
+
+  Kokoro loads when the pointer rests on the speaker button or while the selection is copied, so the first sentence
+  rarely waits for it, and it is freed after 30 idle minutes (`read_aloud.unload_after_min`). **Kokoro weights** under
+  Show advanced picks fp32 (326 MB), int8 (92 MB and 0.3 GB of RAM, as fast on the CPU, slower on the GPU) or off.
 - **Windows voices** (David, Zira and Mark on an English Windows; any voice added in Windows Settings > Time & language
   > Speech) start at once and sound flatter. They cover the languages Kokoro does not.
 
@@ -450,10 +458,15 @@ How it works, all on this PC:
 2. The text is cleaned for listening: Markdown and Logseq markup (`**bold**`, `[[page links]]`, `#tags`,
    `key:: value` properties, block references) is dropped, a link is read as its site's name, and every list item or
    heading gets a short pause.
-3. It is cut into pieces of a sentence or a few. The first piece is one sentence, so the voice starts quickly; the
-   next ones are prepared while it speaks, at most 8 seconds of speech ahead.
-4. Nothing is saved: the text stays in memory for **Read it again** until the app quits. The tray's Usage tab counts
-   each reading (seconds of speech, the voice, the time it took to make), never the words.
+3. It is cut into pieces of about a sentence. The first is made on its own, so the voice starts quickly; while it
+   plays, the next ones are made ahead, two at once on the CPU (they share Kokoro's threads: about 30% more speech per
+   second, no more processors), up to 30 seconds of speech ahead (60 on the GPU). While the PC is busy (its processors
+   more than 85% in use) it makes one at a time and keeps only one ready, leaving room for the rest. Kokoro on the CPU
+   uses at most half the logical processors.
+4. Nothing is saved to disk. The text and the sound of the last reading stay in memory until the app quits or you
+   read something else, so **Read it again** replays the sound without running the model again (with the same voice
+   and speed; up to about 23 minutes of speech is kept). The tray's Usage tab counts each reading (seconds of speech,
+   the voice, the time it took to make), never the words; a replay counts nothing, since no model ran.
 
 Good to know:
 
@@ -468,11 +481,14 @@ Good to know:
   instead. Choose another **Read aloud hotkey** in the tray's Settings tab (restarts voice typing).
 - **Limits.** Up to 20,000 characters at a time (`read_aloud.max_chars`); a longer selection is cut at a sentence and
   the bubble says so.
-- **Settings.** The tray's Settings tab has a **Read aloud** group: on or off, hotkey, voice, speed and the
-  per-language switch; Show advanced has Esc and the Kokoro weights. Every setting is under `read_aloud:` in
+- **The tray.** The **Kokoro** row on the Overview tab shows read aloud (it runs Kokoro inside voice typing): Read
+  aloud off, Not installed, Starts with voice typing, Ready, Loaded on the GPU or CPU, Reading, Paused, or Failed. Its
+  **Hide speaker** / **Show speaker** button hides or shows the speaker button; it starts and stops with voice typing.
+- **Settings.** The tray's Settings tab has a **Read aloud** group: on or off, hotkey, voice, speed, **Runs on** and
+  the per-language switch; Show advanced has Esc and the Kokoro weights. Every setting is under `read_aloud:` in
   `machines/_defaults.yaml`. **Hide this button** in the speaker's menu keeps only the hotkey; **Show speaker** on the
-  tray's **Voice typing** row, the tray menu's **Read aloud button (speaker)** item or **Show the read aloud button**
-  in the mic button's menu brings it back.
+  tray's **Kokoro** row, the tray menu's **Read aloud button (speaker)** item or **Show the read aloud button** in the
+  mic button's menu brings it back.
 
 ## Working with the departments
 

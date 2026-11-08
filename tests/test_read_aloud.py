@@ -390,6 +390,86 @@ class Flow(unittest.TestCase):
         self.wait()
         self.assertEqual(self.ui.last("cancelled"), "Stopped reading")
 
+    def _concurrency(self, delay: float):
+        """A fake voice that notes how many pieces are being made at once."""
+        live, peak, lock = [0], [0], threading.Lock()
+
+        def slow(text, v, speed, cfg):
+            with lock:
+                live[0] += 1
+                peak[0] = max(peak[0], live[0])
+            time.sleep(delay)
+            with lock:
+                live[0] -= 1
+            self.spoken.append((text, v.id))
+            return FakeAudio(bytes(2 * 240), 0.01)
+        return slow, peak
+
+    def test_later_pieces_are_made_in_parallel_and_played_in_order(self):
+        self.reader.synth, peak = self._concurrency(0.05)
+        self.reader.workers = lambda v: 2
+        self.win.selected = " ".join(f"Sentence number {i} is here." for i in range(12))
+        started = []
+        make = self.player
+        self.reader.player = lambda on_start: make(lambda tag: (started.append(tag), on_start(tag)))
+        self.reader.start()
+        self.wait()
+        n = len(speak.pieces(speak.speech_text(self.win.selected)))
+        self.assertGreater(n, 3)
+        self.assertEqual(started, list(range(n)))          # every piece, in order
+        self.assertEqual(peak[0], 2)                        # two made at once
+        self.assertEqual(self.ui.last("done"), "Finished reading")
+
+    def test_a_busy_pc_gets_one_piece_at_a_time(self):
+        self.reader.synth, peak = self._concurrency(0.03)
+        self.reader.workers = lambda v: 3
+        self.reader.pc_busy = lambda: True
+        self.win.selected = " ".join(f"Sentence number {i} is here." for i in range(10))
+        self.reader.start()
+        self.wait()
+        self.assertEqual(peak[0], 1)
+        self.assertEqual(self.ui.last("done"), "Finished reading")
+
+    def test_lookahead_limits_what_is_made_ahead(self):
+        self.pace = 1.0                                     # real-time playback: 0.5 s per piece
+        made = []
+
+        def half_second(text, v, speed, cfg):
+            made.append(text)
+            return FakeAudio(bytes(2 * 12000), 0.5)
+        self.reader.synth = half_second
+        self.reader.workers = lambda v: 2
+        self.reader.lookahead_s = lambda v: 1.0
+        self.win.selected = " ".join(f"Sentence number {i} is here." for i in range(40))
+        self.reader.start()
+        time.sleep(1.0)
+        self.assertLess(len(made), 8)                       # many pieces, but only about 1 s of speech ahead
+        self.reader.stop()
+        self.wait()
+
+    def test_a_later_piece_that_fails_stops_there(self):
+        calls = []
+
+        def flaky(text, v, speed, cfg):
+            calls.append(text)
+            if len(calls) == 3:
+                raise RuntimeError("the GPU went away")
+            return FakeAudio(bytes(2 * 240), 0.01)
+        self.reader.synth = flaky
+        self.win.selected = " ".join(f"Sentence number {i} is here." for i in range(8))
+        self.reader.start()
+        self.wait()
+        self.assertEqual(self.ui.last("error"), "Could not read it aloud")
+        self.assertEqual(self.records[0]["failed"], "RuntimeError")
+        self.assertEqual(len(calls), 3)
+
+    def test_the_voice_loads_while_the_selection_is_copied(self):
+        warmed = []
+        self.reader.warm = lambda cfg: warmed.append(cfg.voice)
+        self.reader.start()
+        self.wait()
+        self.assertEqual(warmed, ["af_heart"])
+
     def test_nothing_selected(self):
         self.win.selected = ""
         self.reader.start()
@@ -451,12 +531,45 @@ class Flow(unittest.TestCase):
         n = len(self.spoken)
         self.assertTrue(self.reader.again("menu"))
         self.wait()
-        self.assertEqual(len(self.spoken), 2 * n)
+        self.assertEqual(len(self.spoken), n)                 # replayed from memory
+        self.assertEqual(self.ui.last("done"), "Finished reading")
         self.reader.sample("bm_george", "George")
         self.wait()
         self.assertEqual(self.spoken[-1][1], "bm_george")
         self.assertEqual(self.ui.last("done"), "Voice: George")
         self.assertEqual(self.reader.last_text, speak.speech_text(ARTICLE))   # a sample is not "the last text"
+
+    def test_again_replays_the_kept_audio_without_the_model(self):
+        self.reader.start()
+        self.wait()
+        n, records = len(self.spoken), len(self.records)
+        self.assertTrue(self.reader.again("menu"))
+        self.wait()
+        self.assertEqual(len(self.spoken), n)                 # nothing made again
+        self.assertEqual(len(self.records), records)          # no model ran, so no usage record
+        self.assertIn("replayed", self.ui.hint("done"))
+        with wave.open(str(Path(self.tmp.name) / "p1.wav")) as w:
+            self.assertGreater(w.getnframes(), 0)               # and it played
+        self.cfg.speed = 1.5                                   # another speed: made again
+        self.reader.again("menu")
+        self.wait()
+        self.assertEqual(len(self.spoken), 2 * n)
+
+    def test_again_after_a_stop_makes_only_what_is_missing(self):
+        self.gate = threading.Event()
+        self.reader.start()
+        deadline = time.monotonic() + 5
+        while len(self.spoken) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.reader.stop()
+        self.gate.set()
+        self.wait()
+        self.gate = None
+        before = len(self.spoken)
+        total = len(speak.pieces(speak.speech_text(ARTICLE)))
+        self.reader.again("menu")
+        self.wait()
+        self.assertEqual(len(self.spoken) - before, total - 2)  # the two made before the stop are replayed
 
     def test_again_with_nothing_read_yet(self):
         self.assertFalse(self.reader.again())
@@ -525,7 +638,7 @@ class Wiring(unittest.TestCase):
         ids = {settings.setting_id(s) for s in settings.SETTINGS if s.section == "read_aloud"}
         self.assertEqual(ids, {"read_aloud.enabled", "read_aloud.hotkey", "read_aloud.voice", "read_aloud.speed",
                                "read_aloud.auto_language", "read_aloud.button", "read_aloud.esc_stops",
-                               "read_aloud.kokoro"})
+                               "read_aloud.kokoro", "read_aloud.device"})
         p = {"models": {}, "observability": {}, "services": {}, "ollama_env": {}, "dictation": {}, "refine": {},
              "read_aloud": {"speed": 1.25, "voice": "bf_emma", "enabled": True}}
         values = settings.current_values(p)
@@ -562,7 +675,8 @@ class Wiring(unittest.TestCase):
         start.assert_not_called()
 
     def test_voice_and_speed_need_no_restart_but_the_switch_and_hotkey_do(self):
-        for sid in ("read_aloud.voice", "read_aloud.speed", "read_aloud.auto_language", "read_aloud.kokoro"):
+        for sid in ("read_aloud.voice", "read_aloud.speed", "read_aloud.auto_language", "read_aloud.kokoro",
+                    "read_aloud.device"):
             stop, start, call = self._apply(sid, "x", {})
             stop.assert_not_called()
             start.assert_not_called()
@@ -607,9 +721,14 @@ class Feature(unittest.TestCase):
     def test_estimate_follows_the_weights(self):
         hw = features.Hardware(vram_gb=12, desktop_vram_gb=1, ram_gb=32, threads=12)
         with mock.patch.object(features, "_kokoro_cached", return_value=False):
-            fp32 = features.estimate("read_aloud", {"read_aloud": {"kokoro": "fp32"}}, hw)
+            fp32 = features.estimate("read_aloud", {"read_aloud": {"kokoro": "fp32", "device": "cpu"}}, hw)
             int8 = features.estimate("read_aloud", {"read_aloud": {"kokoro": "int8"}}, hw)
             off = features.estimate("read_aloud", {"read_aloud": {"kokoro": "off"}}, hw)
+            on_gpu = features.estimate("read_aloud", {"read_aloud": {"kokoro": "fp32", "device": "auto"}}, hw)
+            no_card = features.estimate("read_aloud", {"read_aloud": {"device": "gpu"}}, features.Hardware(threads=12))
+        self.assertEqual((on_gpu.vram_gb, on_gpu.cpu_bursts), (1.0, False))
+        self.assertAlmostEqual(on_gpu.disk_gb, fp32.disk_gb + features.KOKORO_GPU_GB)
+        self.assertEqual((no_card.vram_gb, no_card.ram_gb), (0.0, 0.5))   # no GPU: the CPU estimate
         self.assertEqual((fp32.ram_gb, int8.ram_gb, off.ram_gb), (0.5, 0.3, 0.05))
         self.assertGreater(fp32.disk_gb, int8.disk_gb)
         self.assertEqual((fp32.vram_gb, fp32.cpu_bursts), (0.0, True))
@@ -672,6 +791,99 @@ class Feature(unittest.TestCase):
                 self.assertTrue(dictation.read_aloud_installed(profile))
                 self.assertFalse(dictation.kokoro_cached(profile, "int8"))
                 self.assertTrue(dictation.read_aloud_installed({**profile, "read_aloud": {"kokoro": "off"}}))
+
+
+class KokoroRow(unittest.TestCase):
+    """The tray's Kokoro row shows read aloud while the standalone Kokoro service is off."""
+
+    def row(self, health, enabled=True, status=None):
+        return features.read_aloud_row({"read_aloud": {"enabled": enabled}}, health, status)[:2]
+
+    def test_states(self):
+        installed = features.Status(True, True, "Installed", "")
+        missing = features.Status(False, False, "Not installed", "")
+
+        def ra(**kw):
+            return {"read_aloud": {"enabled": True, "engine": "unloaded", **kw}}
+        self.assertEqual(self.row(None, enabled=False, status=missing), ("off", "Not installed"))
+        self.assertEqual(self.row(None, enabled=False), ("off", "Read aloud off"))
+        self.assertEqual(self.row(None, status=missing), ("warn", "Not installed"))
+        self.assertEqual(self.row(None, status=installed), ("off", "Starts with voice typing"))
+        self.assertEqual(self.row({"read_aloud": {"enabled": False}}), ("warn", "Restart voice typing"))
+        self.assertEqual(self.row(ra()), ("good", "Ready (loads when used)"))
+        self.assertEqual(self.row(ra(engine="ready", device="cuda")), ("good", "Loaded on the GPU"))
+        self.assertEqual(self.row(ra(engine="ready", device="cpu", busy=True)), ("good", "Reading (CPU)"))
+        self.assertEqual(self.row(ra(engine="ready", busy=True, paused=True)), ("good", "Paused"))
+        self.assertEqual(self.row(ra(engine="loading")), ("warn", "Loading"))
+        self.assertEqual(self.row(ra(engine="failed"))[0], "bad")
+
+    def test_the_speaker_button_sits_on_the_kokoro_row(self):
+        tree = ast.parse((REPO / "scripts" / "tray.py").read_text(encoding="utf-8"))
+        build = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_build_overview")
+        branches = [n for n in ast.walk(build) if isinstance(n, ast.If) and isinstance(n.test, ast.Compare)
+                    and any(isinstance(c, ast.Constant) and c.value == "kokoro" for c in n.test.comparators)]
+        self.assertTrue(any("read_btn" in ast.unparse(b) for b in branches))
+        dictation = [n for n in ast.walk(build) if isinstance(n, ast.If) and isinstance(n.test, ast.Compare)
+                     and any(isinstance(c, ast.Constant) and c.value == "dictation" for c in n.test.comparators)]
+        self.assertFalse(any("read_btn" in ast.unparse(b) for b in dictation))
+
+    def test_gpu_card_row_on_cuda(self):
+        from stacklib import gpu_models
+
+        [row] = gpu_models.rows([], {"read_aloud": {"engine": "ready", "device": "cuda", "model": "kokoro-82m fp32"}})
+        self.assertEqual((row["gpu"], row["bytes"]), ("100%", int(gpu_models.KOKORO_GPU * gpu_models.GIB)))
+
+
+class Gpu(unittest.TestCase):
+    def test_device_setting(self):
+        self.assertEqual(speak.Config().device, "auto")
+        warned = []
+        self.assertEqual(speak.Config.from_profile({"read_aloud": {"device": "TPU"}}, warn=warned.append).device, "auto")
+        self.assertEqual(len(warned), 1)
+        self.assertEqual(speak.Config.from_profile({"read_aloud": {"device": "GPU"}}).device, "gpu")
+
+    def test_cuda_dirs_need_cudnn_and_ollamas_cuda_13(self):
+        from stacklib.dictation import gpu
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cudnn = root / "venv" / "Lib" / "site-packages" / "nvidia" / "cudnn" / "bin"
+            ollama = root / "local" / "Programs" / "Ollama" / "lib" / "ollama" / "cuda_v13"
+            cudnn.mkdir(parents=True)
+            ollama.mkdir(parents=True)
+            (cudnn / "cudnn64_9.dll").write_bytes(b"")
+            with mock.patch.dict("os.environ", {"LOCALAPPDATA": str(root / "local"), "PATH": ""}):
+                self.assertEqual(gpu.kokoro_cuda_dirs(root / "venv"), [])     # no CUDA 13 runtime yet
+                (ollama / "cudart64_13.dll").write_bytes(b"")
+                (ollama / "cublas64_13.dll").write_bytes(b"")
+                self.assertEqual(gpu.kokoro_cuda_dirs(root / "venv"), [cudnn, ollama])
+
+    def test_gpu_install_choice(self):
+        from stacklib import dictation
+
+        with mock.patch.object(dictation, "which", return_value=None):
+            self.assertTrue(dictation.wants_gpu({"read_aloud": {"device": "gpu"}}))
+            self.assertFalse(dictation.wants_gpu({"read_aloud": {"device": "cpu"}}))
+            self.assertFalse(dictation.wants_gpu({"read_aloud": {"device": "auto"}}))
+            self.assertTrue(dictation.wants_gpu({"read_aloud": {"device": "auto"}, "detected": {"vram_mib": 12288}}))
+        with mock.patch.object(dictation, "which", return_value="C:/Windows/System32/nvidia-smi.exe"):
+            self.assertTrue(dictation.wants_gpu({"read_aloud": {}}))
+
+    def test_voice_typing_install_keeps_the_gpu_runtime(self):
+        from stacklib import dictation
+
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = {"dictation": {"env_dir": tmp}}
+            site = Path(tmp) / ".venv" / "Lib" / "site-packages"
+            (site / "onnxruntime_gpu-1.31.1.dist-info").mkdir(parents=True)
+            (site / "nvidia" / "cudnn" / "bin").mkdir(parents=True)
+            (site / "nvidia" / "cudnn" / "bin" / "cudnn64_9.dll").write_bytes(b"")
+            with mock.patch.object(dictation, "IS_WINDOWS", True):
+                self.assertTrue(dictation.read_aloud_gpu_installed(profile))
+        self.assertTrue(dictation.READ_GPU_PACKAGES[0].startswith("onnxruntime-gpu=="))
+        src = (REPO / "scripts" / "stacklib" / "dictation" / "__init__.py").read_text(encoding="utf-8")
+        self.assertIn('READ_GPU_PACKAGES[0] if pkg.startswith("onnxruntime==") and read_aloud_gpu_installed(profile)',
+                      src)
 
 
 if __name__ == "__main__":

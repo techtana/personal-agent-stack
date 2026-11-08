@@ -20,6 +20,12 @@ The owner passes in its hooks, so the tests drive this class with fakes:
     esc(on) -> grab or release Esc (never on the hotkey thread)     busy_elsewhere() -> a reason to wait, or ""
     record(voice, cfg, audio_s=, run_s=, load_s=, tokens=, wall_s=, stopped=, failed=) -> one usage record
     missing(cfg) -> what is not installed (read aloud's packages, Kokoro's weights), or ""
+    warm(cfg) -> load the voice now (runs while the selection is copied)
+    workers(voice) -> pieces to make at once; lookahead_s(voice) -> seconds of speech to keep ready ahead
+    pc_busy() -> True while the processors are nearly full: then one piece at a time, one ahead
+
+The first sentence is made on its own (falling back to a Windows voice when Kokoro cannot speak); the rest are made
+by `workers` threads at once and handed to the player in order, so a long text plays without gaps.
 """
 from __future__ import annotations
 
@@ -30,11 +36,23 @@ from dataclasses import dataclass, field
 from . import speak
 from .selection import Selection, SelectionError, capture
 
-LOOKAHEAD_S = 8.0         # prepare at most this much speech ahead of what plays: at about 3x real time the next
-                          # piece is ready long before this runs out, and a stop wastes little work
+LOOKAHEAD_S = 30.0        # prepare at most this much speech ahead of what plays (the owner's hooks may say more)
 SENTENCE_GAP_S = 0.05
 PARAGRAPH_GAP_S = 0.35
 PREVIEW = 260
+
+
+KEEP_AUDIO_BYTES = 64 << 20   # Read it again keeps up to about 23 minutes of the last reading's speech in memory
+
+
+@dataclass
+class Replayed:
+    """Audio kept from the last reading: no model time, no tokens."""
+    pcm: bytes
+    seconds: float
+    tokens: int = 0
+    run_s: float = 0.0
+    load_s: float = 0.0
 
 
 def preview(text: str) -> str:
@@ -60,21 +78,26 @@ class Job:
     pieces: list = field(default_factory=list)
     index: int = -1
     hint: str = ""
+    reuse: dict = field(default_factory=dict)   # again: piece index -> audio kept from the last reading
+    made: dict = field(default_factory=dict)    # piece index -> audio made (or reused) in this reading
 
 
 class Reader:
     def __init__(self, *, call, target, ui, cfg, voices, synth, player, esc, ready=lambda voice, cfg: True,
                  busy_elsewhere=lambda: "", record=lambda *a, **k: None, logline=lambda msg: None,
-                 elevated: bool = False, hotkey_text=lambda: "", missing=lambda cfg: "") -> None:
+                 elevated: bool = False, hotkey_text=lambda: "", missing=lambda cfg: "", warm=lambda cfg: None,
+                 workers=lambda voice: 1, lookahead_s=lambda voice: LOOKAHEAD_S, pc_busy=lambda: False) -> None:
         self.call, self.target, self.ui, self.cfg = call, target, ui, cfg
         self.voices, self.synth, self.player, self.esc, self.ready = voices, synth, player, esc, ready
         self.busy_elsewhere, self.record, self.logline = busy_elsewhere, record, logline
         self.elevated, self.hotkey_text, self.missing = elevated, hotkey_text, missing
+        self.warm, self.workers, self.lookahead_s, self.pc_busy = warm, workers, lookahead_s, pc_busy
         self.job: Job | None = None
         self.lock = threading.Lock()
         self.esc_lock = threading.Lock()
         self.esc_owner: Job | None = None
         self.last_text = ""
+        self.last_audio: tuple | None = None      # (key, {piece index: audio}) of the last reading, in memory only
 
     @property
     def busy(self) -> bool:
@@ -225,6 +248,8 @@ class Reader:
         cfg = self.cfg()
         t0 = time.monotonic()
         app = ""
+        # Load the voice while the selection is copied, so the two waits overlap.
+        threading.Thread(target=self.warm, args=(cfg,), name="read-aloud-warm", daemon=True).start()
         if job.text is None:
             self.ui.working("Read aloud", "", "Reading the selection…")
             sel = self._selection(job)
@@ -271,40 +296,37 @@ class Reader:
         if job.cancelled:     # stopped while the device opened
             player.stop()
             return
-        audio_s = run_s = load_s = 0.0
-        tokens = 0
+        stats = {"audio_s": 0.0, "run_s": 0.0, "load_s": 0.0, "tokens": 0, "played_s": 0.0}
+        key = self._audio_key(text, voice, cfg)
+        if job.kind == "again" and self.last_audio and self.last_audio[0] == key:
+            job.reuse = dict(self.last_audio[1])     # same text, voice and speed: replay, make only what is missing
         failed = ""
-        for i, piece in enumerate(job.pieces):
-            while not job.cancelled and player.ahead() > LOOKAHEAD_S:
-                time.sleep(0.05)
-            if job.cancelled:
-                break
-            if i == 0:
-                loading = "" if self.ready(voice, cfg) else " Loading the voice first (a second or two)."
-                self.ui.working(f"Preparing {voice.name}", preview(piece.text), (note + loading).strip())
-            try:
-                audio = self.synth(piece.text, voice, cfg.speed, cfg)
-            except Exception as e:  # noqa: BLE001 - SpeechError, or a COM or ONNX error
-                fallback = self._fallback(voice, voices) if i == 0 and voice.engine == "kokoro" else None
-                if fallback is None:
-                    failed = type(e).__name__
-                    self.logline(f"[read] {voice.id}: {e}")
-                    if not job.cancelled:
-                        self.ui.error("Could not read it aloud", str(e)[:200],
-                                      "Choose another voice in the button's menu." if i == 0 else "Stopped there.")
-                    break
+        first = job.pieces[0]
+        loading = "" if self.ready(voice, cfg) else " Loading the voice first (a second or two)."
+        self.ui.working(f"Preparing {voice.name}", preview(first.text), (note + loading).strip())
+        try:
+            audio = self._make(job, 0, voice, cfg)
+        except Exception as e:  # noqa: BLE001 - SpeechError, or a COM or ONNX error
+            fallback = self._fallback(voice, voices) if voice.engine == "kokoro" else None
+            if fallback is None:
+                audio, failed = None, type(e).__name__
+                self.logline(f"[read] {voice.id}: {e}")
+                if not job.cancelled:
+                    self.ui.error("Could not read it aloud", str(e)[:200], "Choose another voice in the button's menu.")
+            else:
                 note = f"{e}. {fallback.name} (a Windows voice) reads it instead."
                 self.logline(f"[read] {voice.id} failed ({e}); falling back to {fallback.id}")
                 voice = job.voice_used = fallback
                 job.hint = self._hint(cfg, note)
-                audio = self.synth(piece.text, voice, cfg.speed, cfg)
-            audio_s += audio.seconds
-            run_s += audio.run_s
-            load_s += audio.load_s
-            tokens += audio.tokens
-            if job.cancelled:
-                break
-            player.play(audio.pcm + silence(PARAGRAPH_GAP_S if piece.paragraph_end else SENTENCE_GAP_S), i)
+                job.reuse.clear()                 # kept audio was another voice's
+                audio = self._make(job, 0, voice, cfg)
+        if audio is not None and not job.cancelled:
+            self._add(stats, audio)
+            player.play(audio.pcm + silence(PARAGRAPH_GAP_S if first.paragraph_end else SENTENCE_GAP_S), 0)
+            failed = self._prefetch(job, voice, cfg, player, stats)
+        audio_s, run_s, load_s, tokens = stats["audio_s"], stats["run_s"], stats["load_s"], stats["tokens"]
+        if job.kind != "sample":
+            self._keep_audio(job, voice, cfg)
         made = time.monotonic()   # the usage record's wall clock ends here: playback is not the model's time
         player.finish()
         while not player.wait(0.2):
@@ -325,7 +347,118 @@ class Reader:
             self.ui.done(f"Voice: {voice.name}", voice.label, "Read aloud uses it from now on.")
         else:
             self.ui.done("Finished reading", preview(text),
-                         f"{voice.name} read {speak.seconds_text(audio_s)} of speech." + (f" {note}" if note else ""))
+                         f"{voice.name} read {speak.seconds_text(stats['played_s'])} of speech"
+                         + (" (replayed: nothing was made again)." if job.reuse and not audio_s else ".")
+                         + (f" {note}" if note else ""))
+
+    @staticmethod
+    def _audio_key(text: str, voice: speak.Voice, cfg: speak.Config) -> tuple:
+        return text, voice.id, cfg.speed, cfg.kokoro
+
+    def _make(self, job: Job, i: int, voice: speak.Voice, cfg: speak.Config):
+        """Piece i's audio: kept from the last reading (Read it again, same voice and speed), else made now."""
+        kept = job.reuse.get(i)
+        if kept is not None:
+            audio = Replayed(kept.pcm, kept.seconds)
+        else:
+            audio = self.synth(job.pieces[i].text, voice, cfg.speed, cfg)
+        job.made[i] = audio
+        return audio
+
+    def _keep_audio(self, job: Job, voice: speak.Voice, cfg: speak.Config) -> None:
+        """Keep this reading's audio in memory for Read it again (up to KEEP_AUDIO_BYTES; longer readings are kept
+        from the start). Nothing goes to disk; the next reading of other text replaces it."""
+        kept, size = {}, 0
+        for i in sorted(job.made):
+            size += len(job.made[i].pcm)
+            if size > KEEP_AUDIO_BYTES:
+                break
+            kept[i] = job.made[i]
+        text = self.last_text
+        self.last_audio = (self._audio_key(text, voice, cfg), kept) if kept else None
+
+    @staticmethod
+    def _add(stats: dict, audio) -> None:
+        stats["played_s"] += audio.seconds
+        if isinstance(audio, Replayed):
+            return                                   # no model ran for it
+        stats["audio_s"] += audio.seconds
+        stats["run_s"] += audio.run_s
+        stats["load_s"] += audio.load_s
+        stats["tokens"] += audio.tokens
+
+    def _prefetch(self, job: Job, voice: speak.Voice, cfg: speak.Config, player, stats: dict) -> str:
+        """Make pieces 1.. with `workers(voice)` threads at once and hand them to the player in order, while the
+        speech made but not yet played stays under `lookahead_s(voice)`. While the PC is busy (`pc_busy()`, the
+        processors more than 85% in use) only one piece is made at a time and at most one waits ahead, so read aloud
+        never takes the processors from whatever else runs. Returns the error type when a piece failed, else ""."""
+        n = len(job.pieces)
+        if n < 2:
+            return ""
+        cond = threading.Condition()
+        made: dict[int, object] = {}      # piece index -> Audio, or the exception it raised
+        state = {"next": 1, "played": 1, "making": 0, "stop": False}
+        workers = max(1, self.workers(voice))
+        ahead_limit = self.lookahead_s(voice)
+
+        def ahead() -> float:
+            return player.ahead() + sum(a.seconds for a in made.values() if not isinstance(a, BaseException))
+
+        def may_start() -> bool:
+            if self.pc_busy():
+                return state["making"] == 0 and state["next"] - state["played"] < 2
+            return state["making"] < workers and ahead() < ahead_limit
+
+        def work() -> None:
+            while True:
+                with cond:
+                    while not job.cancelled and not state["stop"] and state["next"] < n and not may_start():
+                        cond.wait(0.1)
+                    if job.cancelled or state["stop"] or state["next"] >= n:
+                        return
+                    i = state["next"]
+                    state["next"] += 1
+                    state["making"] += 1
+                try:
+                    result = self._make(job, i, voice, cfg)
+                except Exception as e:  # noqa: BLE001 - handed to the player loop, which stops there
+                    result = e
+                with cond:
+                    made[i] = result
+                    state["making"] -= 1
+                    cond.notify_all()
+                if isinstance(result, BaseException):
+                    return
+
+        threads = [threading.Thread(target=work, name=f"read-aloud-make-{k}", daemon=True) for k in range(workers)]
+        for t in threads:
+            t.start()
+        failed = ""
+        while state["played"] < n and not job.cancelled:
+            i = state["played"]
+            with cond:
+                while i not in made and not job.cancelled:
+                    cond.wait(0.1)
+                    if not any(t.is_alive() for t in threads) and i not in made:
+                        break                      # every worker ended (an error earlier): nothing more comes
+                result = made.pop(i, None)
+            if job.cancelled or result is None:
+                break
+            if isinstance(result, BaseException):
+                failed = type(result).__name__
+                self.logline(f"[read] {voice.id}, piece {i + 1}: {result}")
+                self.ui.error("Could not read it aloud", str(result)[:200], "Stopped there.")
+                break
+            self._add(stats, result)
+            piece = job.pieces[i]
+            player.play(result.pcm + silence(PARAGRAPH_GAP_S if piece.paragraph_end else SENTENCE_GAP_S), i)
+            with cond:
+                state["played"] += 1
+                cond.notify_all()
+        with cond:
+            state["stop"] = True     # an error or a stop: the workers make nothing more
+            cond.notify_all()
+        return failed
 
     @staticmethod
     def _fallback(voice: speak.Voice, voices: list[speak.Voice]) -> speak.Voice | None:

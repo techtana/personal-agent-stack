@@ -57,3 +57,42 @@ def add_cuda_dlls() -> Path | None:
     if str(d).lower() not in os.environ.get("PATH", "").lower():
         os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
     return d
+
+
+# ---------------------------------------------------------------- read aloud's Kokoro on CUDA 13
+
+def kokoro_cuda_dirs(prefix: Path | None = None) -> list[Path]:
+    """Folders onnxruntime-gpu 1.31 needs for Kokoro on the GPU: cuDNN 9 for CUDA 13 (the nvidia-cudnn-cu13 wheel in
+    the environment) and the CUDA 13 runtime and cuBLAS that Ollama ships in lib/ollama/cuda_v13 (signed by NVIDIA)."""
+    prefix = Path(prefix or sys.prefix)
+    out = [prefix / "Lib" / "site-packages" / "nvidia" / "cudnn" / "bin"]
+    local = os.environ.get("LOCALAPPDATA", "")
+    if local:
+        out.append(Path(local) / "Programs" / "Ollama" / "lib" / "ollama" / "cuda_v13")
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        if d and (Path(d) / "ollama.exe").exists():
+            out.append(Path(d) / "lib" / "ollama" / "cuda_v13")
+    found = {"cudnn64_9.dll": None, "cudart64_13.dll": None, "cublas64_13.dll": None}
+    keep: list[Path] = []
+    for d in out:
+        for name in found:
+            if found[name] is None and (d / name).exists():
+                found[name] = d
+                if d not in keep:
+                    keep.append(d)
+    return keep if all(found.values()) else []
+
+
+def add_kokoro_cuda_dlls(prefix: Path | None = None) -> bool:
+    """Put cuDNN 9 and the CUDA 13 runtime on the DLL search path; False when one of them is missing."""
+    dirs = kokoro_cuda_dirs(prefix)
+    if not dirs or os.name != "nt":
+        return False
+    for d in dirs:
+        try:
+            os.add_dll_directory(str(d))
+        except OSError:
+            pass
+        if str(d).lower() not in os.environ.get("PATH", "").lower():
+            os.environ["PATH"] = str(d) + os.pathsep + os.environ.get("PATH", "")
+    return True

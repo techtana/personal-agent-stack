@@ -461,6 +461,19 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
             return Estimate(disk_gb=0.02, ram_gb=0.05, cpu_threads=0.2, gpu="none", cpu="almost none",
                             held="only while it reads", basis="Windows' own voices (read_aloud.kokoro: off).",
                             note="Windows voices make speech almost at once; they sound flatter than Kokoro's.")
+        device = str((profile.get("read_aloud") or {}).get("device") or "auto")
+        on_gpu = name == "fp32" and gpu and (device == "gpu" or (device == "auto" and hw.vram_gb > 0))
+        if on_gpu:
+            return Estimate(
+                disk_gb=0.02 + disk + KOKORO_GPU_GB, todo_gb=(0.02 + KOKORO_GPU_GB) if cached else None, ram_gb=0.3,
+                vram_gb=1.0, cpu_threads=1.0, gpu_short="~0.3 s per sentence",
+                gpu="about 0.3 s per sentence of speech on the GPU (12-20x faster than real time), 1.0 GB held while loaded",
+                cpu=f"{_cpu(1.0, hw)} logical processors while it prepares speech",
+                held="Kokoro loads on its first reading (about 2 s)" + (f" and is freed after {idle:.0f} idle minutes"
+                                                                           if idle else ""),
+                basis="Measured on the reference PC's RTX 3060: 1.0 GB of GPU memory, 18.6 s of speech in 0.9 s, with "
+                      "onnxruntime-gpu 1.31 (CUDA 13) and cuDNN 9; the GPU libraries add about 0.8 GB on disk.",
+                note="Falls back to the CPU when the GPU is full (ComfyUI working) or its libraries are missing.")
         return Estimate(
             disk_gb=0.02 + disk, todo_gb=0.02 if cached else None, ram_gb=ram, cpu_threads=hw.threads / 2,
             cpu_bursts=True,
@@ -485,6 +498,7 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
 # read_aloud.kokoro: (name, download GB with the voices, RAM GB while loaded and reading), measured on the reference
 # PC (2026-11-08: working set after a sentence, 0.50 GB for fp32 and 0.31 GB for int8). "off" reads with Windows voices.
 KOKORO = {"fp32": ("fp32", 0.35, 0.5), "int8": ("int8", 0.12, 0.3), "off": ("", 0.0, 0.0)}
+KOKORO_GPU_GB = 0.8   # onnxruntime-gpu (0.23 GB) and cuDNN 9 for CUDA 13 (0.58 GB), measured 2026-11-08
 
 
 def _kokoro_cached(profile: dict, variant: str) -> bool:
@@ -558,6 +572,9 @@ OPTIONS: dict[str, list[tuple[Option, object]]] = {
         (Option("read_aloud", "kokoro", "Voices", "fp32"),
          lambda _p: [("fp32", "Kokoro (0.35 GB)"), ("int8", "Kokoro, smaller (0.12 GB)"),
                      ("off", "Windows voices only")]),
+        (Option("read_aloud", "device", "Runs on", "auto"),
+         lambda _p: [("auto", "GPU on an NVIDIA PC (adds 0.8 GB), else CPU"), ("gpu", "GPU (adds 0.8 GB)"),
+                     ("cpu", "CPU")]),
     ],
     "recordings": [
         (Option("media", "whisper_model", "Whisper model", "large-v3-turbo"), _whisper_choices),
@@ -985,3 +1002,34 @@ def initial_choice(status: dict[str, Status], hw: Hardware) -> dict[str, bool]:
         else:
             out[f.id] = RECOMMENDED.get(f.id, lambda hw: False)(hw)
     return out
+
+
+# ---------------------------------------------------------------- the tray's Kokoro row while read aloud provides it
+
+def read_aloud_row(profile: dict, health: dict | None, status: "Status | None" = None) -> tuple[str, str, str]:
+    """(level, state, role) for the tray's Kokoro row while the standalone Kokoro service is off and read aloud runs
+    Kokoro inside the voice typing app. level: good | warn | bad | off. health is voice typing's /health answer (None
+    while voice typing is down); status is the read_aloud feature's Status, when checked."""
+    role = "text to speech: read aloud, inside voice typing"
+    if not (profile.get("read_aloud") or {}).get("enabled"):
+        if status is not None and not status.installed and not status.unknown:
+            return "off", "Not installed", role
+        return "off", "Read aloud off", role
+    if status is not None and not status.installed and not status.unknown:
+        return "warn", "Not installed", role
+    read = health.get("read_aloud") if isinstance(health, dict) else None
+    if not isinstance(health, dict):
+        return "off", "Starts with voice typing", role
+    if not isinstance(read, dict) or not read.get("enabled"):
+        return "warn", "Restart voice typing", role
+    where = {"cuda": "GPU", "cpu": "CPU"}.get(str(read.get("device") or ""), "")
+    engine = read.get("engine")
+    if engine == "failed":
+        return "bad", "Failed (Windows voices read)", role
+    if engine == "loading":
+        return "warn", "Loading", role
+    if read.get("busy"):
+        return "good", "Paused" if read.get("paused") else f"Reading{f' ({where})' if where else ''}", role
+    if engine == "ready":
+        return "good", f"Loaded on the {where}" if where else "Loaded", role
+    return "good", "Ready (loads when used)", role

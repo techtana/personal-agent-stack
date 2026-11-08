@@ -379,6 +379,8 @@ class Overlay:
         self.dragged = False
 
     def _enter(self, which: str) -> None:
+        if which == "read":
+            self.app.read_warm()
         if self.states[which] == "idle" and not self.bubble.winfo_viewable():
             self.hover_job = self.root.after(700, lambda: self._hover_hint(which))
 

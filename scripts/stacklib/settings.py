@@ -20,7 +20,7 @@ from .dictation.cleanup import DEFAULT_PROMPT as CLEANUP_PROMPT  # noqa: E402
 from .dictation.hotkey import CHOICES as HOTKEY_CHOICES, MENU_CHOICES, READ_CHOICES, REFINE_CHOICES  # noqa: E402
 from .dictation.models import CHOICES as MODEL_CHOICES, LANGUAGES  # noqa: E402
 from .dictation.refine import BUILTIN as REFINE_STYLES  # noqa: E402
-from .dictation.speak import KOKORO_CHOICES, SPEEDS, voice_choices  # noqa: E402
+from .dictation.speak import DEVICES, KOKORO_CHOICES, SPEEDS, voice_choices  # noqa: E402
 
 VOICES = voice_choices()   # Kokoro's voices and this PC's Windows voices (from the registry)
 
@@ -131,6 +131,11 @@ SETTINGS = [
             [vid for vid, _ in VOICES], labels=dict(VOICES), show_code=False),
     Setting("read_aloud", "speed", "Speed", "choice", "How fast the voice reads; 1.0 is its normal pace.",
             "read_aloud", list(SPEEDS)),
+    Setting("read_aloud", "device", "Runs on", "choice",
+            "Where Kokoro makes speech. gpu: about 0.3 s per sentence and 1 GB of GPU memory (needs the GPU libraries, "
+            "which `stack.py read-aloud install` adds when this is gpu or auto on an NVIDIA PC). cpu: about 1.5 s per "
+            "sentence, no GPU memory. auto: the GPU when its libraries are installed. Applies at the next reading.",
+            "read_aloud", list(DEVICES)),
     Setting("read_aloud", "auto_language", "Voice per language", "bool",
             "Text clearly written in another language is read by a voice for that language, when one is available.",
             "read_aloud"),
