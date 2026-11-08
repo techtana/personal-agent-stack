@@ -72,6 +72,7 @@ class Config:
     mic: str = ""
     unload_after_min: float = 30.0
     button: bool = True
+    keep_minutes: float = 30.0    # how long the voice typing history keeps what you said and what was typed
     env_dir: str = ""
 
     @classmethod
@@ -107,6 +108,7 @@ class Config:
         cfg.start_timeout_s = min(max(cfg.start_timeout_s, 2.0), 60.0)
         cfg.phrase_pause_s = min(max(cfg.phrase_pause_s, 0.3), 3.0)
         cfg.max_minutes = min(max(cfg.max_minutes, 0.5), 60.0)
+        cfg.keep_minutes = min(max(cfg.keep_minutes, 1.0), 43200.0)   # a minute to 30 days
         return cfg
 
 

@@ -92,6 +92,9 @@ SETTINGS = [
             "dictation", ["paste", "type"]),
     Setting("dictation", "button", "Show the mic button", "bool",
             "The floating button; the hotkey works without it.", "dictation"),
+    Setting("dictation", "keep_minutes", "Keep voice typing history for (minutes)", "choice",
+            "How long each dictation (as heard and as typed) stays in the history for History and Paste last text "
+            "again; older entries are deleted.", "dictation", ["5", "15", "30", "60", "240", "1440"]),
     Setting("dictation", "cleanup_prompt", "Cleanup prompt", "text",
             "What the local model is told to do with each transcript (Clean and Concise). Concise adds a rule to "
             "shorten, and the app adds the reply format (JSON). A reply much longer or shorter than the transcript is "
@@ -235,7 +238,7 @@ def _to_file_value(s: Setting, ui_value: object) -> object:
         return int(ui_value)
     if s.section == "dictation" and s.key.endswith("_s"):
         return float(ui_value)
-    if s.section == "refine" and s.key == "keep_minutes":
+    if s.section in ("refine", "dictation") and s.key == "keep_minutes":
         return int(float(ui_value))
     if s.section == "read_aloud" and s.key == "speed":
         return float(ui_value)
@@ -277,7 +280,8 @@ def save(profile: dict, edits: dict[str, object]) -> list[Setting]:
 LIVE_BUTTONS = {"dictation.button": ("dictation", "show", "hide", "Voice typing button"),
                 "refine.button": ("refine", "show_refine", "hide_refine", "Refine button"),
                 "read_aloud.button": ("read_aloud", "show_read", "hide_read", "Read aloud button")}
-LIVE_DICTATION_IDS = {*LIVE_BUTTONS, "dictation.cleanup_prompt"}
+LIVE_RELOAD_IDS = {"dictation.cleanup_prompt", "dictation.keep_minutes"}   # POST /reload takes them
+LIVE_DICTATION_IDS = {*LIVE_BUTTONS, *LIVE_RELOAD_IDS}
 
 
 def _update_dictation(profile: dict, ids: set[str], log) -> bool:
@@ -296,11 +300,14 @@ def _update_dictation(profile: dict, ids: set[str], log) -> bool:
             if not control.call(port, show if visible else hide).get("ok"):
                 return False
             log(f"{name} " + ("shown" if visible else "hidden"))
-        if "dictation.cleanup_prompt" in ids:
+        if ids & LIVE_RELOAD_IDS:
             if not control.call(port, "reload").get("ok"):
                 return False
+        if "dictation.cleanup_prompt" in ids:
             kind = "your own" if profile["dictation"].get("cleanup_prompt") else "the built-in"
             log(f"Voice typing uses {kind} cleanup prompt from the next dictation")
+        if "dictation.keep_minutes" in ids:
+            log(f"Voice typing keeps its history for {profile['dictation'].get('keep_minutes')} minutes")
     except OSError:
         pass  # not running: it reads the saved values when it starts
     return True

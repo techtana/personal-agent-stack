@@ -1,7 +1,8 @@
 """The voice typing app: hotkey or button -> microphone -> VAD -> Whisper -> optional cleanup -> the focused window.
 It also refines selected text: the refine button or its hotkey -> Ctrl+C -> the gateway's local model -> Ctrl+V over
-the selection, with every suggestion kept in the refine log (refiner.py). And it reads selected text aloud: the
-speaker button or its hotkey -> Ctrl+C -> Kokoro or a Windows voice on this PC -> the speakers (reader.py).
+the selection, with every suggestion kept in the refine log (refiner.py). What you dictate is kept in the voice
+typing history (voicelog.py) for dictation.keep_minutes. And it reads selected text aloud: the speaker button or its
+hotkey -> Ctrl+C -> Kokoro or a Windows voice on this PC -> the speakers (reader.py).
 
 Threads: Tk main loop (buttons, bubble, history window); hotkeys (Win32 message loop); microphone (WinMM) which also
 runs the VAD and the segmenter on each 32 ms frame; control (start, stop, cancel, in order); worker (Whisper and the
@@ -20,7 +21,6 @@ import queue
 import sys
 import threading
 import time
-from collections import deque
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -39,6 +39,7 @@ from .refiner import Refiner
 from .segment import FRAME, Event, Segmenter
 from .textops import joiner, strip_fillers
 from .tts import Speech
+from .voicelog import VOICE_LOG_NAME, VoiceLog
 from .vad import level, make_vad
 
 PRE_PAD = int(0.30 * RATE)    # audio kept before the VAD's speech onset (it reacts a little late)
@@ -223,7 +224,7 @@ class App:
         self.state = "idle"               # idle | listening | finishing
         self.session: Session | None = None
         self.recorder: Recorder | None = None
-        self.history: deque = deque(maxlen=10)   # (raw transcript, typed text)
+        self.voice_log = VoiceLog(state_dir(profile) / VOICE_LOG_NAME, keep_minutes=self.cfg.keep_minutes)
         self.counter = 0
         self.commands: queue.Queue = queue.Queue()
         self.jobs: queue.Queue = queue.Queue()
@@ -274,7 +275,7 @@ class App:
         threading.Thread(target=self._command_loop, name="dictation-control-loop", daemon=True).start()
         threading.Thread(target=self._worker_loop, name="dictation-worker", daemon=True).start()
         threading.Thread(target=self._track_focus, name="dictation-focus", daemon=True).start()
-        threading.Thread(target=self._prune_refine_log, name="dictation-refine-prune", daemon=True).start()
+        threading.Thread(target=self._prune_logs, name="dictation-prune", daemon=True).start()
         self.engine.load_async()
         reading = f"{self.read_hotkey_text() or 'button only'} ({self.scfg.voice})" if self.scfg.enabled else "off"
         missing = self.speech.missing(self.scfg) if self.scfg.enabled else ""
@@ -393,6 +394,7 @@ class App:
                            "button": bool(self.rcfg.button), "default": self.rcfg.default, "model": self.rcfg.model,
                            "busy": self.refiner.busy, "log": str(self.refine_log.path),
                            "keep_minutes": self.rcfg.keep_minutes},
+                "history": {"log": str(self.voice_log.path), "keep_minutes": self.cfg.keep_minutes},
                 "read_aloud": {"enabled": self.scfg.enabled, "hotkey": self.scfg.hotkey,
                                "hotkey_ok": not self.read_hotkey_error,
                                "button": bool(self.scfg.button), "voice": self.scfg.voice, "speed": self.scfg.speed,
@@ -445,11 +447,18 @@ class App:
         return "custom" if self.cfg.cleanup_prompt else "built-in"
 
     def reload(self) -> None:
-        """Take the settings that need no restart from the machine file: the cleanup prompt (the tray's Apply calls
-        this after saving it). The next cleanup uses it."""
+        """Take the settings that need no restart from the machine file: the cleanup prompt and how long the history
+        keeps a dictation (the tray's Apply calls this after saving them). The next cleanup uses the prompt; a
+        shorter keep_minutes deletes older entries at once."""
         fresh = Config.from_profile(prof.resolve_profile(self.profile.get("name") or None))
         self.cfg.cleanup_prompt = fresh.cleanup_prompt
-        log(f"[dictation] settings reloaded: {self.prompt_kind()} cleanup prompt")
+        self._set_voice_keep(fresh.keep_minutes)
+        log(f"[dictation] settings reloaded: {self.prompt_kind()} cleanup prompt, history kept {self.voice_keep_text()}")
+
+    def _set_voice_keep(self, minutes: float) -> int:
+        """Use a new dictation.keep_minutes; returns how many history entries it deleted."""
+        self.cfg.keep_minutes = self.voice_log.keep_minutes = minutes
+        return self.voice_log.prune()
 
     def quit(self) -> None:
         log("[dictation] quitting")
@@ -819,7 +828,7 @@ class App:
             job = self.inserter.submit(InsertJob(final, self.cfg.insert, s.target))
             job.done.wait(20)
             outcome, detail = job.outcome or "failed", job.detail or "timed out"
-        self.history.append((raw, final))
+        self._remember(s, raw, final, outcome, secs, note)
         hint = detail if outcome != "inserted" else ""
         if note:
             hint = (hint + " " if hint else "") + f"Cleanup skipped: {note}; typed the transcript without filler sounds."
@@ -829,6 +838,23 @@ class App:
         log(f"[dictation] session {s.id}: {secs:.1f} s audio, {len(s.phrases)} phrase(s), whisper {s.transcribe_s:.2f} s"
             f"{f', cleanup {polish_s:.2f} s' if polish_s else ''}{f' ({note})' if note else ''}; {outcome}: {detail}")
         self._idle(s)
+
+    def _remember(self, s: Session, raw: str, final: str, outcome: str, secs: float, note: str) -> None:
+        """Keep the dictation in the voice typing history for dictation.keep_minutes (History, Paste last again)."""
+        if not (raw or final).strip():
+            return
+        try:
+            hwnd = self.ws.root_window(s.target) if s.target else 0
+            app = self.ws.process_name(self.ws.window_pid(hwnd)) if hwnd else ""
+            window = self.ws.window_title(hwnd)[:200] if hwnd else ""
+        except Exception:  # noqa: BLE001 - the window may be gone; the text still counts
+            app = window = ""
+        try:
+            self.voice_log.append({"kind": "dictation", "mode": s.mode, "style": s.style, "app": app, "window": window,
+                                   "before": raw, "after": final, "status": outcome, "note": note,
+                                   "seconds": round(secs, 1)})
+        except OSError as e:
+            log(f"[dictation] could not write the history: {type(e).__name__}")
 
     def _idle(self, s: Session) -> None:
         if self.session is s:
@@ -869,18 +895,38 @@ class App:
         self.refine_log.keep_minutes = fresh.keep_minutes
         return fresh
 
-    def _prune_refine_log(self) -> None:
-        """Delete refine log entries older than refine.keep_minutes: at start, then once a minute, so a suggestion
-        and the text it replaced leave the disk within a minute of expiring, whether or not you refine again."""
+    def _prune_logs(self) -> None:
+        """Delete refine log entries older than refine.keep_minutes and voice typing history entries older than
+        dictation.keep_minutes: at start, then once a minute, so your text leaves the disk within a minute of
+        expiring, whether or not you refine or dictate again."""
         while True:
-            try:
-                self._refine_cfg(quiet=True)   # the tray may have changed keep_minutes
-                removed = self.refine_log.prune()
-                if removed:
-                    log(f"[refine] deleted {removed} expired log entr{'y' if removed == 1 else 'ies'}")
-            except Exception as e:  # noqa: BLE001 - keep trying; the next minute may work
-                log(f"[refine] could not prune the log: {type(e).__name__}")
+            self.prune_once()
             time.sleep(60)
+
+    def prune_once(self) -> None:
+        for tag, step in (("refine", self._prune_refine), ("dictation", self._prune_voice)):
+            try:
+                removed = step()
+                if removed:
+                    log(f"[{tag}] deleted {removed} expired history entr{'y' if removed == 1 else 'ies'}")
+            except Exception as e:  # noqa: BLE001 - keep trying; the next minute may work
+                log(f"[{tag}] could not prune the history: {type(e).__name__}")
+
+    def _prune_refine(self) -> int:
+        self._refine_cfg(quiet=True)   # the tray may have changed refine.keep_minutes
+        return self.refine_log.prune()
+
+    def _prune_voice(self) -> int:
+        minutes = self.cfg.keep_minutes
+        try:   # the tray may have changed dictation.keep_minutes; a YAML typo keeps the last value
+            minutes = Config.from_profile(prof.resolve_profile(self.profile.get("name") or None)).keep_minutes
+        except Exception:  # noqa: BLE001
+            pass
+        return self._set_voice_keep(minutes)
+
+    def voice_keep_text(self) -> str:
+        """'30 minutes': how long the voice typing history keeps a dictation."""
+        return refine.keep_text(self.cfg.keep_minutes)
 
     def refine_keep_text(self) -> str:
         """'30 minutes': how long the refine log keeps an entry, for the History window and the bubbles."""
@@ -967,20 +1013,30 @@ class App:
         self.inserter.submit(InsertJob(text, "copy", 0))
 
 
-    def paste_last(self) -> None:
-        if not self.history:
-            return
-        threading.Thread(target=self._paste_again, daemon=True).start()
+    def last_dictation(self) -> dict | None:
+        """The newest dictation the history still keeps (dictation.keep_minutes)."""
+        return self.voice_log.last()
 
-    def _paste_again(self) -> None:
+    def paste_last(self) -> None:
+        last = self.last_dictation()
+        if last:
+            self.paste_text(str(last["after"]))
+
+    def paste_text(self, text: str) -> None:
+        """Type `text` again into the app you came from (a menu item or the History window's button)."""
+        if text:
+            threading.Thread(target=self._paste_again, args=(text,), daemon=True).start()
+
+    def _paste_again(self, text: str) -> None:
         time.sleep(0.15)  # let the menu close
         target = self.last_external or self.ws.root_window(self.ws.foreground())  # the window you are in now
-        job = self.inserter.submit(InsertJob(self.history[-1][1], self.cfg.insert, target))
+        job = self.inserter.submit(InsertJob(text, self.cfg.insert, target))
         job.done.wait(10)
 
     def copy_last(self, raw: bool) -> None:
-        if self.history:
-            text = self.history[-1][0 if raw else 1]
+        last = self.last_dictation()
+        text = str((last or {}).get("before" if raw else "after") or "")
+        if text:
             self.inserter.submit(InsertJob(text, "copy", 0))
 
     # ---------------------------------------------------------------- read selected text aloud

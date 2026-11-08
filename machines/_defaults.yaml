@@ -131,6 +131,8 @@ dictation:
   mic: ''                    # '' = the Windows default input; else part of the device name
   unload_after_min: 30       # free Whisper's VRAM after this many idle minutes (0 = never)
   button: true               # show the floating button (the hotkey works either way)
+  keep_minutes: 30           # minutes .run\dictation\voice-history.jsonl keeps what you said and what was typed (1 to
+                             # 43200; History and Paste last text again in the button's menu); older entries are deleted
   env_dir: ''                # '' = <media.root>\dictation, or .run\dictation without a media root
 
 refine:

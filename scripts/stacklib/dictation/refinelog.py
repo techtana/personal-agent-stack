@@ -12,10 +12,10 @@ status: replaced (pasted over the selection) | copied (left on the clipboard, no
 failed the checks; your text stayed) | unchanged | cancelled | failed | skipped. A revert adds {"kind": "revert",
 "of": <id>, "before": <the refined text that was selected>, "after": <the original put back>, ...}.
 
-Unlike the voice typing log, which keeps lengths and timings only, this file holds your text, so it holds it briefly:
+Unlike the app log (tray.log), which keeps lengths and timings only, this file holds your text, so it holds it briefly:
 long enough to review a suggestion, copy it back or revert it. Entries older than keep_minutes are left out of every
 read at once, and deleted from the file by prune(): when the app starts, before each new entry, and once a minute
-while it runs (App._prune_refine_log in app.py), so a suggestion is gone from disk within a minute of expiring even
+while it runs (App._prune_logs in app.py), so a suggestion is gone from disk within a minute of expiring even
 when you refine nothing else. When the last entry goes, the file goes too. The deleted text may stay in free disk
 space until something overwrites it; the file is never copied anywhere.
 """

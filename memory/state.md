@@ -1,7 +1,7 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-08 (read aloud of selected text, an optional part of voice typing; open item 35). Before that, the
-same day (the installer makes an app apart from the repository; open item 32). Before that, the same day (the installer asks which features to install, with their load on this PC, and the tray's Features card; open item 30). Before that, 2026-11-08 (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+Updated: 2026-11-08 (read aloud of selected text, an optional part of voice typing; open item 36). Before that,
+the same day (voice typing history kept for dictation.keep_minutes; open item 35). Before that, the same day (the installer makes an app apart from the repository; open item 32). Before that, the same day (the installer asks which features to install, with their load on this PC, and the tray's Features card; open item 30). Before that, 2026-11-08 (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
@@ -572,7 +572,17 @@ once across a session restart.
    Verified: unit tests (tests/test_ollama_location.py and the full suite); on this PC, read-only, the status reads
    Installed with the override note and the installer's default is D:\ollama\models. Not run: the installer itself.
    This PC's profile still says ~\.ollama\models: rerun install.cmd (it now offers D:) or set the folder in Settings.
-35. Read aloud (2026-11-08, branch claude/read-aloud-highlighted-text-57ce4d; design
+35. Voice typing history (2026-11-08, branch claude/voice-typing-history-edd081). Each dictation that produced text
+   goes to `.run/dictation/voice-history.jsonl` (stacklib/dictation/voicelog.py, the refine log's store): app, window,
+   the transcript as heard, the text typed, status, seconds of speech. Entries expire after `dictation.keep_minutes`
+   (30; tray: Keep voice typing history for, applied through `POST /reload` without a restart) and are pruned at
+   start, before each entry and every minute, like the refine log. The mic menu's **Voice typing history...** opens
+   a window (history.VoiceHistoryWindow: heard vs typed, Copy, Type again in the app); Paste last text again and Copy
+   last text now read the newest kept entry instead of an in-memory list of 10, so they grey out on expiry.
+   Verified: unit tests (tests/test_voice_history.py, the hidden window included); `_remember`, `copy_last` and the
+   prune run in the voice typing venv against a stub app. Not verified: the live app, a real dictation, the window's
+   look. The live app runs the new code only after a restart from the main checkout (or the installed app).
+36. Read aloud (2026-11-08, branch claude/read-aloud-highlighted-text-57ce4d; design
    docs/design/plans/2026-11-08-read-aloud.md). An optional part of the voice typing app: a speaker button right of
    the mic (bar order pencil, mic, speaker, as the owner asked), Ctrl+Alt+S, Esc while it reads, a right-click menu
    (pause, read it again, voice picker with a sample, speed, voice per language), a tray Settings group "Read aloud"
