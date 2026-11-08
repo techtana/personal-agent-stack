@@ -1,6 +1,6 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-07 (voice typing in every app; open item 22). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+Updated: 2026-11-07 (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
@@ -223,7 +223,14 @@ once across a session restart.
    ~230-token replies, likely title/tag tasks) waited behind chat replies (NUM_PARALLEL=1), so overall was 33 tok/s.
    Traces now record `stream`, to show whether the untimed requests are the streamed ones (gateway restart needed).
    Verified: unit tests, a render of the Usage tab from the worktree with stubbed services and real traces.
-22. Voice typing (2026-11-07, branch claude/whisper-speech-to-text-extension-99ad1f): service `dictation`
+22. Recordings (2026-11-05, branch claude/whisper-local-cowork-integration-820acc): faster-whisper 1.2.1 (ctranslate2
+   4.8.5, PyAV 17.0.0, cuBLAS 12.9 / cuDNN 9.28 wheels) in `D:\media\whisper\.venv` from python.org 3.14.7;
+   large-v3-turbo in `D:\huggingface`. `stack.py whisper install` registered the `local-whisper` MCP server in
+   `%APPDATA%\Claude\claude_desktop_config.json` (backup `.bak-20261105-233938`; unity-mcp kept). Verified over stdio
+   with that exact entry: four tools, GPU transcription (12 s clip 0.7 s warm, 125 s in 3.5 s, ~1.1 GB VRAM), cache,
+   job polling, refusal outside allowed_roots; unit tests 149 passed. Not verified: Claude Desktop restarted and the
+   tools used from a Cowork task, a real phone/meeting recording (only eSpeak WAVs), m4a/mp4 input, Thai.
+23. Voice typing (2026-11-07, branch claude/whisper-speech-to-text-extension-99ad1f): service `dictation`
    (scripts/stacklib/dictation, port 8790 for health and control), a floating mic button and Ctrl+Alt+D type speech
    into the focused app. faster-whisper 1.2.1 + CTranslate2 4.8.5 in `D:\media\dictation\.venv` (python.org 3.14;
    every compiled module loaded under Smart App Control); large-v3-turbo from `D:\huggingface` (already cached) on the

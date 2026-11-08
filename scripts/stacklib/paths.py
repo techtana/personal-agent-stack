@@ -53,7 +53,7 @@ def media_paths(profile: dict) -> dict[str, str]:
     root = media.get("root") or ""
     if root:
         out["media.root"] = root
-    for key in ("comfyui_dir", "models_dir", "output_dir", "input_dir", "uv_cache"):
+    for key in ("comfyui_dir", "models_dir", "output_dir", "input_dir", "uv_cache", "whisper_dir", "recordings_dir", "transcripts_dir"):
         if media.get(key):
             out[f"media.{key}"] = media[key]
     if media.get("hf_home"):

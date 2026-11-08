@@ -101,6 +101,11 @@ media:
   image_workflow: z_image_turbo   # config/comfyui/workflows/<name>.json
   image_size: 1024x1024
   image_steps: 8
+  # Recordings: local Whisper (faster-whisper) behind an MCP server for Claude Desktop / Cowork (`stack.py whisper`).
+  # large-v3-turbo in int8_float16 takes ~1.1 GB of VRAM next to the chat model; `small` on the CPU when CUDA fails.
+  whisper_model: large-v3-turbo
+  whisper_compute: int8_float16
+  whisper_cpu_model: small
 
 dictation:
   # Voice typing in any app (scripts/stacklib/dictation; docs/manuals/user-guide.md "Voice typing"). A floating mic

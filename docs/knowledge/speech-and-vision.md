@@ -104,8 +104,23 @@ long, and say so in the user guide. Photos can carry faces and location metadata
   `AUDIO_TTS_OPENAI_API_BASE_URL`, `AUDIO_TTS_MODEL`, `AUDIO_TTS_VOICE` (default `alloy`, an OpenAI voice, so set a
   Kokoro one). Whisper models cache in `DATA_DIR/cache/whisper/models`. Settings saved in the admin panel override
   the env (`ENABLE_PERSISTENT_CONFIG`, default true).
+- Recordings (2026-11-05): a separate faster-whisper install analyses recorded meetings and voice notes from Claude
+  Desktop (Chat and Cowork) or any MCP client. `uv run scripts/stack.py whisper install` builds a venv in
+  `media.whisper_dir` (`D:\media\whisper` here) with faster-whisper, PyAV 17.0.0 and the cuBLAS 12 / cuDNN 9 wheels,
+  downloads `large-v3-turbo` into HF_HOME, copies `scripts/whisper_mcp.py` next to the venv and adds a `local-whisper`
+  stdio server to `%APPDATA%\Claude\claude_desktop_config.json` (backup first; `whisper unregister` removes it).
+  Tools: `list_recordings`, `transcribe_recording` (path, language, prompt for names and jargon), `get_transcription`
+  (polls long jobs, pages transcripts over 40k characters), `whisper_status`. The server reads only below
+  `agent_access.allowed_roots`; drop recordings in `media.recordings_dir` (`D:\media\inputs
+ecordings`).
+  Transcripts are cached and saved as .md, .srt and .json in `media.transcripts_dir`. No speaker separation.
+  The audio stays on this machine, but Cowork sends the transcript text to Anthropic's cloud model.
 
 ## What we found
+
+- 2026-11-05, recordings server on the RTX 3060: `large-v3-turbo` int8_float16 holds ~1.1 GB of VRAM; a 12 s clip
+  took 19 s on the first call (cuDNN start-up) and 0.7 s warm; 125 s of speech took 3.5 s. ctranslate2 4.8.5 needs
+  `cublas64_12.dll` on PATH; the nvidia-cublas-cu12 / nvidia-cudnn-cu12 wheels supply it.
 
 Not measured here yet. Smart App Control may block Kokoro's compiled modules; spike S0d checks that first.
 
@@ -128,3 +143,4 @@ Not measured here yet. Smart App Control may block Kokoro's compiled modules; sp
 ## Changes
 
 - 2026-11-01: first version.
+- 2026-11-05: local Whisper MCP server for recordings (Claude Desktop / Cowork).
