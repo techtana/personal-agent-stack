@@ -92,6 +92,9 @@ SETTINGS = [
             "Private gateway alias that rewrites the text: local-primary (the main model) or local-small (quicker "
             "where it is a smaller model).", "refine",
             ["local-primary", "local-small"]),
+    Setting("refine", "keep_minutes", "Keep refine history for (minutes)", "choice",
+            "How long each suggestion and the text it replaced stay in the refine log for History and Revert; older "
+            "entries are deleted.", "refine", ["5", "15", "30", "60", "240", "1440"]),
     Setting("refine", "button", "Show the refine button", "bool",
             "The pencil button next to the mic; the hotkey works without it.", "dictation"),
     Setting("ollama_env", "OLLAMA_KEEP_ALIVE", "Keep models loaded for", "choice",
@@ -161,6 +164,8 @@ def _to_file_value(s: Setting, ui_value: object) -> object:
         return int(ui_value)
     if s.section == "dictation" and s.key.endswith("_s"):
         return float(ui_value)
+    if s.section == "refine" and s.key == "keep_minutes":
+        return int(float(ui_value))
     return str(ui_value)
 
 

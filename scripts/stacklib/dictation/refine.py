@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import unicodedata
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field, fields
@@ -92,6 +93,7 @@ class Config:
     button: bool = True
     max_chars: int = 10000
     timeout_s: float = 120.0
+    keep_minutes: float = 30.0    # how long the refine log keeps a suggestion and the text it replaced
     prompts: dict = field(default_factory=dict)
 
     @classmethod
@@ -120,10 +122,21 @@ class Config:
             setattr(cfg, f.name, value)
         cfg.max_chars = min(max(cfg.max_chars, 200), 40000)
         cfg.timeout_s = min(max(cfg.timeout_s, 10.0), 600.0)
+        cfg.keep_minutes = min(max(cfg.keep_minutes, 1.0), 43200.0)   # a minute to 30 days
         if cfg.default not in {s.id for s in styles(cfg)}:
             warn(f"refine.default: {cfg.default!r} is not a style; using 'polish'")
             cfg.default = "polish"
         return cfg
+
+
+def keep_text(minutes: float) -> str:
+    """'30 minutes', '1 hour', '4 hours', '1 day' for refine.keep_minutes."""
+    m = max(1, round(float(minutes)))
+    for size, unit in ((1440, "day"), (60, "hour")):
+        if m >= size and m % size == 0:
+            n = m // size
+            return f"{n} {unit}" + ("s" if n != 1 else "")
+    return f"{m} minute" + ("s" if m != 1 else "")
 
 
 def _name_from_id(sid: str) -> str:
@@ -219,6 +232,47 @@ def _starts_alike(src: str, opening: str) -> bool:
     return bool(words) and _bare_words(src)[: len(words)] == words
 
 
+def _script(ch: str) -> str:
+    """The writing system of a letter, from its Unicode name: LATIN, CJK, CYRILLIC, HIRAGANA, THAI, ..."""
+    name = unicodedata.name(ch, "")
+    first = name.split(" ", 1)[0]
+    return "CJK" if first in ("CJK", "HIRAGANA", "KATAKANA", "HANGUL", "BOPOMOFO", "IDEOGRAPHIC") else first
+
+
+def scripts(text: str) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for ch in text or "":
+        if ch.isalpha():
+            s = _script(ch)
+            out[s] = out.get(s, 0) + 1
+    return out
+
+
+# Things a rewrite must copy exactly (RULES): Logseq page links and block references, URLs, #tags.
+_KEPT = re.compile(r"\[\[[^\[\]\n]+\]\]|\(\([^()\n]+\)\)|https?://[^\s<>()\[\]]+|(?<![\w#&])#[A-Za-z][\w/-]*")
+
+
+def kept_tokens(text: str) -> list[str]:
+    return [t.rstrip(".,;:!?") for t in _KEPT.findall(text or "")]
+
+
+def _loop(src: str, out: str, n: int = 5, times: int = 4) -> str:
+    """An n-word run the reply repeats `times` times or more but the selection does not: a decoding loop."""
+    def grams(text: str) -> dict[tuple, int]:
+        words = text.lower().split()
+        counts: dict[tuple, int] = {}
+        for i in range(len(words) - n + 1):
+            g = tuple(words[i:i + n])
+            counts[g] = counts.get(g, 0) + 1
+        return counts
+
+    ours, theirs = grams(out), grams(src)
+    for g, c in ours.items():
+        if c >= times and theirs.get(g, 0) < 2:
+            return " ".join(g)
+    return ""
+
+
 def check(original: str, reply: str, style: Style) -> tuple[bool, str]:
     """(True, "") when the reply may replace the selection; otherwise why not."""
     src, out = original.strip(), (reply or "").strip()
@@ -227,6 +281,17 @@ def check(original: str, reply: str, style: Style) -> tuple[bool, str]:
     chatty = _ANSWER_START.match(out)
     if chatty and not _starts_alike(src, chatty.group(0)):
         return False, "the model answered instead of rewriting"
+    if style.builtin:  # your own styles may ask for another language
+        new = {s: c for s, c in scripts(out).items() if s not in scripts(src)}
+        if new:
+            return False, (f"the reply has {', '.join(sorted(new))} characters the text does not use "
+                           "(a garbled reply; see the troubleshooting guide)")
+    missing = [t for t in kept_tokens(src) if t not in out]
+    if missing:
+        return False, f"the reply changed a link or reference ({missing[0][:60]})"
+    looped = _loop(src, out)
+    if looped:
+        return False, f'the reply repeats itself ("{looped}")'
     if len(out) > len(src) * style.max_ratio + 100:
         return False, "the model added much more text than the style allows"
     if len(src) > 80 and len(out) < len(src) * style.min_ratio:

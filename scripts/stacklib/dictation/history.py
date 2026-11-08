@@ -1,5 +1,5 @@
-"""The refine history window: every entry of the refine log, newest first, with the text before and after side by
-side (removed words struck through in red, added words underlined in green). Copy either version, or select the
+"""The refine history window: the entries the refine log still keeps (refine.keep_minutes), newest first, with the
+text before and after side by side (removed words struck through in red, added words underlined in green). Copy either version, or select the
 refined text in its app and click Revert to put the original back.
 
 A normal window that takes the keyboard focus (unlike the buttons): Up and Down move through the list, Tab reaches the
@@ -22,6 +22,7 @@ SELECT_BG, DEL_BG, INS_BG = "#0f6cbd", "#5c2b29", "#1e4620"
 STATUS = {"replaced": "replaced", "copied": "on clipboard", "rejected": "rejected", "unchanged": "no change",
           "cancelled": "cancelled", "failed": "failed", "skipped": "not replaced"}
 _TOKEN = re.compile(r"\s+|\w+|[^\w\s]")
+TICK_MS = 30_000   # how often an open window re-reads the log (entries expire after refine.keep_minutes)
 
 
 def diff_spans(before: str, after: str) -> tuple[list[tuple[str, bool]], list[tuple[str, bool]]]:
@@ -82,8 +83,9 @@ class HistoryWindow:
         top = tk.Frame(self.win, bg=BG, padx=pad, pady=pad)
         top.pack(fill="both", expand=True)
         tk.Label(top, text="Refine history", bg=BG, fg=FG, font=(FONT, 11, "bold"), anchor="w").pack(fill="x")
-        tk.Label(top, text=f"Every suggestion is kept in {app.refine_log.path}. To put an original back, select the "
-                           "refined text in its app, pick the entry here and click Revert in the app.",
+        tk.Label(top, text=f"Suggestions are kept for {app.refine_keep_text()} in {app.refine_log.path}, then deleted. "
+                           "To put an original back, select the refined text in its app, pick the entry here and "
+                           "click Revert in the app.",
                  bg=BG, fg=MUTED, font=(FONT, 9), anchor="w", justify="left", wraplength=w - 3 * pad).pack(fill="x", pady=(2, 8))
 
         box = tk.Frame(top, bg=BG)
@@ -132,6 +134,7 @@ class HistoryWindow:
         self.reload()
         self.win.focus_force()
         self.list.focus_set()
+        self.win.after(TICK_MS, self._tick)
 
     # ---------------------------------------------------------------- widgets
 
@@ -159,23 +162,34 @@ class HistoryWindow:
         except tk.TclError:
             return False
 
-    def reload(self) -> None:
+    def _tick(self) -> None:
+        """Entries expire while the window is open: read the log again now and then, so they leave the list too."""
+        if not self.alive():
+            return
+        self.reload(force=True)
+        self.win.after(TICK_MS, self._tick)
+
+    def reload(self, force: bool = False) -> None:
         path = self.app.refine_log.path
         try:
             mtime = path.stat().st_mtime
         except OSError:
             mtime = 0.0
-        if mtime == self.mtime and self.entries:
+        if not force and mtime == self.mtime and self.entries:
             return
         self.mtime = mtime
         keep = self._selected()
-        self.entries = self.app.refine_log.entries(limit=1000)
+        fresh = self.app.refine_log.entries(limit=1000)
+        if force and self.entries and [e.get("id") for e in fresh] == [e.get("id") for e in self.entries]:
+            return  # nothing expired or arrived: leave the list and the selection as they are
+        self.entries = fresh
         reverted = self.app.refine_log.reverted_ids(self.entries)
         self.list.delete(0, "end")
         for e in self.entries:
             self.list.insert("end", row_text(e, reverted))
         if not self.entries:
-            self.list.insert("end", "  Nothing refined yet. Select text in any app and click the refine button.")
+            self.list.insert("end", f"  Nothing refined in the last {self.app.refine_keep_text()}. Select text in "
+                                    "any app and click the refine button.")
         index = next((i for i, e in enumerate(self.entries) if keep and e.get("id") == keep.get("id")), 0)
         if self.entries:
             self.list.selection_set(index)

@@ -395,6 +395,10 @@ once across a session restart.
    owner's tray had stopped all its services at about 23:07, from outside this session; they were left stopped. Not
    verified: Logseq and Notion themselves, the look of the bar and the History window, the tray's new settings group
    live. The live app runs the new code only after the tray restarts from the main checkout.
+   2026-11-08: the owner asked for the log to be kept only temporarily. Entries now expire after
+   `refine.keep_minutes` (30; tray: Keep refine history for), are hidden at once and deleted from the file within a
+   minute (prune at start, before each entry, and every 60 s); the file goes with its last entry. Unit tests only
+   (66 in tests/test_refine.py); not yet run in the live app.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

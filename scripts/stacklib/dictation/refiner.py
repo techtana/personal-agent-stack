@@ -54,7 +54,7 @@ class Refiner:
         self.lock = threading.Lock()
         self.esc_lock = threading.Lock()
         self.esc_owner: Job | None = None
-        self.last: dict | None = None       # the newest log entry written by this session
+        self.last_id = ""                  # id of the newest log entry this session wrote (no text kept here)
 
     @property
     def busy(self) -> bool:
@@ -118,6 +118,12 @@ class Refiner:
             job.final = True
             return True
 
+    def _log(self, entry: dict) -> str:
+        return self.log.append(entry)["id"]
+
+    def _keep(self) -> str:
+        return refine.keep_text(self.log.keep_minutes)
+
     # ---------------------------------------------------------------- worker
 
     def _guard(self, job: Job, source: str) -> None:
@@ -167,32 +173,33 @@ class Refiner:
         sizes = f"{len(sel.text)} -> {len(res.suggestion)} chars in {res.seconds:.2f} s"
         if job.cancelled:
             if res.suggestion:
-                self.last = self.log.append({**entry, "status": "cancelled", "note": "cancelled with Esc"})
+                self.last_id = self._log({**entry, "status": "cancelled", "note": "cancelled with Esc"})
             self.logline(f"[refine] {style.id}: cancelled ({sizes})")
             return
         if not res.ok:
             status = "rejected" if res.suggestion else "failed"
-            self.last = self.log.append({**entry, "status": status, "note": res.note})
+            self.last_id = self._log({**entry, "status": status, "note": res.note})
             self.logline(f"[refine] {style.id}: {status}, {res.note} ({sizes})")
             title = "Kept your text" if status == "rejected" else "Could not refine the text"
-            hint = ("Nothing was replaced; the suggestion is in the refine history." if status == "rejected"
+            hint = (f"Nothing was replaced; the suggestion stays in the refine history for {self._keep()}."
+                    if status == "rejected"
                     else "Nothing was replaced.")
             self.ui.error(title, res.note[:1].upper() + res.note[1:] + ".", hint)
             return
         if res.unchanged:
-            self.last = self.log.append({**entry, "status": "unchanged", "note": res.note})
+            self.last_id = self._log({**entry, "status": "unchanged", "note": res.note})
             self.logline(f"[refine] {style.id}: unchanged ({sizes})")
             self.ui.done("No changes needed", preview(sel.text), f"{style.name} left the text as it is.")
             return
         if not self._commit(job):
-            self.last = self.log.append({**entry, "status": "cancelled", "note": "cancelled before pasting"})
+            self.last_id = self._log({**entry, "status": "cancelled", "note": "cancelled before pasting"})
             return
         outcome, detail = self._replace(sel, res.text)
-        self.last = self.log.append({**entry, "status": outcome, "note": "" if outcome == "replaced" else detail})
+        self.last_id = self._log({**entry, "status": outcome, "note": "" if outcome == "replaced" else detail})
         self.logline(f"[refine] {style.id}: {outcome} ({sizes}) in {sel.app or 'unknown app'} via {source or '?'}")
         if outcome == "replaced":
             self.ui.done(f"Replaced with {style.name}", preview(res.text),
-                         "Ctrl+Z in the app undoes it. The original is in the refine history.")
+                         f"Ctrl+Z in the app undoes it. The refine history keeps the original for {self._keep()}.")
         else:
             self.ui.error("Copied to the clipboard" if outcome == "copied" else "Nothing was replaced",
                           preview(res.text), detail)
@@ -213,8 +220,8 @@ class Refiner:
             found = self.log.find(sel.text)
             if found is None:
                 self.ui.error("Not in the refine history", preview(sel.text),
-                              "Select exactly the text that was refined. History shows recent ones and can copy "
-                              "an original.")
+                              f"Select exactly the text that was refined, within {self._keep()} of refining it. "
+                              "History shows the ones still kept and can copy an original.")
                 return
             entry, score = found
         lead, _, trail = refine.split_space(sel.text)
@@ -223,7 +230,7 @@ class Refiner:
         if not self._commit(job):
             return
         outcome, detail = self._replace(sel, original)
-        self.last = self.log.append({"kind": "revert", "of": entry.get("id"), "style": entry.get("style"),
+        self.last_id = self._log({"kind": "revert", "of": entry.get("id"), "style": entry.get("style"),
                                      "style_name": entry.get("style_name"), "app": sel.app, "window": sel.window,
                                      "before": sel.text, "after": original, "status": outcome,
                                      "note": "" if outcome == "replaced" else detail, "match": round(score, 3)})

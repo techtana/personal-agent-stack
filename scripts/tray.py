@@ -202,6 +202,7 @@ class TrayApp:
         self.openclaw_busy = False
         self.openclaw_result = ""  # why the last Use gateway click failed, shown until the next click
         self.dictation_button: bool | None = None  # floating mic button visible? None while voice typing is down
+        self.refine_button: bool | None = None     # the refine (pencil) button next to it, the same way
         self.usage_data: dict | None = None
         self.usage_notes: list[str] = []  # model use the Usage tab cannot count, while it can happen
         self.usage_notes_at = -1e9  # monotonic time of the last check
@@ -271,14 +272,17 @@ class TrayApp:
     def _check_dictation(self) -> None:
         """Whether voice typing's floating button is showing, from its own control endpoint."""
         if not self.rows.get("dictation", {}).get("healthy"):
-            self.dictation_button = None
+            self.dictation_button = self.refine_button = None
             return
         from stacklib.dictation import control
 
         try:
-            self.dictation_button = bool(control.call(int(self.profile["ports"]["dictation"]), "health", 1.5).get("button", True))
-        except (OSError, ValueError):
-            self.dictation_button = None
+            health = control.call(int(self.profile["ports"]["dictation"]), "health", 1.5)
+            self.dictation_button = bool(health.get("button", True))
+            refine = health.get("refine")
+            self.refine_button = bool(refine.get("button", True)) if isinstance(refine, dict) else None
+        except (OSError, ValueError, AttributeError):
+            self.dictation_button = self.refine_button = None
 
     def _collect_usage(self) -> None:
         """ComfyUI's finished jobs into usage records: Open WebUI asks ComfyUI for images directly, past the gateway."""
@@ -513,6 +517,9 @@ class TrayApp:
             pystray.MenuItem("Voice typing button", lambda *_: self.set_dictation_button(not self.dictation_button),
                              checked=lambda _item: bool(self.dictation_button),
                              visible=lambda _item: self.dictation_button is not None),
+            pystray.MenuItem("Refine button (pencil)", lambda *_: self.set_refine_button(not self.refine_button),
+                             checked=lambda _item: bool(self.refine_button),
+                             visible=lambda _item: self.refine_button is not None),
             pystray.MenuItem("GPU for chat (free ComfyUI's memory)", lambda *_: self.set_gpu_mode("chat")),
             pystray.MenuItem("GPU for media (unload Ollama's models)", lambda *_: self.set_gpu_mode("media")),
             pystray.Menu.SEPARATOR,
@@ -528,16 +535,24 @@ class TrayApp:
     def set_dictation_button(self, visible: bool) -> None:
         """Show or hide voice typing's floating mic button. The app shows or hides it at once and saves the choice
         (dictation.button), so it survives a restart; hiding it from its own menu can be undone here."""
+        self.dictation_button = visible  # the window and menu follow the click at once
+        self._overlay_button("show" if visible else "hide", "mic")
+
+    def set_refine_button(self, visible: bool) -> None:
+        """The same for the refine (pencil) button next to the mic (refine.button)."""
+        self.refine_button = visible
+        self._overlay_button("show_refine" if visible else "hide_refine", "refine")
+
+    def _overlay_button(self, action: str, name: str) -> None:
         from stacklib.dictation import control
 
-        self.dictation_button = visible  # the window and menu follow the click at once
         self.ui_queue.put(self._render_services)  # called from the tray menu's thread too: draw on the Tk thread
 
         def run() -> None:
             try:
-                control.call(int(self.profile["ports"]["dictation"]), "show" if visible else "hide")
+                control.call(int(self.profile["ports"]["dictation"]), action)
             except (OSError, ValueError) as e:
-                print(f"[tray] could not {'show' if visible else 'hide'} the voice typing button: {e}")
+                print(f"[tray] could not {action} the {name} button: {e}")
             self.refresh_soon()
 
         threading.Thread(target=run, daemon=True).start()
@@ -744,10 +759,13 @@ class TrayApp:
             if svc in links:
                 ttk.Button(buttons, text="Open", width=7, command=lambda s=svc: self.open_url(s)).pack(side="left", padx=2)
             if svc == "dictation":
-                # Bring back (or hide) the floating mic button without opening Settings.
-                self.dictation_btn = ttk.Button(buttons, text="Hide button", width=12,
+                # Bring back (or hide) the floating mic and refine buttons without opening Settings.
+                self.dictation_btn = ttk.Button(buttons, text="Hide mic", width=11,
                                                 command=lambda: self.set_dictation_button(not self.dictation_button))
                 self.dictation_btn.pack(side="left", padx=2)
+                self.refine_btn = ttk.Button(buttons, text="Hide pencil", width=11,
+                                             command=lambda: self.set_refine_button(not self.refine_button))
+                self.refine_btn.pack(side="left", padx=2)
             toggle = ttk.Button(buttons, text="Stop", width=7, command=lambda s=svc: self.toggle(s))
             if svc != "ollama":
                 toggle.pack(side="left", padx=2)
@@ -879,12 +897,15 @@ class TrayApp:
             else:
                 reason.grid_remove()
                 show.grid_remove()
-        btn = getattr(self, "dictation_btn", None)
-        if btn is not None:
-            if self.dictation_button is None:
-                btn.configure(text="Show button", state="disabled")
+        for attr, shown, name in (("dictation_btn", self.dictation_button, "mic"),
+                                  ("refine_btn", self.refine_button, "pencil")):
+            btn = getattr(self, attr, None)
+            if btn is None:
+                continue
+            if shown is None:
+                btn.configure(text=f"Show {name}", state="disabled")
             else:
-                btn.configure(text="Hide button" if self.dictation_button else "Show button", state="normal")
+                btn.configure(text=f"Hide {name}" if shown else f"Show {name}", state="normal")
         total = sum(1 for s in self.row_widgets if s == "ollama" or s in self.managed)
         self.pill_dot.configure(fg=t["good"] if up == total else (t["warn"] if up else t["bad"]))
         activity = self._activity()
