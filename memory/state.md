@@ -395,6 +395,14 @@ once across a session restart.
    owner's tray had stopped all its services at about 23:07, from outside this session; they were left stopped. Not
    verified: Logseq and Notion themselves, the look of the bar and the History window, the tray's new settings group
    live. The live app runs the new code only after the tray restarts from the main checkout.
+28. GitHub account name in the security audit (2026-11-08, branch claude/dazzling-brattain-729c88): kind `owner-login`.
+   Sources: gh (local config, `gh api user` when online), a no-reply git address, `logins` in identity.local.json, and a
+   github.com origin owner only when it matches one of them or owns the current repository. `scrub` turns links to
+   the repository's own PRs and issues into `PR #N` / `issue #N` and other mentions into `<owner>`, in prose and
+   Claude's files; code and config are reported (IDENTITY-LOGIN-CODE). Verified: unit tests with a made-up login;
+   a dry run here found the 27 hits in 10 files that PR #46 removes by hand, and `collect` also found the name in
+   Claude's own instruction files (not changed: `scrub --apply --local-only` fixes them). Not verified: a scheduled
+   run; the live scheduled task's prompt still lacks the new "GitHub account name" wording in scheduled-task.md.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render
