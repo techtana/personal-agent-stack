@@ -88,6 +88,7 @@ RULES = [
 class Config:
     """The machine profile's `refine:` section (machines/_defaults.yaml documents each key)."""
     hotkey: str = "ctrl+alt+r"
+    menu_hotkey: str = "ctrl+alt+shift+r"   # opens the style menu at the caret ('' or off = none)
     default: str = "polish"
     model: str = "local-primary"
     button: bool = True

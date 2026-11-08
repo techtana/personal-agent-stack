@@ -21,6 +21,13 @@ CHOICES = ["ctrl+alt+d", "ctrl+alt+h", "alt+`", "win+alt+h", "ctrl+alt+space", "
 # For the refine hotkey. Ctrl+Alt+R is Word's shortcut for the registered sign, which this replaces while the app runs;
 # Win+Alt+R and Win+Alt+G belong to the Xbox Game Bar, Ctrl+Shift+R reloads a browser page.
 REFINE_CHOICES = ["ctrl+alt+r", "ctrl+alt+e", "ctrl+alt+g", "ctrl+alt+q", "scrolllock", "pause"]
+# For the hotkey that opens the style menu at the caret: the refine key plus Shift, so the two are easy to remember.
+MENU_CHOICES = ["ctrl+alt+shift+r", "ctrl+alt+m", "ctrl+alt+w", "alt+shift+r", "ctrl+alt+."]
+
+
+def is_off(text: str) -> bool:
+    """'' , 'off' or 'none': no hotkey."""
+    return (text or "").strip().lower() in ("", "off", "none")
 
 
 class HotkeyError(ValueError):

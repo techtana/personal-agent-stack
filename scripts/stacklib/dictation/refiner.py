@@ -62,11 +62,13 @@ class Refiner:
 
     # ---------------------------------------------------------------- triggers (any thread but the hotkey thread)
 
-    def start(self, style: str = "", source: str = "") -> bool:
-        return self._begin(Job("refine", 0, style=style), source)
+    def start(self, style: str = "", source: str = "", target: int = 0) -> bool:
+        """target: the window to refine in, when the caller knew it before one of ours came to the front (the style
+        menu at the caret); 0 = the window in front now, or the last one you used."""
+        return self._begin(Job("refine", target, style=style), source)
 
-    def revert(self, entry: str = "", source: str = "") -> bool:
-        return self._begin(Job("revert", 0, entry=entry), source)
+    def revert(self, entry: str = "", source: str = "", target: int = 0) -> bool:
+        return self._begin(Job("revert", target, entry=entry), source)
 
     def _begin(self, job: Job, source: str) -> bool:
         why = self.busy_elsewhere()
@@ -77,7 +79,7 @@ class Refiner:
             if self.job is not None:
                 self.ui.note("Still working on the last selection", "", "Esc cancels it.")
                 return False
-            job.target = self.target()
+            job.target = job.target or self.target()
             self.job = job
         threading.Thread(target=self._guard, args=(job, source), name=f"dictation-{job.kind}", daemon=True).start()
         return True

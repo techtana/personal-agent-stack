@@ -465,6 +465,82 @@ class Overlay:
         m._vars = (chosen,)  # type: ignore[attr-defined]
         self._popup(m, e)
 
+    def style_menu_at(self, point: tuple[int, int], target: int) -> None:
+        """The style menu hotkey: every refine style in a menu at the caret (or the pointer), numbered so 1-9 pick
+        one from the keyboard. The choice refines the selection in `target`, the window you pressed the hotkey in.
+        On Windows a 1-pixel invisible window of ours takes the front first, so the menu gets the keyboard (arrows,
+        digits, Enter, Esc) and closes on a click elsewhere; once it closes, the focus goes back to `target`."""
+        if self.menu_open is not None:
+            return   # a menu is already open; tk_popup's loop still runs our timers, so this can arrive meanwhile
+        self._close_hover()
+        app = self.app
+        styles, default = app.refine_choices()
+        anchor = tk.Toplevel(self.root)
+        anchor.overrideredirect(True)
+        anchor.attributes("-alpha", 0.0)
+        anchor.attributes("-topmost", True)
+        anchor.geometry(f"1x1+{point[0]}+{point[1]}")
+        m = tk.Menu(anchor, tearoff=0)
+        for text, command, underline, accel in style_menu_items(styles, default, app.refine_hotkey_text()):
+            if command is None:
+                m.add_separator() if text == "-" else m.add_command(label=text, state="disabled")
+                continue
+            m.add_command(label=text, underline=underline, accelerator=accel,
+                          command=lambda c=command: self._style_menu_pick(c, target))
+        self.menu_open = m
+        if IS_WINDOWS:
+            from . import winsys
+
+            anchor.update_idletasks()
+            if not winsys.take_front(int(anchor.wm_frame(), 16)):
+                print("[refine] style menu: Windows kept another window in front; Esc and the digits go there",
+                      flush=True)
+            anchor.focus_force()
+            self.root.after(MENU_POLL_MS, self._watch_style_menu, m, winsys.foreground())
+        try:
+            m.tk_popup(point[0], point[1])   # on Windows this blocks until the menu closes
+        finally:
+            m.grab_release()
+            if IS_WINDOWS:
+                self.menu_open = None
+                # Tk may run the chosen command just after the native loop returns: tidy up a moment later.
+                self.root.after(150, self._style_menu_done, m, anchor, target)
+
+    def _style_menu_pick(self, command: str, target: int) -> None:
+        if command == "revert":
+            self.app.refine_revert("", target)
+        else:
+            self.app.refine_with(command, target)
+
+    def _style_menu_done(self, m: tk.Menu, anchor: tk.Toplevel, target: int) -> None:
+        if self.menu_open is m:
+            self.menu_open = None
+        if IS_WINDOWS and target:
+            from . import winsys
+
+            # Back to where you were typing, while our window still holds the front (Windows allows the hand-over
+            # then): after Esc the caret is where you left it, and after a pick the refine finds its window in front.
+            if not winsys.activate(target):
+                winsys.take_front(target)
+        try:
+            anchor.destroy()
+        except tk.TclError:
+            pass
+
+    def _watch_style_menu(self, m: tk.Menu, front: int) -> None:
+        """Close the style menu when another window comes to the front (you clicked another app, or Alt+Tab). Needed
+        when Windows refused to put our window in front: such a menu ignores clicks elsewhere."""
+        if self.menu_open is not m:
+            return
+        from . import winsys
+
+        now = winsys.root_window(winsys.foreground())
+        if now and now != winsys.root_window(front) and winsys.window_pid(now) != os.getpid():
+            self.menu_open = None
+            winsys.end_menu()
+            return
+        self.root.after(MENU_POLL_MS, self._watch_style_menu, m, front)
+
     def open_history(self) -> None:
         from .history import HistoryWindow
 
@@ -524,6 +600,19 @@ class Overlay:
         Picker(self.root, languages_for(self.app.cfg.model), self.app.cfg.language,
                lambda code: self.app.set_option("language", code), search, title="Dictation language",
                anchor=self.bar_box(), above=True)
+
+
+def style_menu_items(styles, default: str, default_accel: str = "") -> list[tuple[str, str | None, int, str]]:
+    """Rows of the style menu: (label, command, underline, accelerator). command is a style id, "revert", or None for
+    the heading ("-" is a separator). The first nine styles are numbered and the digit is underlined, so pressing it
+    picks the style; the default style shows the refine hotkey, which uses it without the menu."""
+    rows: list[tuple[str, str | None, int, str]] = [("Refine the selection as", None, -1, "")]
+    for i, s in enumerate(styles, 1):
+        label = f"{i}  {s.name}" if i <= 9 else f"    {s.name}"
+        rows.append((label, s.id, 0 if i <= 9 else -1, default_accel if s.id == default else ""))
+    rows.append(("-", None, -1, ""))
+    rows.append(("Revert to the original", "revert", 0, ""))
+    return rows
 
 
 def pointer_inside(point: tuple[int, int], rects: list[tuple[int, int, int, int]], margin: int = 4) -> bool:

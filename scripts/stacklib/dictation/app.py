@@ -229,6 +229,7 @@ class App:
         self.pid = os.getpid()
         self.rcfg = refine.Config.from_profile(profile, warn=lambda m: log(f"[refine] {m}"))
         self.refine_hotkey_error = ""
+        self.menu_hotkey_error = ""       # the hotkey that opens the style menu at the caret
         self.refine_log = RefineLog(state_dir(profile) / LOG_NAME, keep_minutes=self.rcfg.keep_minutes)
         self._esc_refine = False
         self._esc_lock = threading.Lock()
@@ -263,8 +264,8 @@ class App:
         self.engine.load_async()
         log(f"[dictation] ready: hotkey {self.hotkey_text()}, mode {self.cfg.mode}, cleanup {self.cfg.style} "
             f"({self.prompt_kind()} prompt), VAD {self.vad.name}, refine {self.refine_hotkey_text()} "
-            f"({self.rcfg.default} via {self.rcfg.model}), control http://127.0.0.1:{self.port}")
-        problems = [p for p in (self.hotkey_error, self.refine_hotkey_error) if p]
+            f"({self.rcfg.default} via {self.rcfg.model}), style menu {self.menu_hotkey_text() or 'off'}, control http://127.0.0.1:{self.port}")
+        problems = [p for p in (self.hotkey_error, self.refine_hotkey_error, self.menu_hotkey_error) if p]
         if problems:
             self.ui(lambda: self.overlay.set_state("error", "Hotkey not available", " ".join(problems),
                                                    "Pick another one in the tray's Settings tab; the buttons still work.",
@@ -307,20 +308,31 @@ class App:
             else:
                 self.hotkey_error = f"{self.hotkey_text()} is taken by another program ({err})."
                 log(f"[dictation] {self.hotkey_error}")
-        if not self.refine_hotkey_text():
-            return  # refine.hotkey: '' (or off): the button and its menu only
+        taken = {"the voice typing hotkey": dictate} if dictate else {}
+        # refine.hotkey / refine.menu_hotkey: '' (or off) leaves the pencil button and its menu only.
+        self.refine_hotkey_error = self._register_extra("refine", self.rcfg.hotkey, "Refine", taken)
+        self.menu_hotkey_error = self._register_extra("refine_menu", self.rcfg.menu_hotkey, "Refine style menu", taken)
+
+    def _register_extra(self, name: str, key: str, what: str, taken: dict) -> str:
+        """Register one of the refine hotkeys; '' when it worked or is off, else what went wrong. A key registered
+        here joins `taken`, so two settings naming the same key report it instead of failing silently."""
+        if hotkey.is_off(key):
+            return ""
         try:
-            mods, vk = hotkey.parse(self.rcfg.hotkey)
+            combo = hotkey.parse(key)
         except hotkey.HotkeyError as e:
-            self.refine_hotkey_error = f"Refine {self.rcfg.hotkey}: {e}"
-            return
-        if (mods, vk) == dictate:
-            self.refine_hotkey_error = f"The refine hotkey {self.refine_hotkey_text()} is also the voice typing hotkey."
-            return
-        ok, err = self.hotkeys.register("refine", mods, vk)
+            return f"{what} {key}: {e}"
+        text = hotkey.label(key)
+        for other, used in taken.items():
+            if combo == used:
+                return f"{what}: {text} is also {other}."
+        ok, err = self.hotkeys.register(name, *combo)
         if not ok:
-            self.refine_hotkey_error = f"Refine: {self.refine_hotkey_text()} is taken by another program ({err})."
-            log(f"[refine] {self.refine_hotkey_error}")
+            problem = f"{what}: {text} is taken by another program ({err})."
+            log(f"[refine] {problem}")
+            return problem
+        taken[f"the {what.lower()} hotkey"] = combo
+        return ""
 
     def hotkey_text(self) -> str:
         return hotkey.label(self.cfg.hotkey)
@@ -328,7 +340,12 @@ class App:
     def refine_hotkey_text(self) -> str:
         """'Ctrl+Alt+R', or '' when refine.hotkey is empty or off."""
         key = (self.rcfg.hotkey or "").strip()
-        return "" if key.lower() in ("", "off", "none") else hotkey.label(key)
+        return "" if hotkey.is_off(key) else hotkey.label(key)
+
+    def menu_hotkey_text(self) -> str:
+        """'Ctrl+Alt+Shift+R', or '' when refine.menu_hotkey is empty or off."""
+        key = (self.rcfg.menu_hotkey or "").strip()
+        return "" if hotkey.is_off(key) else hotkey.label(key)
 
     def summary(self) -> str:
         mode = "types when you finish, cleaned up" if self.cfg.mode == "polish" else "types as you speak"
@@ -344,6 +361,7 @@ class App:
                 "hotkey": self.cfg.hotkey, "hotkey_ok": not self.hotkey_error, "mode": self.cfg.mode,
                 "style": self.cfg.style, "language": self.cfg.language, "button": bool(self.cfg.button),
                 "refine": {"hotkey": self.rcfg.hotkey, "hotkey_ok": not self.refine_hotkey_error,
+                           "menu_hotkey": self.rcfg.menu_hotkey, "menu_hotkey_ok": not self.menu_hotkey_error,
                            "button": bool(self.rcfg.button), "default": self.rcfg.default, "model": self.rcfg.model,
                            "busy": self.refiner.busy, "log": str(self.refine_log.path),
                            "keep_minutes": self.rcfg.keep_minutes},
@@ -419,6 +437,9 @@ class App:
         if name == "refine":
             self.refiner.start("", "hotkey")
             return
+        if name == "refine_menu":
+            self._style_menu_at_caret()
+            return
         if self.refiner.busy:
             self.toggle("hotkey")  # says it is still refining
             return
@@ -427,6 +448,18 @@ class App:
             threading.Thread(target=self._watch_hold, name="dictation-ptt", daemon=True).start()
         else:
             self.toggle("hotkey")
+
+    def _style_menu_at_caret(self) -> None:
+        """The style menu hotkey (on the hotkey thread, so only quick calls here): remember the window you are in,
+        find its text caret (or the mouse pointer when it shows none) and let the Tk thread open the menu there."""
+        why = self._dictating() or ("Still working on the last selection" if self.refiner.busy else "")
+        if why:
+            hint = "Esc cancels it." if self.refiner.busy else "Try again when it is done."
+            self.refiner.ui.note(why, "", hint)
+            return
+        target = self._target()
+        point = self.ws.caret_pos(self.ws.foreground()) or self.ws.cursor_pos()
+        self.ui(lambda: self.overlay.style_menu_at(point, target))
 
     def _watch_hold(self) -> None:
         """Tap = listen until you stop talking. Hold = talk while held; releasing stops."""
@@ -828,11 +861,11 @@ class App:
     def refine_click(self) -> None:
         self.refiner.start("", "button")
 
-    def refine_with(self, style: str) -> None:
-        self.refiner.start(style, "menu")
+    def refine_with(self, style: str, target: int = 0) -> None:
+        self.refiner.start(style, "style-menu" if target else "menu", target)
 
-    def refine_revert(self, entry: str = "") -> None:
-        self.refiner.revert(entry, "history" if entry else "menu")
+    def refine_revert(self, entry: str = "", target: int = 0) -> None:
+        self.refiner.revert(entry, "history" if entry else "style-menu" if target else "menu", target)
 
     def set_refine_option(self, key: str, value) -> None:
         setattr(self.rcfg, key, value)

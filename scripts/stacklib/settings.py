@@ -17,7 +17,7 @@ from .yamledit import dump_scalar as _dump_scalar, set_key  # noqa: F401 - set_k
 
 CTX_CHOICES = ["8192", "16384", "32768", "65536"]
 from .dictation.cleanup import DEFAULT_PROMPT as CLEANUP_PROMPT  # noqa: E402
-from .dictation.hotkey import CHOICES as HOTKEY_CHOICES, REFINE_CHOICES  # noqa: E402
+from .dictation.hotkey import CHOICES as HOTKEY_CHOICES, MENU_CHOICES, REFINE_CHOICES  # noqa: E402
 from .dictation.models import CHOICES as MODEL_CHOICES, LANGUAGES  # noqa: E402
 from .dictation.refine import BUILTIN as REFINE_STYLES  # noqa: E402
 
@@ -96,6 +96,10 @@ SETTINGS = [
     Setting("refine", "hotkey", "Refine hotkey", "choice",
             "Rewrites the selected text in any app with the default style. Esc cancels while the model works.",
             "dictation", REFINE_CHOICES),
+    Setting("refine", "menu_hotkey", "Refine style menu hotkey", "choice",
+            "Opens a menu of every refine style at the text cursor (or the mouse pointer, in apps that hide their "
+            "cursor from Windows). Press 1-9 or click a style to rewrite the selection with it; Esc closes the menu.",
+            "dictation", MENU_CHOICES),
     Setting("refine", "default", "Default refine style", "choice",
             "What a click on the pencil button and the hotkey do. The button's right-click menu offers every style, "
             "your own (refine.prompts) included.", "refine", [s.id for s in REFINE_STYLES]),

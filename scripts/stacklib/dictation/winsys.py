@@ -231,6 +231,31 @@ def activate(hwnd: int) -> bool:
     return bool(user32.SetForegroundWindow(hwnd)) if hwnd else False
 
 
+_sig(user32.AttachThreadInput, (wintypes.DWORD, wintypes.DWORD, wintypes.BOOL), wintypes.BOOL)
+_sig(user32.BringWindowToTop, (wintypes.HWND,), wintypes.BOOL)
+
+
+def take_front(hwnd: int) -> bool:
+    """Bring one of our windows to the front for keyboard input (the style menu). Windows may refuse a plain
+    SetForegroundWindow from a thread that did not get the key press (the hotkey arrives on another thread); joining
+    the front window's input queue for a moment makes it allowed."""
+    if not hwnd:
+        return False
+    if user32.SetForegroundWindow(hwnd) and root_window(foreground()) == root_window(hwnd):
+        return True
+    front = foreground()
+    theirs = user32.GetWindowThreadProcessId(front, None) if front else 0
+    ours = kernel32.GetCurrentThreadId()
+    attached = bool(theirs and theirs != ours and user32.AttachThreadInput(ours, theirs, True))
+    try:
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+    finally:
+        if attached:
+            user32.AttachThreadInput(ours, theirs, False)
+    return root_window(foreground()) == root_window(hwnd)
+
+
 def root_window(hwnd: int) -> int:
     return int(user32.GetAncestor(hwnd, GA_ROOT) or hwnd) if hwnd else 0
 
@@ -314,6 +339,34 @@ _sig(user32.EndMenu, (), wintypes.BOOL)
 def cursor_pos() -> tuple[int, int]:
     pt = wintypes.POINT()
     user32.GetCursorPos(ctypes.byref(pt))
+    return pt.x, pt.y
+
+
+class GUITHREADINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD), ("flags", wintypes.DWORD), ("hwndActive", wintypes.HWND),
+                ("hwndFocus", wintypes.HWND), ("hwndCapture", wintypes.HWND), ("hwndMenuOwner", wintypes.HWND),
+                ("hwndMoveSize", wintypes.HWND), ("hwndCaret", wintypes.HWND), ("rcCaret", wintypes.RECT)]
+
+
+_sig(user32.GetGUIThreadInfo, (wintypes.DWORD, ctypes.POINTER(GUITHREADINFO)), wintypes.BOOL)
+_sig(user32.ClientToScreen, (wintypes.HWND, ctypes.POINTER(wintypes.POINT)), wintypes.BOOL)
+
+
+def caret_pos(hwnd: int) -> tuple[int, int] | None:
+    """Screen point just below the text caret of the window's thread, or None when that thread shows no system caret
+    (many browsers, Electron apps and terminals draw their own). Callers fall back to the mouse pointer."""
+    if not hwnd:
+        return None
+    info = GUITHREADINFO(cbSize=ctypes.sizeof(GUITHREADINFO))
+    thread = user32.GetWindowThreadProcessId(hwnd, None)
+    if not thread or not user32.GetGUIThreadInfo(thread, ctypes.byref(info)) or not info.hwndCaret:
+        return None
+    r = info.rcCaret
+    if r.right <= r.left and r.bottom <= r.top:
+        return None   # an empty rectangle: a caret that was created but never placed
+    pt = wintypes.POINT(r.left, r.bottom)
+    if not user32.ClientToScreen(info.hwndCaret, ctypes.byref(pt)):
+        return None
     return pt.x, pt.y
 
 

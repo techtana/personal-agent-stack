@@ -113,6 +113,8 @@ class Configuration(unittest.TestCase):
                                                      "default": "grammar"}})
         self.assertEqual((cfg.max_chars, cfg.button, cfg.timeout_s, cfg.default), (5000, False, 30.0, "grammar"))
         self.assertEqual(refine.Config.from_profile({}).hotkey, "ctrl+alt+r")
+        self.assertEqual(refine.Config.from_profile({}).menu_hotkey, "ctrl+alt+shift+r")
+        self.assertEqual(refine.Config.from_profile({"refine": {"menu_hotkey": ""}}).menu_hotkey, "")
 
     def test_keep_minutes(self):
         self.assertEqual(refine.Config.from_profile({}).keep_minutes, 30.0)
@@ -724,6 +726,30 @@ class Flow(unittest.TestCase):
         self.assertEqual(self.refiner.last_id, entry["id"])
         self.assertIn("keeps the original for 30 minutes", self.ui.hint("done"))
 
+    def test_style_menu_refines_in_the_window_it_was_opened_from(self):
+        """The style menu's invisible anchor window is in front when you pick a style: the job must use the window
+        the hotkey was pressed in, not whatever target() finds then."""
+        self.refiner.target = lambda: 999   # our anchor window, say
+        self.assertTrue(self.refiner.start("grammar", "style-menu", target=100))
+        self.wait()
+        self.assertEqual(self.win.document, FIXED)
+        self.assertEqual(self.sent, [(TEXT, "grammar")])
+
+    def test_without_a_target_the_window_in_front_is_used(self):
+        self.refiner.target = lambda: 999
+        self.refiner.start("grammar", "menu")
+        self.wait()
+        self.assertEqual(self.win.document, TEXT)   # window 999 has no selection here
+
+    def test_revert_takes_a_target_too(self):
+        self.refiner.start("", "test")
+        self.wait()
+        self.win.select(FIXED)
+        self.refiner.target = lambda: 999
+        self.assertTrue(self.refiner.revert("", "style-menu", target=100))
+        self.wait()
+        self.assertEqual(self.win.document, TEXT)
+
     def test_other_style_from_the_menu(self):
         self.refiner.start("bullets", "menu")
         self.wait()
@@ -871,6 +897,31 @@ class Wiring(unittest.TestCase):
         self.assertEqual(hotkey.REFINE_CHOICES[0], refine.Config().hotkey)
         self.assertNotIn(prof.load_defaults()["dictation"]["hotkey"], hotkey.REFINE_CHOICES)
 
+    def test_menu_hotkey_choices(self):
+        for choice in hotkey.MENU_CHOICES:
+            hotkey.parse(choice)
+        self.assertEqual(hotkey.MENU_CHOICES[0], refine.Config().menu_hotkey)
+        self.assertEqual(prof.load_defaults()["refine"]["menu_hotkey"], refine.Config().menu_hotkey)
+        taken = {hotkey.parse(prof.load_defaults()["dictation"]["hotkey"]), hotkey.parse(refine.Config().hotkey)}
+        self.assertEqual([c for c in hotkey.MENU_CHOICES if hotkey.parse(c) in taken], [])
+        self.assertTrue(all(hotkey.is_off(v) for v in ("", " off ", "None")))
+        self.assertFalse(hotkey.is_off("ctrl+alt+r"))
+        menu = next(s for s in settings.SETTINGS if settings.setting_id(s) == "refine.menu_hotkey")
+        self.assertEqual(menu.effect, "dictation")   # hotkeys are registered when voice typing starts
+
+    def test_style_menu_rows(self):
+        from stacklib.dictation.overlay import style_menu_items
+
+        many = list(refine.BUILTIN) + [refine.Style(f"mine{i}", f"Mine {i}", "x") for i in range(4)]
+        rows = style_menu_items(many, "concise", "Ctrl+Alt+R")
+        picks = [r for r in rows if r[1] not in (None, "revert")]
+        self.assertEqual([r[1] for r in picks], [s.id for s in many])
+        self.assertEqual([r[0][0] for r in picks[:9]], [str(i) for i in range(1, 10)])   # 1-9 pick from the keys
+        self.assertTrue(all(r[2] == 0 for r in picks[:9]) and all(r[2] == -1 for r in picks[9:]))
+        self.assertEqual([r[1] for r in picks if r[3]], ["concise"])
+        self.assertEqual(rows[-1][1], "revert")
+        self.assertIsNone(rows[0][1])   # the heading
+
     def test_tray_settings(self):
         ids = {settings.setting_id(s) for s in settings.SETTINGS}
         self.assertTrue({"refine.hotkey", "refine.default", "refine.model", "refine.button"} <= ids)
@@ -973,6 +1024,18 @@ class Consistency(unittest.TestCase):
             self.assertEqual(sorted(used - have), [], f"{name} uses names the App class does not have")
         for kept in ("paste_last", "copy_last", "refine_choices", "remember_position", "set_refine_option"):
             self.assertIn(kept, have)
+
+    def test_app_calls_into_the_overlay_exist(self):
+        import ast
+
+        tree = ast.parse((self.BASE / "overlay.py").read_text(encoding="utf-8"))
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Overlay")
+        have = {n.name for n in cls.body if isinstance(n, ast.FunctionDef)}
+        _tree, app = self._app_class()
+        used = {n.attr for n in ast.walk(app) if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Attribute)
+                and n.value.attr == "overlay"}
+        self.assertIn("style_menu_at", used)
+        self.assertEqual(sorted(used - have - {"root", "visible"}), [], "app.py calls names Overlay lacks")
 
     def test_refiner_is_built_with_its_own_arguments(self):
         import ast

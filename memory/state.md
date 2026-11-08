@@ -410,6 +410,14 @@ once across a session restart.
    `refine.keep_minutes` (30; tray: Keep refine history for), are hidden at once and deleted from the file within a
    minute (prune at start, before each entry, and every 60 s); the file goes with its last entry. Unit tests only
    (66 in tests/test_refine.py); not yet run in the live app.
+   2026-11-08 (branch claude/text-refinement-hotkey-menu-fdb127): **Ctrl+Alt+Shift+R** (`refine.menu_hotkey`, tray:
+   Refine style menu hotkey) opens every refine style in a menu at the text caret (GetGUIThreadInfo; the mouse pointer
+   where an app draws its own caret), numbered 1-9, plus Revert. The pick refines in the window the hotkey was pressed
+   in (Refiner.start/revert take a target). A 1-pixel invisible window takes the front so the menu gets the keyboard
+   and closes on a click elsewhere; focus goes back to the app when it closes. The key was free here (RegisterHotKey
+   probe). Verified: unit tests; a harness in the voice typing venv with a stub app opened the real menu, a scripted
+   "2" key picked Fix spelling and grammar only with the right window, Esc returned focus. Not verified: the live
+   app's hotkey, the menu's look, the caret position in Word, Logseq and Notion.
 28. Privacy cleanup (2026-11-07, branch claude/personal-info-cleanup-0f23d8). The repository is public, and
    it named the computer and the Windows account. Now machine profiles are local: `machines/*.yaml` except
    `_defaults.yaml` is ignored, the installer writes the profile, and a linked worktree reads the main checkout's
