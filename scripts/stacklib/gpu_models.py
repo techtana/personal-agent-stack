@@ -17,9 +17,12 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
+from . import catalog
+
 GIB = 2**30
 COMFY_MIN_BYTES = 256 * 2**20   # below this ComfyUI holds only its CUDA context, not a model
-KOKORO_GPU = 1.0                # GB read aloud's Kokoro holds on the GPU (measured 2026-11-08 on an RTX 3060)
+# GB read aloud's Kokoro holds on the GPU (measured 2026-11-08 on an RTX 3060; config/installer.yaml kokoro.gpu_vram_gb)
+KOKORO_GPU = float(catalog.kokoro().get("gpu_vram_gb") or 1.0)
 
 
 def _unloads_ollama(expires_at: str | None, now: datetime) -> str:

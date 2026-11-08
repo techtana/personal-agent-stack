@@ -1,5 +1,6 @@
-"""Tests for scripts/stacklib/whisper.py (install paths, Claude Desktop registration) and scripts/whisper_mcp.py
-(path guard, transcript files). Nothing here loads a model or touches the real Claude Desktop config."""
+"""Tests for scripts/stacklib/whisper.py (what is left of recordings: folders, and taking the server out of Claude
+Desktop's config, since the stack no longer sets it up) and scripts/whisper_mcp.py (path guard, transcript files).
+Nothing here loads a model or touches the real Claude Desktop config."""
 from __future__ import annotations
 
 import importlib
@@ -11,7 +12,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from stacklib import paths, profile as prof, whisper  # noqa: E402
+from stacklib import profile as prof, whisper  # noqa: E402
 
 
 def make_profile(root: str, allowed: list[str] | None = None) -> dict:
@@ -27,11 +28,6 @@ class Profile(unittest.TestCase):
         self.assertEqual(m["recordings_dir"], "D:\\media\\inputs\\recordings")
         self.assertEqual(m["transcripts_dir"], "D:\\media\\outputs\\transcripts")
 
-    def test_folders_are_guarded(self):
-        self.assertIn("media.recordings_dir", paths.media_paths(make_profile("D:\\media")))
-        with self.assertRaises(RuntimeError):
-            whisper.guarded(make_profile("D:\\media", allowed=["E:\\other"]))
-
 
 class Desktop(unittest.TestCase):
     def setUp(self):
@@ -42,29 +38,19 @@ class Desktop(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_entry_runs_the_copied_server_with_the_profile(self):
-        e = whisper.server_entry(self.p)
-        self.assertTrue(e["command"].lower().startswith("d:\\media\\whisper\\.venv"))
-        self.assertEqual(e["args"], ["-I", str(Path("D:\\media\\whisper") / "whisper_mcp.py")])
-        self.assertEqual(e["env"]["WHISPER_ROOTS"], "D:\\media")
-        self.assertEqual(e["env"]["HF_HOME"], "D:\\media\\hf")
-
-    def test_register_keeps_other_servers_and_backs_up(self):
+    def test_unregister_removes_only_ours_and_reads_a_byte_order_mark(self):
         self.config.parent.mkdir(parents=True)
-        self.config.write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}, "theme": "dark"}), encoding="utf-8")
-        whisper.register_desktop(self.p, self.config)
-        data = json.loads(self.config.read_text(encoding="utf-8"))
-        self.assertEqual(set(data["mcpServers"]), {"other", "local-whisper"})
-        self.assertEqual(data["theme"], "dark")
+        data = {"mcpServers": {"other": {"command": "x"}, "local-whisper": {"command": "y"}}, "theme": "dark"}
+        self.config.write_text(json.dumps(data), encoding="utf-8-sig")   # saved by an editor that adds a BOM
+        self.assertIn("removed", whisper.unregister_desktop(self.config))
+        left = json.loads(self.config.read_text(encoding="utf-8"))
+        self.assertEqual((left["mcpServers"], left["theme"]), ({"other": {"command": "x"}}, "dark"))
         self.assertEqual(len(list(self.config.parent.glob("*.bak-*"))), 1)
-        self.assertIn("already up to date", whisper.register_desktop(self.p, self.config))
-        self.assertEqual(len(list(self.config.parent.glob("*.bak-*"))), 1)
+        self.assertIn("not registered", whisper.unregister_desktop(self.config))
 
-    def test_register_creates_missing_config_and_unregister_removes_only_ours(self):
-        whisper.register_desktop(self.p, self.config)
-        self.assertIn("local-whisper", json.loads(self.config.read_text(encoding="utf-8"))["mcpServers"])
-        whisper.unregister_desktop(self.config)
-        self.assertEqual(json.loads(self.config.read_text(encoding="utf-8"))["mcpServers"], {})
+    def test_nothing_sets_the_server_up_any_more(self):
+        for name in ("install", "register_desktop", "server_entry"):
+            self.assertFalse(hasattr(whisper, name), name)
 
 
 class Server(unittest.TestCase):

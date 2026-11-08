@@ -226,41 +226,20 @@ class Deploy(unittest.TestCase):
 
 
 class LinksStep(unittest.TestCase):
-    """The install step that points Claude Desktop's recordings server at the app instead of the checkout."""
+    """The step that points start-up entries at the installed app writes nothing into a closed-source app's config."""
 
-    def _run(self, entry_now):
+    def test_claude_desktops_config_is_left_alone(self):
         from stacklib import tasks, whisper
 
         with tempfile.TemporaryDirectory() as t:
             cfg = Path(t) / "claude_desktop_config.json"
-            servers = {"other": {"command": "x"}}
-            if entry_now is not None:
-                servers[whisper.SERVER_NAME] = entry_now
-            cfg.write_text(json.dumps({"mcpServers": servers}), encoding="utf-8")
-            new = {"command": "app-python", "args": ["app/whisper_mcp.py"], "env": {"AGENT_STACK_USAGE_DIR": "app"}}
+            before = json.dumps({"mcpServers": {whisper.SERVER_NAME: {"command": "repo-python"}}})
+            cfg.write_text(before, encoding="utf-8")
             with mock.patch.object(whisper, "desktop_config_path", return_value=cfg), \
-                    mock.patch.object(whisper, "server_entry", return_value=new), \
                     mock.patch.object(tasks, "registered", return_value=set()), \
                     mock.patch.object(deploy, "is_app", return_value=True):
                 detail = install.step_links(None, {}, lambda *a: None)
-            data = json.loads(cfg.read_text(encoding="utf-8"))
-        return detail, data["mcpServers"], new
-
-    def test_entry_pointing_at_the_checkout_is_rewritten(self):
-        detail, servers, new = self._run({"command": "repo-python", "env": {"AGENT_STACK_USAGE_DIR": "repo"}})
-        self.assertEqual(servers["local-whisper"], new)
-        self.assertEqual(servers["other"], {"command": "x"})
-        self.assertIn("now records into this app", detail)
-
-    def test_entry_already_recording_into_the_app_is_left_alone(self):
-        mine = {"command": "my-own-python", "env": {"AGENT_STACK_USAGE_DIR": "app"}}
-        detail, servers, _ = self._run(mine)
-        self.assertEqual(servers["local-whisper"], mine)
-        self.assertIn("already records into this app", detail)
-
-    def test_no_entry_is_left_alone(self):
-        detail, servers, _ = self._run(None)
-        self.assertNotIn("local-whisper", servers)
+            self.assertEqual(cfg.read_text(encoding="utf-8"), before)
         self.assertEqual(detail, "nothing outside the app folder to update")
 
 

@@ -17,14 +17,14 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import IS_WINDOWS, REPO, info, warn, which
+from . import IS_WINDOWS, REPO, catalog, info, warn, which
 from . import paths
 
 COMFY_DIR = REPO / "config" / "comfyui"
 WORKFLOWS_DIR = COMFY_DIR / "workflows"
-COMFYUI_GIT = "https://github.com/comfyanonymous/ComfyUI.git"
+COMFYUI_GIT = catalog.images()["comfyui_git"]
 # Open-licence weights only (decision D-M3). Each row is also listed in config/comfyui/MODELS.md.
-OPEN_LICENCES = {"apache-2.0", "mit", "bsd-3-clause", "creativeml-openrail-m", "openrail++"}
+OPEN_LICENCES = {str(x).lower() for x in catalog.images().get("open_licences") or ()}
 
 
 @dataclass(frozen=True)
@@ -42,16 +42,10 @@ class Model:
         return f"https://huggingface.co/{self.repo}/resolve/main/{self.path}"
 
 
-MODELS = (
-    # Z-Image-Turbo 6B (Tongyi-MAI, Apache-2.0), ComfyUI repack. int8 weights: 6.2 GB instead of 12.3 GB in bf16, so
-    # the model fits the card next to a small chat model; Ampere (RTX 30xx) runs int8 natively.
-    Model("z_image_turbo_int8_convrot.safetensors", "diffusion_models", "Comfy-Org/z_image_turbo",
-          "split_files/diffusion_models/z_image_turbo_int8_convrot.safetensors", "apache-2.0", 6.2, "z_image_turbo"),
-    Model("qwen_3_4b_fp8_mixed.safetensors", "text_encoders", "Comfy-Org/z_image_turbo",
-          "split_files/text_encoders/qwen_3_4b_fp8_mixed.safetensors", "apache-2.0", 5.63, "z_image_turbo"),
-    Model("ae.safetensors", "vae", "Comfy-Org/z_image_turbo",
-          "split_files/vae/ae.safetensors", "apache-2.0", 0.34, "z_image_turbo"),
-)
+# Every model file a workflow needs, from config/installer.yaml images.workflows.
+MODELS = tuple(Model(str(f["file"]), str(f["folder"]), str(f["repo"]), str(f["path"]), str(f["licence"]),
+                     float(f["size_gb"]), str(name))
+               for name, wf in (catalog.images().get("workflows") or {}).items() for f in wf.get("models") or ())
 
 
 # ---------------------------------------------------------------- folders
@@ -154,7 +148,8 @@ def image_settings(profile: dict) -> dict[str, object]:
 
 
 # Display names for the chat's image label; a workflow without one is named after its diffusion model file.
-WORKFLOW_LABELS = {"z_image_turbo": "Z-Image-Turbo int8"}
+WORKFLOW_LABELS = {name: str(wf["label"]) for name, wf in (catalog.images().get("workflows") or {}).items()
+                   if wf.get("label")}
 
 
 def image_label(profile: dict) -> str:
@@ -244,8 +239,9 @@ def system_python() -> str | None:
 
 
 # Smart App Control judges each compiled module (.pyd) by its download reputation. On 2026-11-04 it refused PyAV 19.0.2
-# and 16.0.1 (cp314 and cp312) but allowed 17.0.0, the oldest version ComfyUI accepts. Pinned until a newer one passes.
-SAC_PINS = ("av==17.0.0",)
+# and 16.0.1 (cp314 and cp312) but allowed 17.0.0, the oldest version ComfyUI accepts. Pinned (config/installer.yaml
+# images.pins) until a newer one passes.
+SAC_PINS = tuple(str(x) for x in catalog.images().get("pins") or ())
 # Modules ComfyUI needs at start-up that ship compiled code; importing them is how a refused DLL shows up.
 IMPORT_CHECK = ("import av, av.audio.frame, av.video.frame, numpy, PIL.Image, safetensors, tokenizers, yaml, aiohttp, torch; "
                 "print(torch.__version__, torch.cuda.is_available())")
@@ -258,14 +254,17 @@ def install_comfyui(profile: dict, report=lambda *a: None) -> str:
     target = comfyui_dir(profile)
     git = which("git")
     if not git:
-        raise RuntimeError("git is not installed (winget install Git.Git)")
+        from .winget_build import package_id
+
+        raise RuntimeError(f"git is not installed (winget install {package_id('git')})")
     ref = m.get("comfyui_ref") or "master"
+    depth = int(catalog.images().get("clone_depth") or 50)
     if not (target / ".git").exists():
         report(f"cloning ComfyUI into {target}")
         target.parent.mkdir(parents=True, exist_ok=True)
-        _run([git, "clone", "--depth", "50", COMFYUI_GIT, target])
+        _run([git, "clone", "--depth", str(depth), COMFYUI_GIT, target])
     report(f"checking out ComfyUI {ref}")
-    _run([git, "fetch", "--depth", "50", "origin", ref], cwd=target)
+    _run([git, "fetch", "--depth", str(depth), "origin", ref], cwd=target)
     _run([git, "checkout", "-q", "FETCH_HEAD"], cwd=target)
     commit = subprocess.run([git, "rev-parse", "--short", "HEAD"], cwd=target, capture_output=True, text=True, check=False).stdout.strip()
     uv = which("uv") or "uv"
@@ -278,7 +277,8 @@ def install_comfyui(profile: dict, report=lambda *a: None) -> str:
     have_torch = subprocess.run([python, "-c", "import torch"], capture_output=True, check=False).returncode == 0
     if not have_torch:
         report("installing PyTorch (about 3 GB)")
-        _run([uv, "pip", "install", "--python", python, "torch", "torchvision", "torchaudio",
+        torch = [str(x) for x in catalog.images().get("torch") or ("torch", "torchvision", "torchaudio")]
+        _run([uv, "pip", "install", "--python", python, *torch,
               "--index-url", m.get("torch_index") or "https://download.pytorch.org/whl/cu130"], env=env)
     report("installing ComfyUI's requirements")
     overrides = Path(m["uv_cache"]) / "comfyui-overrides.txt"
@@ -344,6 +344,18 @@ def free_comfyui(profile: dict) -> bool:
         return False
 
 
+def unload_model(profile: dict, name: str) -> bool:
+    """Unload one model Ollama holds (keep_alive 0); the next request that needs it loads it again. False when Ollama
+    did not answer."""
+    base = f"http://127.0.0.1:{profile['ports']['ollama']}"
+    try:
+        _post(f"{base}/api/generate", {"model": name, "keep_alive": 0}, timeout=60)
+        return True
+    except (urllib.error.URLError, OSError):
+        warn(f"could not unload {name}")
+        return False
+
+
 def unload_ollama(profile: dict) -> list[str]:
     """Unload every model Ollama holds (keep_alive 0). Returns their names."""
     base = f"http://127.0.0.1:{profile['ports']['ollama']}"
@@ -353,10 +365,7 @@ def unload_ollama(profile: dict) -> list[str]:
     except (urllib.error.URLError, OSError, ValueError):
         return []
     for name in loaded:
-        try:
-            _post(f"{base}/api/generate", {"model": name, "keep_alive": 0}, timeout=60)
-        except (urllib.error.URLError, OSError):
-            warn(f"could not unload {name}")
+        unload_model(profile, name)
     return loaded
 
 

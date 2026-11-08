@@ -1,5 +1,6 @@
 """Read selected text aloud: the settings, the voices, and how selected text becomes speech-ready pieces. Standard
-library only, so the project's tests cover it without the app's environment. tts.py runs the voices, player.py plays
+library only (plus the installer catalog, read with PyYAML, which both environments have), so the project's tests
+cover it without the app's environment. tts.py runs the voices, player.py plays
 the audio, reader.py runs the flow behind the speaker button and its hotkey.
 
 Two kinds of voice speak, both on this machine; nothing leaves it:
@@ -21,12 +22,16 @@ import re
 import unicodedata
 from dataclasses import dataclass, field, fields
 
+from .. import catalog
+
 # Kokoro-82M as ONNX (onnx-community's export of hexgrad/Kokoro-82M v1.0), pinned like the Python packages: a new
-# revision is a new download to check. 55 voice files of 0.5 MB each; only the languages below are offered.
-KOKORO_REPO = "onnx-community/Kokoro-82M-v1.0-ONNX"
-KOKORO_REVISION = "1939ad2a8e416c0acfeecc08a694d14ef25f2231"
-KOKORO_FILES = {"fp32": "onnx/model.onnx", "int8": "onnx/model_quantized.onnx"}
-KOKORO_SIZES_MB = {"fp32": 326, "int8": 92}   # measured downloads, plus about 0.5 MB per voice
+# revision is a new download to check (config/installer.yaml kokoro). Voice files are 0.5 MB each; only the languages
+# below are offered.
+_KOKORO = catalog.kokoro()
+KOKORO_REPO = str(_KOKORO["repo"])
+KOKORO_REVISION = str(_KOKORO["revision"])
+KOKORO_FILES = {name: str(v["file"]) for name, v in (_KOKORO.get("variants") or {}).items()}
+KOKORO_SIZES_MB = {name: int(v.get("download_mb") or 0) for name, v in (_KOKORO.get("variants") or {}).items()}
 SAMPLE_RATE = 24000                            # Kokoro's output; Windows voices are asked for the same
 
 # Kokoro's language letter (first letter of a voice id) -> (espeak-ng language, language family, name)
@@ -35,16 +40,9 @@ KOKORO_LANGUAGES = {
     "f": ("fr-fr", "fr", "French"), "h": ("hi", "hi", "Hindi"), "i": ("it", "it", "Italian"),
     "p": ("pt-br", "pt", "Brazilian Portuguese"),
 }
-# Japanese and Chinese voices exist too, but Kokoro reads them through its own G2P (misaki with pyopenjtalk or
-# jieba), not espeak-ng, so they are not offered.
-KOKORO_VOICE_IDS = (
-    "af_heart", "af_bella", "af_nicole", "af_aoede", "af_kore", "af_sarah", "af_nova", "af_sky", "af_alloy",
-    "af_jessica", "af_river", "am_michael", "am_fenrir", "am_puck", "am_echo", "am_eric", "am_liam", "am_onyx",
-    "am_adam", "am_santa",
-    "bf_emma", "bf_isabella", "bf_alice", "bf_lily", "bm_george", "bm_fable", "bm_lewis", "bm_daniel",
-    "ef_dora", "em_alex", "em_santa", "ff_siwis", "hf_alpha", "hf_beta", "hm_omega", "hm_psi",
-    "if_sara", "im_nicola", "pf_dora", "pm_alex", "pm_santa",
-)
+# The voices offered (config/installer.yaml kokoro.voices). Japanese and Chinese voices exist too, but Kokoro reads them
+# through its own G2P (misaki with pyopenjtalk or jieba), not espeak-ng, so they are not offered.
+KOKORO_VOICE_IDS = tuple(str(v) for v in _KOKORO.get("voices") or ())
 # The voice auto_language picks for a language when you named none (read_aloud.voices).
 DEFAULT_FOR_LANGUAGE = {"en": "af_heart", "es": "ef_dora", "fr": "ff_siwis", "hi": "hf_alpha", "it": "if_sara",
                         "pt": "pf_dora"}

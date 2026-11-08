@@ -16,7 +16,7 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
-from stacklib import clients, features, profile as prof  # noqa: E402
+from stacklib import catalog, clients, features, profile as prof  # noqa: E402
 
 DEFAULTS = yaml.safe_load((REPO / "machines" / "_defaults.yaml").read_text(encoding="utf-8"))
 REFERENCE_PC = {"gpu": "NVIDIA GeForce RTX 3060", "vram_mib": 12288, "idle_vram_mib": 1135, "ram_gb": 31.9}
@@ -28,7 +28,7 @@ def make_profile(store: Path, detected: dict | None = None, **over) -> dict:
         "detected": dict(REFERENCE_PC if detected is None else detected),
         "models": {"fim": "qwen2.5-coder:1.5b-base", "embed": "nomic-embed-text", "small": "qwen3.5:9b",
                    "primary": "qwen3.5:9b", "primary_num_ctx": 32768, "small_num_ctx": 32768},
-        "catalog": DEFAULTS["model_catalog"],
+        "catalog": catalog.models(),
         "ollama_env": {"OLLAMA_MODELS": str(store), "OLLAMA_KEEP_ALIVE": "4h", "OLLAMA_KV_CACHE_TYPE": "q8_0"},
         "model_store": str(store),
         "services": dict(DEFAULTS["services"]),

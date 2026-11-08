@@ -468,17 +468,6 @@ class Recorders(unittest.TestCase):
             opened.assert_not_called()
         sys.modules.pop("whisper_mcp", None)
 
-    def test_whisper_install_passes_the_usage_folder(self):
-        from stacklib import whisper
-
-        p = {"media": {"recordings_dir": "D:\\r", "transcripts_dir": "D:\\t"}, "agent_access": {"allowed_roots": []},
-             "observability": {"jsonl_traces": True}}
-        env = whisper.server_env(p)
-        self.assertEqual(env["AGENT_STACK_USAGE_DIR"], str(usage_log.default_dir()))
-        self.assertEqual(env["AGENT_STACK_CLIENT"], "Claude Desktop")
-        p["observability"]["jsonl_traces"] = False
-        self.assertEqual(whisper.server_env(p)["AGENT_STACK_USAGE_DIR"], "off")
-
 
 @unittest.skipUnless(importlib.util.find_spec("numpy"), "voice typing's engine needs numpy (its own environment)")
 class VoiceTypingEngine(unittest.TestCase):
