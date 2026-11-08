@@ -166,7 +166,7 @@ symptom → cause → fix table. Logs are in `.run/logs/<service>.log`; Ollama's
 
 ## Known issues
 
-Tracker: https://github.com/techtana/personal-agent-stack/issues
+Tracker: this repository's GitHub issues.
 
 - Phoenix does not start on the reference machine since 2026-10-26: Smart App Control blocks compiled modules in its tool
   environment (pyarrow, sqlalchemy, pandas). The plans remove Phoenix; until then turn **Phoenix tracing** off in the

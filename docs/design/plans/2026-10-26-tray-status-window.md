@@ -1,11 +1,11 @@
 # Tray status window: modern design, usage and settings
 
-**Status:** done 2026-10-27 in [PR #9](https://github.com/techtana/personal-agent-stack/pull/9), except per-process
-CPU/RAM/GPU (part 2), which is in open [PR #8](https://github.com/techtana/personal-agent-stack/pull/8).
+**Status:** done 2026-10-27 in PR #9, except per-process
+CPU/RAM/GPU (part 2), which is in open PR #8.
 
 ## Goal
 
-From [issue #4](https://github.com/techtana/personal-agent-stack/issues/4) (2026-10-26), the owner asked for:
+From issue #4 (2026-10-26), the owner asked for:
 
 1. A more modern tray window than default tkinter.
 2. Current CPU, RAM and GPU use per process.
