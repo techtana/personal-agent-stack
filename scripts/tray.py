@@ -572,6 +572,44 @@ class TrayApp:
             ttk.Label(inner, text=title, style="Card.Title.TLabel").grid(row=0, column=0, columnspan=10, sticky="w", pady=(0, 8))
         return inner
 
+    def _scroll_area(self, tab, parent, bg: str, **frame) -> tuple[tk.Frame, ttk.Frame]:
+        """A vertically scrolling frame for tab content that can be taller than the window. Returns (holder to place,
+        frame to fill). The scrollbar shows only while the content does not fit; the wheel scrolls it while `tab` is
+        the current tab (see _wheel)."""
+        holder = tk.Frame(parent, bg=bg)
+        canvas = tk.Canvas(holder, bg=bg, highlightthickness=0, height=1)
+        sb = ttk.Scrollbar(holder, orient="vertical", command=canvas.yview)
+
+        def yset(first, last) -> None:
+            if float(first) <= 0 and float(last) >= 1:
+                sb.pack_forget()
+            elif not sb.winfo_manager():
+                sb.pack(side="right", fill="y", before=canvas)
+            sb.set(first, last)
+
+        canvas.configure(yscrollcommand=yset)
+        canvas.pack(side="left", fill="both", expand=True)
+        inner = ttk.Frame(canvas, **frame)
+        win = canvas.create_window(0, 0, window=inner, anchor="nw")
+        inner.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(win, width=e.width))
+        self.scroll_canvases[str(tab)] = canvas
+        return holder, inner
+
+    def _wheel(self, e) -> None:
+        """Scroll the current tab's scroll area, if it has one. Windows sends 120 per notch; touchpads and macOS send
+        smaller steps, which still scroll one unit instead of rounding to none."""
+        canvas = self.scroll_canvases.get(self.tabs.select())
+        if canvas is None:
+            return
+        if e.num in (4, 5):
+            units = -1 if e.num == 4 else 1
+        elif e.delta:
+            units = -round(e.delta / 120) or (-1 if e.delta > 0 else 1)
+        else:
+            return
+        canvas.yview_scroll(units, "units")
+
     def _build_window(self) -> None:
         self._style()
         t = self.t
@@ -608,6 +646,14 @@ class TrayApp:
         self.tabs = ttk.Notebook(w)
         self.tabs.pack(fill="both", expand=True, padx=18, pady=(4, 18))
         self.tabs.bind("<<NotebookTabChanged>>", lambda _e: (self._render_usage(), self._sample_resources()))
+        self.scroll_canvases: dict[str, tk.Canvas] = {}
+        # Tk 8.6 on X11 reports the wheel as buttons 4 and 5 (on Windows those are the side buttons).
+        wheel = ["<MouseWheel>", *(["<Button-4>", "<Button-5>"] if self.root.tk.call("tk", "windowingsystem") == "x11" else [])]
+        for seq in wheel:
+            w.bind_all(seq, self._wheel, add="+")
+            # Tk's own TCombobox binding steps a read-only box to the next value; scroll the tab instead and stop
+            # there, so the "all" binding above does not scroll a second time.
+            self.root.bind_class("TCombobox", seq, lambda e: (self._wheel(e), "break")[1])
         self._build_overview(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
         self._build_usage(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
         self._build_settings(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
@@ -617,7 +663,12 @@ class TrayApp:
     def _build_overview(self, tab: ttk.Frame) -> None:
         self.tabs.add(tab, text="Overview")
         tab.columnconfigure(0, weight=1)
-        card = self._card(tab, "Services", row=0, column=0)
+        tab.rowconfigure(0, weight=1)
+        # The cards scroll when the window is shorter than they are; the action bar below stays in view.
+        holder, body = self._scroll_area(tab, tab, self.t["page"])
+        holder.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        card = self._card(body, "Services", row=0, column=0)
         card.columnconfigure(1, weight=1)
         self.row_widgets: dict[str, tuple] = {}
         self.reason_widgets: dict[str, tuple] = {}
@@ -649,7 +700,7 @@ class TrayApp:
             self.reason_widgets[svc] = (reason, show)
 
         # One card for the GPU: what Ollama holds, and the switch that hands the card to chat or to media (plan G1).
-        models = self._card(tab, "GPU: loaded in Ollama", row=1, column=0, pady=(12, 0))
+        models = self._card(body, "GPU: loaded in Ollama", row=1, column=0, pady=(12, 0))
         models.columnconfigure(0, weight=1)
         self.loaded_frame = ttk.Frame(models, style="Card.TFrame")
         self.loaded_frame.grid(row=1, column=0, columnspan=2, sticky="we")
@@ -662,7 +713,7 @@ class TrayApp:
         ttk.Button(gbtn, text="Chat", width=7, command=lambda: self.set_gpu_mode("chat")).pack(side="left", padx=2)
         ttk.Button(gbtn, text="Media", width=7, command=lambda: self.set_gpu_mode("media")).pack(side="left", padx=2)
 
-        extras = self._card(tab, "Hugging Face and OpenClaw", row=2, column=0, pady=(12, 0))
+        extras = self._card(body, "Hugging Face and OpenClaw", row=2, column=0, pady=(12, 0))
         extras.columnconfigure(1, weight=1)
         self.client_widgets: dict[str, tuple] = {}
         for n, (key, label, role) in enumerate(CLIENTS):
@@ -685,7 +736,7 @@ class TrayApp:
             self.client_widgets[key] = (dot, state, detail, fix)
 
         bar = ttk.Frame(tab, padding=(0, 12, 0, 0))
-        bar.grid(row=3, column=0, sticky="we")
+        bar.grid(row=1, column=0, sticky="we")
         ttk.Button(bar, text="Open chat", style="Accent.TButton", command=lambda: self.open_url("open_webui")).pack(side="left")
         self.start_btn = ttk.Button(bar, text="Start all", command=self.start_all)
         self.start_btn.pack(side="left", padx=(8, 4))
@@ -1155,23 +1206,8 @@ class TrayApp:
         tab.rowconfigure(0, weight=1)
         outer = tk.Frame(tab, bg=self.t["border"], padx=1, pady=1)
         outer.grid(row=0, column=0, sticky="nsew")
-        scroll = tk.Canvas(outer, bg=self.t["card"], highlightthickness=0)
-        sb = ttk.Scrollbar(outer, orient="vertical", command=scroll.yview)
-        scroll.configure(yscrollcommand=sb.set)
-        sb.pack(side="right", fill="y")
-        scroll.pack(side="left", fill="both", expand=True)
-        form = ttk.Frame(scroll, style="Card.TFrame", padding=(18, 14))
-        win = scroll.create_window(0, 0, window=form, anchor="nw")
-        form.bind("<Configure>", lambda _e: scroll.configure(scrollregion=scroll.bbox("all")))
-        scroll.bind("<Configure>", lambda e: scroll.itemconfigure(win, width=e.width))
-        self.settings_canvas = scroll
-        # Tk 8.6 on X11 reports the wheel as buttons 4 and 5 (on Windows those are the side buttons).
-        wheel = ["<MouseWheel>", *(["<Button-4>", "<Button-5>"] if self.root.tk.call("tk", "windowingsystem") == "x11" else [])]
-        for seq in wheel:
-            form.bind_all(seq, self._settings_wheel, add="+")
-            # Tk's own TCombobox binding steps a read-only box to the next value; scroll the form instead and stop
-            # there, so the "all" binding above does not scroll a second time.
-            self.root.bind_class("TCombobox", seq, lambda e: (self._settings_wheel(e), "break")[1])
+        holder, form = self._scroll_area(tab, outer, self.t["card"], style="Card.TFrame", padding=(18, 14))
+        holder.pack(fill="both", expand=True)
         form.columnconfigure(1, weight=1)
         self.form = form
 
@@ -1229,19 +1265,6 @@ class TrayApp:
         self.apply_log = ttk.Label(bar, text="", style="HeadSub.TLabel", wraplength=820, justify="left")
         self.apply_log.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
         self._load_settings()
-
-    def _settings_wheel(self, e) -> None:
-        """Scroll the Settings form while its tab is showing. Windows sends 120 per notch; touchpads and macOS send
-        smaller steps, which still scroll one unit instead of rounding to none."""
-        if self.tabs.index("current") != 2:
-            return
-        if e.num in (4, 5):
-            units = -1 if e.num == 4 else 1
-        elif e.delta:
-            units = -round(e.delta / 120) or (-1 if e.delta > 0 else 1)
-        else:
-            return
-        self.settings_canvas.yview_scroll(units, "units")
 
     def _load_settings(self) -> None:
         self.profile = prof.resolve_profile(self.profile["name"])
