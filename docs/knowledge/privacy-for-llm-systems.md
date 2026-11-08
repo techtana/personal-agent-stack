@@ -289,7 +289,7 @@ contradicted private first: [archive](../archive/GCP-DESIGN-DRAFT-2026-10-26.md)
 
 ## What we found
 
-All results are from 2026-10-26 on the owner's machine (SEKAIHOME) unless stated, recorded in
+All results are from 2026-10-26 on the owner's machine (the reference machine) unless stated, recorded in
 [SHARED-COMPONENTS.md section 7](../plans/SHARED-COMPONENTS.md).
 
 - **V1, confirmed:** `async_pre_call_deployment_hook` runs after routing and fallback selection and sees the chosen

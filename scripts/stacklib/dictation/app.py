@@ -260,9 +260,9 @@ class App:
         threading.Thread(target=self._worker_loop, name="dictation-worker", daemon=True).start()
         threading.Thread(target=self._track_focus, name="dictation-focus", daemon=True).start()
         self.engine.load_async()
-        log(f"[dictation] ready: hotkey {self.hotkey_text()}, mode {self.cfg.mode}, cleanup {self.cfg.style}, "
-            f"VAD {self.vad.name}, refine {self.refine_hotkey_text()} ({self.rcfg.default} via {self.rcfg.model}), "
-            f"control http://127.0.0.1:{self.port}")
+        log(f"[dictation] ready: hotkey {self.hotkey_text()}, mode {self.cfg.mode}, cleanup {self.cfg.style} "
+            f"({self.prompt_kind()} prompt), VAD {self.vad.name}, refine {self.refine_hotkey_text()} "
+            f"({self.rcfg.default} via {self.rcfg.model}), control http://127.0.0.1:{self.port}")
         problems = [p for p in (self.hotkey_error, self.refine_hotkey_error) if p]
         if problems:
             self.ui(lambda: self.overlay.set_state("error", "Hotkey not available", " ".join(problems),
@@ -371,7 +371,19 @@ class App:
             return {"ok": self.refiner.revert("", "http"), "state": self.state}
         elif name == "quit":
             self.quit()
+        elif name == "reload":
+            self.reload()
         return {"ok": True, "state": self.state}
+
+    def prompt_kind(self) -> str:
+        return "custom" if self.cfg.cleanup_prompt else "built-in"
+
+    def reload(self) -> None:
+        """Take the settings that need no restart from the machine file: the cleanup prompt (the tray's Apply calls
+        this after saving it). The next cleanup uses it."""
+        fresh = Config.from_profile(prof.resolve_profile(self.profile.get("name") or None))
+        self.cfg.cleanup_prompt = fresh.cleanup_prompt
+        log(f"[dictation] settings reloaded: {self.prompt_kind()} cleanup prompt")
 
     def quit(self) -> None:
         log("[dictation] quitting")
@@ -710,7 +722,7 @@ class App:
             if s.style != "verbatim":
                 self.ui(lambda: self.overlay.set_state("working", "Cleaning up", raw))
                 res = cleanup.polish(raw, s.style, base_url=self.gateway, api_key=self.api_key,
-                                     model=self.cfg.cleanup_model)
+                                     model=self.cfg.cleanup_model, prompt=self.cfg.cleanup_prompt)
                 final, note, polish_s = res.text, res.note, res.seconds
             if s.cancelled:
                 return

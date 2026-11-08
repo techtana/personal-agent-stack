@@ -25,7 +25,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from . import IS_WINDOWS, REPO, info, warn
-from . import services
+from . import procname, services
 
 TASK_FOLDER = "\\AgentStack\\"
 STACK_PY = REPO / "scripts" / "stack.py"
@@ -115,7 +115,7 @@ def run(profile: dict, svc: str) -> int:
         _log_line(log, f"starting {svc}: {c['cmd'][0]}")
         began = time.time()
         try:
-            proc = subprocess.Popen(c["cmd"], cwd=c["cwd"], env=c["env"], stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+            proc = services.spawn(c, cwd=c["cwd"], env=c["env"], stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
             code = proc.wait()
         except OSError as e:  # missing executable, or Smart App Control refusing it (WinError 4551)
             _log_line(log, f"could not start {c['cmd'][0]}: {e}")
@@ -150,7 +150,8 @@ def task_xml(svc: str, trigger: str) -> str:
     # Watchdog: repeats forever from a fixed past date; a start while the task runs is ignored (IgnoreNew).
     trig += (f"<TimeTrigger><Enabled>true</Enabled><StartBoundary>2026-01-01T00:00:00</StartBoundary>"
              f"<Repetition><Interval>{WATCHDOG}</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition></TimeTrigger>")
-    python = _venv_python(windowless=True)  # no console window in the signed-in session
+    # No console window in the signed-in session; runs as PAS-Supervisor.exe (procname) when the copy can be made.
+    python = procname.named(_venv_python(windowless=True), "supervisor")
     args = f'"{STACK_PY}" run {svc}'
     # Priority 5 is normal; Task Scheduler's default (7) lowers CPU and I/O priority.
     return f"""<?xml version="1.0" encoding="UTF-16"?>

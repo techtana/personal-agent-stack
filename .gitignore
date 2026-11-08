@@ -5,9 +5,20 @@
 infrastructure/.env
 .claude/settings.local.json
 
-# Runtime state (pids, logs, Phoenix/Open WebUI data, orchestrator job store)
+# The repository is public. Machine profiles name the computer and hold the owner's folders; the installer writes
+# them on each computer. Never commit one.
+machines/*.yaml
+!machines/_defaults.yaml
+# Words tests/test_personal_info.py must never find in tracked files (your name, other computers), one per line
+.personal-terms
+
+# Runtime state (pids, logs, Phoenix/Open WebUI data, orchestrator job store). Databases never belong in git: a
+# stray Open WebUI database committed at the root once held the gateway key.
 .run/
 orchestrator/data/
+*.db
+*.db-shm
+*.db-wal
 
 # Raw traces are machine-local; only retro/reports/*.md summaries are committed
 traces/*

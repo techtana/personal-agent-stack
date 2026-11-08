@@ -1,6 +1,6 @@
 """Whisper through faster-whisper: load on the GPU when it works, else a smaller model on the CPU; free VRAM when idle.
 
-Measured on SEKAIHOME (RTX 3060 12 GB, qwen3.5:9b resident, 2026-11-07): large-v3-turbo int8_float16 loads in 5-8 s
+Measured on the reference machine (RTX 3060 12 GB, qwen3.5:9b resident, 2026-11-07): large-v3-turbo int8_float16 loads in 5-8 s
 from the USB SSD and transcribes 3.5 s of speech in 0.3 s and 15 s in 0.6 s. On the Ryzen 5 5500 the same model with
 int8 needed 9.7 s for the 15 s clip, too slow to wait for, so the CPU fallback uses `cpu_model` (default small).
 """

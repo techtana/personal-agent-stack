@@ -30,7 +30,7 @@ Why:
   is unplugged, nothing would start. A missing models drive only makes model loads fail; on 2026-11-01 it broke
   every model download until the drive was plugged back in.
 - **Small files.** A repository, a Python environment or `node_modules` is thousands of small files. The internal
-  NVMe drive answers each read in about 0.02 ms; the USB SSD on SEKAIHOME took about 0.2 ms.
+  NVMe drive answers each read in about 0.02 ms; the USB SSD on the reference machine took about 0.2 ms.
 - **Large files read once.** Ollama reads a model from disk only when it loads it, then runs it from the GPU's
   memory. Hugging Face weights work the same way. A drive at 200 MB/s or more adds only seconds to each cold load.
 - **Credentials.** The Hugging Face token and OpenClaw's keys stay on the internal drive, not on one that can be
@@ -149,7 +149,7 @@ About 40 MB/s for both reading and writing, with random reads no faster than seq
 connected at USB 2.0 speed. The drive itself is usually fine. Try these in order, running the check again after each:
 
 1. **Turn the USB-C plug over.** A USB-C plug has its fast-data contacts on both sides, and each orientation uses a
-   different set. On SEKAIHOME on 2026-11-01, turning the plug over took drive D: from 41 MB/s to 376 MB/s. If that
+   different set. On the reference machine on 2026-11-01, turning the plug over took drive D: from 41 MB/s to 376 MB/s. If that
    fixes it, a contact is worn or dirty: mark which way round the plug works, or replace the cable.
 2. **Use a USB 3 port on the back of the PC.** These are usually blue or teal, or marked `SS`, `5Gbps` or `10Gbps`.
    Avoid front-panel ports and hubs.
@@ -159,7 +159,7 @@ connected at USB 2.0 speed. The drive itself is usually fine. Try these in order
 About 375 MB/s is what a 5 Gbps USB port gives. A USB 3.2 Gen 2 SSD such as the Crucial X8 can reach about
 1,000 MB/s on a 10 Gbps port.
 
-## Measured on SEKAIHOME (2026-11-01)
+## Measured on the reference machine (2026-11-01)
 
 | Drive | Connection | Read | Write | How measured |
 |---|---|---|---|---|
