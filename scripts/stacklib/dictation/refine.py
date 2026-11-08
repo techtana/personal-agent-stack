@@ -95,6 +95,7 @@ class Config:
     max_chars: int = 10000
     timeout_s: float = 120.0
     keep_minutes: float = 30.0    # how long the refine log keeps a suggestion and the text it replaced
+    auto_copy: bool = False       # also put the refined text on the clipboard (else only the bubble Copy does)
     prompts: dict = field(default_factory=dict)
 
     @classmethod

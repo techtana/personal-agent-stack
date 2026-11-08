@@ -150,8 +150,12 @@ class Refiner:
             self.logline(f"[refine] {job.kind}: no selection read ({e.title})")
             return None
 
-    def _replace(self, sel: Selection, text: str) -> tuple[str, str]:
-        return self.call(lambda ws, clip: replace(ws, clip, sel, text, ours=self.ours))
+    def _replace(self, sel: Selection, text: str, auto_copy: bool = False) -> tuple[str, str]:
+        return self.call(lambda ws, clip: replace(ws, clip, sel, text, ours=self.ours, auto_copy=auto_copy))
+
+    def _not_replaced(self, outcome: str, text: str, detail: str) -> None:
+        self.ui.error("Copied to the clipboard" if outcome == "copied" else "Nothing was replaced", preview(text),
+                      detail, copy=text)
 
     def _refine(self, job: Job, source: str) -> None:
         cfg = self.cfg()
@@ -186,7 +190,8 @@ class Refiner:
             hint = (f"Nothing was replaced; the suggestion stays in the refine history for {self._keep()}."
                     if status == "rejected"
                     else "Nothing was replaced.")
-            self.ui.error(title, res.note[:1].upper() + res.note[1:] + ".", hint)
+            self.ui.error(title, res.note[:1].upper() + res.note[1:] + ".", hint,
+                          copy=res.suggestion, copy_label="Copy suggestion")
             return
         if res.unchanged:
             self.last_id = self._log({**entry, "status": "unchanged", "note": res.note})
@@ -196,15 +201,16 @@ class Refiner:
         if not self._commit(job):
             self.last_id = self._log({**entry, "status": "cancelled", "note": "cancelled before pasting"})
             return
-        outcome, detail = self._replace(sel, res.text)
+        outcome, detail = self._replace(sel, res.text, cfg.auto_copy)
         self.last_id = self._log({**entry, "status": outcome, "note": "" if outcome == "replaced" else detail})
         self.logline(f"[refine] {style.id}: {outcome} ({sizes}) in {sel.app or 'unknown app'} via {source or '?'}")
         if outcome == "replaced":
+            also = " It is on the clipboard too." if cfg.auto_copy else ""
             self.ui.done(f"Replaced with {style.name}", preview(res.text),
-                         f"Ctrl+Z in the app undoes it. The refine history keeps the original for {self._keep()}.")
+                         f"Ctrl+Z in the app undoes it. The refine history keeps the original for {self._keep()}."
+                         + also, copy=res.text)
         else:
-            self.ui.error("Copied to the clipboard" if outcome == "copied" else "Nothing was replaced",
-                          preview(res.text), detail)
+            self._not_replaced(outcome, res.text, detail)
 
     def _revert(self, job: Job, source: str) -> None:
         self.ui.working("Putting the original back", "", "Reading the selection…")
@@ -231,7 +237,7 @@ class Refiner:
         original = lead + core + trail
         if not self._commit(job):
             return
-        outcome, detail = self._replace(sel, original)
+        outcome, detail = self._replace(sel, original, self.cfg().auto_copy)
         self.last_id = self._log({"kind": "revert", "of": entry.get("id"), "style": entry.get("style"),
                                      "style_name": entry.get("style_name"), "app": sel.app, "window": sel.window,
                                      "before": sel.text, "after": original, "status": outcome,
@@ -242,7 +248,6 @@ class Refiner:
             hint = f"Undid {entry.get('style_name') or 'the refine'} from {when}."
             if score < 1.0:
                 hint += " Edits you made after it were undone too; Ctrl+Z in the app brings them back."
-            self.ui.done("Original put back", preview(original), hint)
+            self.ui.done("Original put back", preview(original), hint, copy=original)
         else:
-            self.ui.error("Copied to the clipboard" if outcome == "copied" else "Nothing was replaced",
-                          preview(original), detail)
+            self._not_replaced(outcome, original, detail)

@@ -9,7 +9,8 @@ Each refine adds one entry, whatever happened to the suggestion:
      "window": "Report.docx - Word", "before": "<the selected text>", "after": "<the model's suggestion>",
      "status": "replaced", "note": "", "seconds": 1.4}
 status: replaced (pasted over the selection) | copied (left on the clipboard, nothing replaced) | rejected (the reply
-failed the checks; your text stayed) | unchanged | cancelled | failed | skipped. A revert adds {"kind": "revert",
+failed the checks; your text stayed) | unchanged | cancelled | failed | skipped (nothing replaced, clipboard left
+alone; the bubble's Copy may have put it there). A revert adds {"kind": "revert",
 "of": <id>, "before": <the refined text that was selected>, "after": <the original put back>, ...}.
 
 Unlike the app log (tray.log), which keeps lengths and timings only, this file holds your text, so it holds it briefly:
@@ -62,6 +63,9 @@ def stamp(entry: dict) -> float | None:
     except (TypeError, ValueError, OverflowError):
         return None
 
+
+# Refines whose suggestion may be in a document now, so Revert can look for it.
+REVERTIBLE = ("replaced", "copied", "skipped")
 
 class RefineLog:
     def __init__(self, path: Path, keep_minutes: float = KEEP_MINUTES, clock=time.time) -> None:
@@ -174,11 +178,11 @@ class RefineLog:
 
     def find(self, selected: str, threshold: float = MATCH_AUTO, scan: int = 1000) -> tuple[dict, float] | None:
         """The newest refine whose suggestion matches the selected text best, if it is close enough. Only suggestions
-        that reached the document (replaced) or the clipboard (copied, which you may have pasted) count, and only
-        while they are kept."""
+        that reached the document (replaced) or may have reached it through the clipboard (copied, or skipped and
+        then copied with the bubble's Copy button) count, and only while they are kept."""
         best: tuple[dict, float] | None = None
         for e in self.entries(scan):
-            if e.get("kind") != "refine" or e.get("status") not in ("replaced", "copied") or not e.get("after"):
+            if e.get("kind") != "refine" or e.get("status") not in REVERTIBLE or not e.get("after"):
                 continue
             score = similarity(selected, e["after"])
             if score >= 1.0:

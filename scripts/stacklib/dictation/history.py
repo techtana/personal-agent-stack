@@ -16,6 +16,8 @@ import subprocess
 import tkinter as tk
 from pathlib import Path
 
+from .refinelog import REVERTIBLE
+
 FONT = "Segoe UI" if os.name == "nt" else "TkDefaultFont"
 MONO = "Cascadia Mono" if os.name == "nt" else "TkFixedFont"
 # Same dark palette as the button's bubble; every text colour passes 4.5:1 on its background (WCAG AA).
@@ -159,7 +161,7 @@ class HistoryWindow:
         self.revert_button = self._button(frame, "Revert in the app", self._revert)
 
     def update_buttons(self, e: dict | None) -> None:
-        can_revert = bool(e and e.get("kind") == "refine" and e.get("status") in ("replaced", "copied"))
+        can_revert = bool(e and e.get("kind") == "refine" and e.get("status") in REVERTIBLE)
         self.revert_button.configure(state="normal" if can_revert else "disabled")
 
     def labels(self, e: dict) -> tuple[str, str]:
