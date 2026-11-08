@@ -27,6 +27,7 @@ cleaned up (fillers removed, sentences shortened) the way Pixel's AI keyboard do
 | V11 | Button | 44 px Tk window, `WS_EX_NOACTIVATE` and topmost, Windows 11 rounded corners; bubble above it with the live transcript | A click must not move the keyboard focus away from the app being dictated into. |
 | V12 | Control | `127.0.0.1:8790` `/health` (tray status) and POST actions; refuses requests with an Origin header or a foreign Host | Stops web pages from starting the microphone by cross-site requests or DNS rebinding. The bind is also the single-instance lock (no SO_REUSEADDR on Windows). |
 | V13 | Privacy | Audio only in memory; logs carry lengths and timings, not words; the cached model loads with `local_files_only` | faster-whisper otherwise asks huggingface.co for a newer revision on every load. |
+| V14 | Language choice | All 100 codes faster-whisper 1.2.1 accepts (`_LANGUAGE_CODES`), with English names, in a type-to-search picker (substring over names, other names and codes) in the button's menu and the tray; English only for `.en` and distil models | A submenu or drop-down of 101 entries cannot be scanned. Added 2026-11-08 at the owner's request. |
 
 ## Measurements (SEKAIHOME, 2026-11-07)
 

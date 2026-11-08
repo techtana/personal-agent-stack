@@ -14,7 +14,7 @@ import tkinter.font as tkfont
 from typing import Callable
 
 from .cleanup import STYLE_NAMES
-from .models import LANGUAGES
+from .models import language_name, languages_for, search
 
 IS_WINDOWS = os.name == "nt"
 FONT = "Segoe UI" if IS_WINDOWS else "TkDefaultFont"
@@ -311,12 +311,8 @@ class Overlay:
                           ("concise", "Concise (also shorter)")):
             sub.add_radiobutton(label=text, variable=style, value=key, command=lambda k=key: app.set_option("style", k))
         m.add_cascade(label=f"Cleanup: {STYLE_NAMES.get(cfg.style, cfg.style)}", menu=sub)
-        lang = tk.StringVar(self.root, cfg.language)
-        langs = tk.Menu(m, tearoff=0)
-        for code, text in LANGUAGES:
-            langs.add_radiobutton(label=text, variable=lang, value=code, command=lambda c=code: app.set_option("language", c))
-        current = dict(LANGUAGES).get(cfg.language, cfg.language)
-        m.add_cascade(label=f"Language: {current}", menu=langs)
+        # 100 languages are too many for a submenu: open the search picker instead.
+        m.add_command(label=f"Language: {language_name(cfg.language)}...", command=self.pick_language)
         insert = tk.StringVar(self.root, cfg.insert)
         ins = tk.Menu(m, tearoff=0)
         ins.add_radiobutton(label="Paste (fast; clipboard restored)", variable=insert, value="paste",
@@ -333,11 +329,25 @@ class Overlay:
         m.add_command(label="Hide button (the hotkey still works)", command=lambda: app.set_option("button", False))
         m.add_command(label="Quit voice typing", command=app.quit)
         # Keep references alive while the menu is open (Tk variables die with their Python objects).
-        m._vars = (mode, style, lang, insert)  # type: ignore[attr-defined]
+        m._vars = (mode, style, insert)  # type: ignore[attr-defined]
         try:
             m.tk_popup(e.x_root, e.y_root)
         finally:
             m.grab_release()
+
+    def pick_language(self) -> None:
+        """The search picker above the button (or where the button would be when it is hidden)."""
+        from .picker import Picker
+
+        if self.show_button:
+            anchor = (self.root.winfo_x(), self.root.winfo_y(), self.size, self.size)
+        else:
+            sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+            anchor = (sw - self.size - int(28 * self.scale), sh - self.size - int(96 * self.scale), self.size, self.size)
+        self.hide_bubble()
+        Picker(self.root, languages_for(self.app.cfg.model), self.app.cfg.language,
+               lambda code: self.app.set_option("language", code), search, title="Dictation language",
+               anchor=anchor, above=True)
 
 
 def _tail(text: str, limit: int) -> str:
