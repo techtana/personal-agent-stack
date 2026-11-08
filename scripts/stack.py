@@ -23,8 +23,8 @@ Commands
   run           run one service in the foreground and restart it when it exits (what each task runs)
   tray          background tray app: runs the services; its window shows status, usage per model and settings
                 (--show, --foreground, --status, --stop, --install-startup, --remove-startup)
-  dictate       voice typing in any app: install | run | start | stop | status | toggle | show | hide | check |
-                transcribe FILE.wav (the live pipeline on a recording, with the cleanup)
+  dictate       voice typing in any app: install | run | start | stop | status | toggle | show | hide | reload |
+                check | transcribe FILE.wav (the live pipeline on a recording, with the cleanup)
 """
 from __future__ import annotations
 
@@ -468,7 +468,7 @@ def cmd_dictate(a):
             info("voice typing is running: press " + dictation.hotkey_label(p) + " or click the mic button" if ok
                  else "voice typing did not answer within 30 s; see .run/logs/dictation.log")
         return
-    if a.action in ("status", "toggle", "show", "hide"):
+    if a.action in ("status", "toggle", "show", "hide", "reload"):
         try:
             info(json.dumps(control.call(port, "health" if a.action == "status" else a.action), indent=2))
         except OSError:
@@ -549,7 +549,7 @@ def main(argv=None):
     s.add_argument("action", choices=["check", "install", "provision", "gpu"]); s.add_argument("mode", nargs="?", choices=["chat", "media"])
     s.set_defaults(f=cmd_media)
     s = sub.add_parser("dictate", help="voice typing in any app: install, run, start/stop, status, transcribe a WAV")
-    s.add_argument("action", choices=["install", "run", "start", "stop", "status", "toggle", "show", "hide", "check", "transcribe"])
+    s.add_argument("action", choices=["install", "run", "start", "stop", "status", "toggle", "show", "hide", "reload", "check", "transcribe"])
     s.add_argument("file", nargs="?"); s.add_argument("--style", choices=["verbatim", "clean", "concise"])
     s.add_argument("--mode", choices=["polish", "live"]); s.add_argument("--language"); s.add_argument("--device", choices=["auto", "cuda", "cpu"])
     s.add_argument("--vocabulary"); s.set_defaults(f=cmd_dictate)

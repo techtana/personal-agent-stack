@@ -1,6 +1,6 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+Updated: 2026-11-08 (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
@@ -248,6 +248,16 @@ once across a session restart.
    Also verified: cancel, a second instance, hold-to-talk with injected Ctrl+Alt+D (live text typed at release). A
    code review's eight findings and its clipboard-owner risk were fixed (owner window per clipboard operation; restore
    after 1 s). At the end of the session the app was left running from the worktree (pid file in the worktree's .run).
+   2026-11-07 late evening (branch claude/voice-typing-cleanup-config-d44300): the cleanup prompt is a setting,
+   `dictation.cleanup_prompt` (`''` = the built-in text, which is unchanged), edited in the tray under Settings > Voice
+   typing > Show advanced. Apply hands it to the running app (`POST /reload`, also `stack.py dictate reload`) instead
+   of restarting it. The concise rule, the JSON reply format and the reply checks stay in code. yamledit now writes
+   multi-line text as a literal block and replaces a multi-line value whole. Verified: unit tests (`uv run --with
+   pytest pytest -q`); a render harness of the Settings tab (dark and light, closed and open, edit, save, Restore
+   default, Ctrl+Z, Tab) against a temp copy of the machine file; the app's reload in the voice typing venv; both
+   prompts on qwen3.5:9b through Ollama directly (LiteLLM was down): a custom spelling-and-digits rule held 6/6 and the
+   self-correction 6/6. Not verified: the live tray and app (they run the new code only after a restart from the main
+   checkout), and a dictation through LiteLLM with a custom prompt. At 23:00 only Ollama was up (the 9B loaded).
 24. Claude security audit (2026-11-07, branch claude/awesome-jackson-45840e): skill `.claude/skills/claude-security-audit`
    (`scripts/audit.py`, standard library; state and reports in `%LOCALAPPDATA%\claude-security-audit`, outside every
    repository). Baseline run on this machine: 2 high, 6 medium, 7 low, 9 info.

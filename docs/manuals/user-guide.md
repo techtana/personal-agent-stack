@@ -116,6 +116,8 @@ Changes the most common values in your machine profile, `machines/<HOST>.yaml`, 
 | Tracing and services | **Write usage traces** | Writes `traces/litellm/` and `traces/usage/`. The Usage tab and `retro` need it. |
 | Tracing and services | **Phoenix tracing** | Runs Phoenix. Leave off on the reference machine: Smart App Control blocks it. |
 | Tracing and services | **Open WebUI (chat)** | Runs the chat at http://127.0.0.1:3000. |
+| Voice typing | **Voice typing hotkey**, **When to type**, **Cleanup**, **Stop after quiet**, **Language**, **Whisper model**, **Insert text by**, **Show the mic button** | See [Voice typing](#voice-typing). |
+| Voice typing, under **Show advanced** | **Cleanup prompt** | The instructions the local model follows when it cleans up a dictation. See [Your own cleanup instructions](#your-own-cleanup-instructions). |
 | Ollama runtime | **Keep models loaded for**, **KV cache precision**, **Flash attention**, **Parallel requests per model** | Ollama's memory and speed options. |
 
 A changed row is marked **changed**. The bar at the bottom says what **Apply** will do. **Apply** saves the changed
@@ -256,6 +258,31 @@ Good to know:
     **Speech-to-Text Engine** back to **Whisper (Local)** in Open WebUI's **Admin Settings > Audio**.
 
 Every setting is under `dictation:` in `machines/_defaults.yaml`; copy a line into `machines/<HOST>.yaml` to change it.
+
+### Your own cleanup instructions
+
+The instructions the chat model gets are a setting. In the tray window, go to **Settings**, then **Voice typing**, and
+click **Show advanced**. The **Cleanup prompt** box shows the built-in instructions until you change them. Edit them
+there, for example add a line such as `- Use British spelling.` or `- Write numbers as digits.`, then click **Apply**.
+Voice typing uses them from the next dictation, without a restart. **Restore default** puts the built-in text back
+(Ctrl+Z undoes it until you apply). When your own instructions are saved, a note beside **Show advanced** says so.
+
+Three things stay the same whatever you write:
+
+- **Concise** adds its rule to shorten.
+- The app adds the reply format (JSON with a `text` field), because it reads the answer from that field.
+- The checks above still run. Instructions that ask for more than cleaning (summarise, translate, add a heading) can
+  make the model's reply too long or too short, and then the transcript is typed instead (see
+  [Troubleshooting](troubleshooting.md)).
+
+The prompt is saved as `dictation.cleanup_prompt` in `machines/<HOST>.yaml`, as a block of lines; `''` means the
+built-in text, so later improvements to it still reach you. If you edit the file by hand, run
+`uv run scripts/stack.py dictate reload` so the running app reads it. `stack.py dictate transcribe` (**Try it on a
+recording** above) uses the saved prompt too, so you can compare instructions on the same recording.
+
+On the reference machine, adding `- Use American spelling and write every number as digits.` to the built-in text
+took effect in 6 of 6 tries on the 9B, and the other rules still held (the self-correction "blue, no wait, green"
+became "green" every time).
 
 ## Refine selected text
 
