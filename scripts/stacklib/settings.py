@@ -11,11 +11,11 @@ from dataclasses import dataclass, field
 
 import yaml
 
-from . import agents_build, litellm_build, ollama, services, winget_build
+from . import agents_build, catalog, litellm_build, ollama, services, winget_build
 from . import profile as prof
 from .yamledit import dump_scalar as _dump_scalar, set_key  # noqa: F401 - set_key is imported from here by install.py
 
-CTX_CHOICES = ["8192", "16384", "32768", "65536"]
+CTX_CHOICES = [str(n) for n in catalog.context_choices()]
 from .dictation.cleanup import DEFAULT_PROMPT as CLEANUP_PROMPT  # noqa: E402
 from .dictation.hotkey import CHOICES as HOTKEY_CHOICES, MENU_CHOICES, READ_CHOICES, REFINE_CHOICES  # noqa: E402
 from .dictation.models import CHOICES as MODEL_CHOICES, LANGUAGES  # noqa: E402
@@ -62,11 +62,11 @@ SETTINGS = [
             "The gateway logs each request to traces/litellm/; the Usage tab and retros read them.", "gateway"),
     Setting("observability", "model_label", "Show model in replies", "bool",
             "Each chat reply ends with the model that answered, and the image model after an image.", "gateway"),
-    Setting("observability", "phoenix", "Phoenix tracing", "bool",
+    Setting("observability", "phoenix", "Trace viewer (Phoenix)", "bool",
             "Runs Phoenix and sends gateway spans to it. Smart App Control currently blocks Phoenix here.", "phoenix"),
-    Setting("services", "open_webui", "Open WebUI (chat)", "bool",
+    Setting("services", "open_webui", "Chat in the browser (Open WebUI)", "bool",
             "Run the chat UI at http://127.0.0.1:3000.", "open_webui", on_off=("native", "off")),
-    Setting("services", "comfyui", "ComfyUI (images)", "bool",
+    Setting("services", "comfyui", "Image generation (ComfyUI)", "bool",
             "Run ComfyUI at http://127.0.0.1:8188 for the chat's image button. Needs media.root and `stack.py setup`.",
             "comfyui", on_off=("native", "off")),
     Setting("services", "dictation", "Voice typing", "bool",

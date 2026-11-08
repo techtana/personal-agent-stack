@@ -6,21 +6,12 @@ from __future__ import annotations
 
 import unicodedata
 
-REPOS = {
-    "tiny": "Systran/faster-whisper-tiny",
-    "base": "Systran/faster-whisper-base",
-    "small": "Systran/faster-whisper-small",
-    "small.en": "Systran/faster-whisper-small.en",
-    "medium": "Systran/faster-whisper-medium",
-    "medium.en": "Systran/faster-whisper-medium.en",
-    "large-v3": "Systran/faster-whisper-large-v3",
-    "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
-    "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
-    "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
-}
+from .. import catalog
 
-# Offered in the tray's Settings tab: (name, what it is good for). Sizes are the CTranslate2 downloads.
-CHOICES = ["large-v3-turbo", "large-v3", "medium", "small", "base"]
+REPOS = catalog.whisper_repos()   # config/installer.yaml whisper.models and whisper.other_repos
+
+# Offered in the tray's Settings tab and the installer, in the catalog's order.
+CHOICES = list(catalog.whisper_models())
 
 # Whisper's language codes with English names. Whisper's own codes are kept as they are ("jw" for Javanese, "yue" for
 # Cantonese), because they are what the model accepts.

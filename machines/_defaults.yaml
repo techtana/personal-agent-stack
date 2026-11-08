@@ -1,20 +1,10 @@
-# Hardware classes and the model lineup each one gets.
+# Hardware classes and the model lineup each one gets, and the default of every setting.
 # `uv run scripts/stack.py doctor --write-profile` detects RAM/VRAM and picks a class;
 # the per-machine file (machines/<HOSTNAME>.yaml, local to each computer and ignored by git) can override any value here.
-# Verify tags with `ollama pull` before adding new models: sizes below were read from
-# ollama.com on 2026-10-24.
+# The models a class may name, their download sizes, and every version and URL the installer uses are in
+# config/installer.yaml (the installer's catalog).
 
 schema_version: 1
-
-model_catalog:
-  # id -> ollama tag, approx download size, role notes
-  qwen2.5-coder:1.5b-base: {size_gb: 1.0,  role: fim,       notes: "Apache-2.0 FIM/autocomplete; always resident (~1.3 GB VRAM)"}
-  nomic-embed-text:        {size_gb: 0.3,  role: embed,     notes: "local embeddings for RAG/eval similarity"}
-  qwen3.5:9b:              {size_gb: 6.6,  role: small,     notes: "dense 9B, fits 12 GB fully at 16k ctx with q8_0 KV; tools+thinking"}
-  qwen3.6:35b-a3b-coding:  {size_gb: 23,   role: primary,   notes: "MoE 35B/3B-active coding tune; experts offloaded to RAM by llama.cpp fit; needs >=28 GB RAM"}
-  qwen3.6:35b-a3b:         {size_gb: 23,   role: primary,   notes: "general MoE sibling of the coding tune"}
-  flint:40b-a2b:           {size_gb: 23,   role: reviewer,  notes: "Apache-2.0 MoE 40B/2.5B-active (Recursive); vendor SWE-bench Verified 74.2; second-opinion reviewer"}
-  gpt-oss:20b:             {size_gb: 13,   role: reviewer,  notes: "different-family reviewer; spills ~1-2 GB to CPU on 12 GB"}
 
 hardware_classes:
   # evaluated top-down; first match wins

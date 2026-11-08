@@ -748,7 +748,7 @@ class Wiring(unittest.TestCase):
     def test_the_tray_hides_the_speaker_controls_while_read_aloud_is_off(self):
         src = (REPO / "scripts" / "tray.py").read_text(encoding="utf-8")
         self.assertIn('read.get("enabled", True)', src)
-        self.assertIn('("Read aloud", "read_aloud")', src)
+        self.assertIn('("Read aloud", "read_aloud",', src)   # its Settings group
 
 
 class Feature(unittest.TestCase):
@@ -864,7 +864,7 @@ class KokoroRow(unittest.TestCase):
 
     def test_the_speaker_button_sits_on_the_kokoro_row(self):
         tree = ast.parse((REPO / "scripts" / "tray.py").read_text(encoding="utf-8"))
-        build = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_build_overview")
+        build = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_build_services")
         branches = [n for n in ast.walk(build) if isinstance(n, ast.If) and isinstance(n.test, ast.Compare)
                     and any(isinstance(c, ast.Constant) and c.value == "kokoro" for c in n.test.comparators)]
         self.assertTrue(any("read_btn" in ast.unparse(b) for b in branches))

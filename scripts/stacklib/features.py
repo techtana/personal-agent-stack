@@ -12,7 +12,8 @@ something is installed or removed by hand.
 Estimates. Figures marked "measured" come from the reference PC (an RTX 3060 12 GB, a Ryzen 5 5500 with 6 cores and 12
 threads, 32 GB of DDR4-2133): benchmarks recorded in memory/state.md between 2026-10-25 and 2026-11-07, and the size
 of each install on disk on 2026-11-07. The rest are estimates and say so. Memory is in GB of 2**30 bytes, as Windows
-and nvidia-smi count it; disk sizes are in GB of 10**9 bytes, as the installer's free-space checks count them.
+and nvidia-smi count it; disk sizes are in GB of 10**9 bytes, as the installer's free-space checks count them. The
+numbers themselves (model sizes, each program's footprint, the choices offered) live in config/installer.yaml.
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import IS_WINDOWS, which
+from . import IS_WINDOWS, catalog, which
 
 GIB = 2 ** 30
 REFERENCE = "an RTX 3060 12 GB"
@@ -38,6 +39,7 @@ class Feature:
     services: tuple[str, ...] = ()   # the tray's service rows that belong to it
     needs_media: bool = False        # installs under the media folder (agent_access.allowed_roots)
     requires: tuple[str, ...] = ()   # features it runs inside; choosing it chooses them too
+    offered: bool = True             # False: no longer installed; listed only while on this PC, to remove it
 
 
 FEATURES: tuple[Feature, ...] = (
@@ -66,9 +68,12 @@ FEATURES: tuple[Feature, ...] = (
             "A hotkey and a speaker button read selected text aloud in any app, with natural Kokoro voices on this "
             "PC's CPU, or Windows' own voices. It runs in the voice typing app, so it comes with voice typing.",
             requires=("voice_typing",)),
+    # Served only Claude Desktop, which is closed source: the stack keeps no ties to such apps, so it is no longer
+    # installed, and the tray and the installer list it only while it is on this PC, to remove it.
     Feature("recordings", "Recordings in Claude Desktop (Whisper)", "recordings",
-            "Claude Desktop transcribes audio files through a local Whisper server. The audio stays here; Claude gets "
-            "only the text.", needs_media=True),
+            "A local Whisper server for Claude Desktop, which is closed source. No longer offered: the stack keeps no "
+            "ties to closed-source apps. Remove takes the server, its models and Claude Desktop's entry off this PC.",
+            needs_media=True, offered=False),
     Feature("openclaw", "OpenClaw", "OpenClaw",
             "An agent app (Node.js), set up to use only this stack's gateway, so its prompts stay on this PC."),
 )
@@ -197,15 +202,12 @@ class Estimate:
 
 
 # (model, context): (GPU GB, system-RAM GB, tokens/s while generating), measured on the reference PC with
-# `stack.py bench` and Ollama's /api/ps (memory/state.md, 2026-10-25). Ollama reports bytes: 6,166,413,310 bytes for the
-# 9B at 32k is 5.7 GB here. The 35B MoE keeps the experts of 28 layers in memory-mapped system RAM.
-MEASURED_MODELS = {
-    ("qwen3.5:9b", 32768): (5.7, 0.0, 51),
-    ("qwen3.5:9b", 16384): (5.5, 0.0, 51),
-    ("qwen3.6:35b-a3b-coding", 32768): (8.7, 11.8, 25),
-}
-KV_GB_PER_32K = {"f16": 4.0, "q8_0": 2.0, "q4_0": 1.0}   # KV cache of a 7-9B model with grouped-query attention
-OLLAMA_RAM_GB = 0.5       # estimate: the Ollama server and the runner's host buffers with every layer on the GPU
+# `stack.py bench` and Ollama's /api/ps (memory/state.md, 2026-10-25; config/installer.yaml models.*.measured). Ollama
+# reports bytes: 6,166,413,310 bytes for the 9B at 32k is 5.7 GB here.
+MEASURED_MODELS = catalog.measured_models()
+# KV cache of a 7-9B model with grouped-query attention, per 32k tokens of context
+KV_GB_PER_32K = {str(k): float(v) for k, v in (catalog.ollama().get("kv_gb_per_32k") or {"f16": 4.0}).items()}
+OLLAMA_RAM_GB = float(catalog.ollama().get("server_ram_gb") or 0.5)   # estimate: the server and a runner's host buffers
 
 
 def chat_model_memory(profile: dict, hw: Hardware, loaded: list[dict] | None = None) -> tuple[float, float, str, int]:
@@ -381,26 +383,27 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
             held=(f"loaded when the tray starts, kept "
                   f"{_keep_text((profile.get('ollama_env') or {}).get('OLLAMA_KEEP_ALIVE') or '5m')}"),
             basis=basis + " Ollama's own memory is an estimate.", note=note)
+    fp = catalog.feature_footprint(fid)
     if fid == "gateway":
         return Estimate(
-            disk_gb=0.6, ram_gb=0.5, cpu_threads=0.2, gpu="none: it passes requests on to the models",
+            disk_gb=fp["disk_gb"], ram_gb=fp["ram_gb"], cpu_threads=0.2, gpu="none: it passes requests on to the models",
             cpu=f"{_cpu(0.2, hw)} logical processors; close to none while idle", held="always, while the tray runs",
             basis="Measured: LiteLLM takes 0.57 GB on disk and 0.3 GB of memory. The orchestrator and the tray "
                   "(about 0.2 GB together) are estimates.")
     if fid == "chat":
         return Estimate(
-            disk_gb=1.9, ram_gb=0.7, cpu_threads=0.2,
+            disk_gb=fp["disk_gb"], ram_gb=fp["ram_gb"], cpu_threads=0.2,
             gpu="none of its own: each reply also asks the chat model for a title and tags",
             cpu=(f"{_cpu(0.2, hw)} logical processors; the chat box's microphone runs Open WebUI's own small "
                  "Whisper on the CPU, several processors for a few seconds"),
-            held="always, while the tray runs it", basis="Measured: 1.9 GB on disk. Memory is an estimate.")
+            held="always, while the tray runs it", basis=f"Measured: {fp['disk_gb']:.1f} GB on disk. Memory is an estimate.")
     if fid == "tracing":
         note = ("Smart App Control is on here; it blocked Phoenix on the reference PC, so it may not start."
                 if hw.smart_app_control else "")
-        return Estimate(disk_gb=0.5, ram_gb=0.4, cpu_threads=0.1, gpu="none",
+        return Estimate(disk_gb=fp["disk_gb"], ram_gb=fp["ram_gb"], cpu_threads=0.1, gpu="none",
                         cpu=f"{_cpu(0.1, hw)} logical processors: it stores each request's steps",
-                        held="always, while the tray runs it", basis="Measured: 0.54 GB on disk. Memory is an estimate.",
-                        note=note)
+                        held="always, while the tray runs it",
+                        basis=f"Measured: {fp['disk_gb']:.1f} GB on disk. Memory is an estimate.", note=note)
     if fid == "images":
         m = profile.get("media") or {}
         size, steps = str(m.get("image_size") or "1024x1024"), int(m.get("image_steps") or 8)
@@ -408,34 +411,35 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
             w, h = (int(x) for x in size.lower().split("x"))
         except ValueError:
             w = h = 1024
-        secs = 11.0 * (w * h / 1024 ** 2) * (steps / 8)   # measured: 11 s at 1024 x 1024, 8 steps; scales with both
+        per_image = float(catalog.images().get("seconds_per_image") or 11.0)   # measured at 1024 x 1024, 8 steps
+        secs = per_image * (w * h / 1024 ** 2) * (steps / 8)   # scales with both
         exact = (w, h, steps) == (1024, 1024, 8)
         return Estimate(
-            disk_gb=16.8, todo_gb=_images_todo_gb(profile), ram_gb=1.5, ram_busy_gb=8.0, vram_gb=0.4,
-            vram_busy_gb=10.5, cpu_threads=1.0,
+            disk_gb=fp["disk_gb"], todo_gb=_images_todo_gb(profile), ram_gb=fp["ram_gb"], ram_busy_gb=fp["ram_busy_gb"],
+            vram_gb=fp["vram_gb"], vram_busy_gb=fp["vram_busy_gb"], cpu_threads=1.0,
             gpu_short=f"~{secs:.0f} s per image" if gpu else "not practical",
             gpu=(f"the whole card for about {secs:.0f} s per {w} x {h} image at {steps} steps, about 20 s more for "
                  "the first while the model loads" if gpu else "none: without an NVIDIA GPU an image takes many minutes"),
             cpu=f"{_cpu(1.0, hw)} logical processors while it makes an image",
             held=("ComfyUI runs all the time; the image model stays in memory after a job until Chat on the tray's "
                   "GPU card frees it"),
-            basis=f"Measured on {REFERENCE}: 16.8 GB on disk, 11.6 GB of GPU memory on the card at the peak, 11 s "
-                  "per 1024 x 1024 image at 8 steps" + ("" if exact else " (other sizes and steps scaled from that)")
-                  + ". System memory is an estimate.")
+            basis=f"Measured on {REFERENCE}: {fp['disk_gb']:.1f} GB on disk, 11.6 GB of GPU memory on the card at the "
+                  f"peak, {per_image:.0f} s per 1024 x 1024 image at 8 steps"
+                  + ("" if exact else " (other sizes and steps scaled from that)") + ". System memory is an estimate.")
     if fid in ("voice_typing", "recordings"):
         typing = fid == "voice_typing"
         d = profile.get("dictation") or {}
         model = str((d.get("model") if typing else (profile.get("media") or {}).get("whisper_model")) or "large-v3-turbo")
         size, vram, per15 = WHISPER.get(model, WHISPER["large-v3-turbo"])
         measured = model == "large-v3-turbo"
-        if measured and not typing:
-            vram = 1.1   # the recordings server measured 1.1 GB, voice typing 1.2 GB
+        if measured and not typing and fp["vram_gb"]:
+            vram = fp["vram_gb"]   # the recordings server measured 1.1 GB, voice typing 1.2 GB
         shared = ((f"whisper:{model}", size, _whisper_cached(profile, model)),)
         cpu_n = 1.0 if gpu else float(hw.threads)
         if typing:
             idle = float(d.get("unload_after_min") or 0)
             return Estimate(
-                disk_gb=0.3, shared=shared, ram_gb=0.4, vram_gb=vram if gpu else 0.0, cpu_threads=cpu_n,
+                disk_gb=fp["disk_gb"], shared=shared, ram_gb=fp["ram_gb"], vram_gb=vram if gpu else 0.0, cpu_threads=cpu_n,
                 gpu_short=f"~{per15:.1f} s per phrase" if gpu else "none (CPU)",
                 gpu=(f"a moment per phrase: 15 s of speech in about {per15:.1f} s with {model}" if gpu
                      else "none: on the CPU the small model takes about 10 s per 15 s of speech"),
@@ -448,13 +452,14 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
                 note="Polish mode also asks the chat model to tidy the text, about 1 s per recording.")
         two_min = per15 * 8 * 0.75   # a long file runs in larger batches than live phrases
         return Estimate(
-            disk_gb=2.4, shared=shared, ram_gb=0.5, vram_gb=vram if gpu else 0.0, cpu_threads=cpu_n,
+            disk_gb=fp["disk_gb"], shared=shared, ram_gb=fp["ram_gb"], vram_gb=vram if gpu else 0.0, cpu_threads=cpu_n,
             gpu_short=f"~{two_min:.0f} s per 2 min of audio" if gpu else "none (CPU)",
             gpu=f"a 2-minute recording in about {two_min:.0f} s" if gpu else "none: on the CPU it runs the small model, slowly",
             cpu=f"{_cpu(cpu_n, hw)} logical processors while it transcribes",
             held=("runs while Claude Desktop is open; the model loads for a transcription and is freed after "
                   "10 idle minutes"),
-            basis=(f"Measured on {REFERENCE}: 2.4 GB on disk, 1.1 GB of GPU memory, 125 s of audio in 3.5 s."
+            basis=(f"Measured on {REFERENCE}: {fp['disk_gb']:.1f} GB on disk, {vram:.1f} GB of GPU memory, 125 s of "
+                   "audio in 3.5 s."
                    if measured else f"Estimate for {model}, scaled from large-v3-turbo measured on {REFERENCE}.")
                   + " Memory is an estimate.")
     if fid == "read_aloud":
@@ -494,7 +499,7 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
 
         per_search = webfilter.max_sites(profile) / 10000 * 0.2
         return Estimate(
-            disk_gb=0.01, ram_gb=0.01,
+            disk_gb=fp["disk_gb"], ram_gb=fp["ram_gb"],
             gpu="none",
             cpu=f"none of its own; each web search in Open WebUI takes up to about {per_search:.1f} s longer",
             held="nothing runs: Open WebUI checks the lists, and the tray downloads them again once a day",
@@ -504,19 +509,28 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
                  "them, and protective DNS (Quad9, Cloudflare for Families) covers every app.")
     if fid == "openclaw":
         return Estimate(
-            disk_gb=0.5, ram_gb=0.3, cpu_threads=0.3,
+            disk_gb=fp["disk_gb"], ram_gb=fp["ram_gb"], cpu_threads=0.3,
             gpu="none of its own: its prompts run on the chat model through the gateway",
             cpu=f"{_cpu(0.3, hw)} logical processors", held="only while you use it (openclaw chat, or its dashboard)",
-            basis="Measured: 0.5 GB on disk. Memory is an estimate.",
-            note="Needs Node.js 24.22.1+ or 26.12.1+; setup upgrades Node.js with winget if needed (Windows asks "
+            basis=f"Measured: {fp['disk_gb']:.1f} GB on disk. Memory is an estimate.",
+            note=f"Needs Node.js {_node_requirement()}; setup upgrades Node.js with winget if needed (Windows asks "
                  "for admin).")
     raise KeyError(fid)
 
 
+def _node_requirement() -> str:
+    from .install import node_requirement
+
+    return node_requirement()
+
+
 # read_aloud.kokoro: (name, download GB with the voices, RAM GB while loaded and reading), measured on the reference
-# PC (2026-11-08: working set after a sentence, 0.50 GB for fp32 and 0.31 GB for int8). "off" reads with Windows voices.
-KOKORO = {"fp32": ("fp32", 0.35, 0.5), "int8": ("int8", 0.12, 0.3), "off": ("", 0.0, 0.0)}
-KOKORO_GPU_GB = 0.8   # onnxruntime-gpu (0.23 GB) and cuDNN 9 for CUDA 13 (0.58 GB), measured 2026-11-08
+# PC (2026-11-08: working set after a sentence; config/installer.yaml kokoro.variants). "off" reads with Windows voices.
+KOKORO = {**{name: (name, float(v.get("download_gb") or 0), float(v.get("ram_gb") or 0))
+             for name, v in (catalog.kokoro().get("variants") or {}).items()},
+          "off": ("", 0.0, 0.0)}
+# onnxruntime-gpu (0.23 GB) and cuDNN 9 for CUDA 13 (0.58 GB), measured 2026-11-08
+KOKORO_GPU_GB = float(catalog.kokoro().get("gpu_libraries_gb") or 0.8)
 
 
 def _kokoro_cached(profile: dict, variant: str) -> bool:
@@ -530,13 +544,8 @@ def _kokoro_cached(profile: dict, variant: str) -> bool:
 
 # faster-whisper model: (download GB, GPU GB in int8_float16, seconds per 15 s of speech on the reference GPU).
 # large-v3-turbo was measured (memory/state.md, open items 22 and 23); the others are scaled from it by model size.
-WHISPER = {
-    "large-v3-turbo": (1.6, 1.2, 0.6),
-    "large-v3": (3.1, 2.1, 1.4),
-    "medium": (1.5, 1.1, 0.8),
-    "small": (0.5, 0.5, 0.3),
-    "base": (0.15, 0.3, 0.2),
-}
+WHISPER = {name: (float(m.get("download_gb") or 0), float(m.get("vram_gb") or 0), float(m.get("s_per_15s") or 0))
+           for name, m in catalog.whisper_models().items()}
 
 
 # ---------------------------------------------------------------- options chosen with a feature
@@ -570,32 +579,36 @@ def _hotkey_choices(_profile: dict) -> list[tuple[str, str]]:
     return [(h, "+".join(p.capitalize() for p in h.split("+"))) for h in CHOICES]
 
 
+def _kokoro_choices(_profile: dict) -> list[tuple[str, str]]:
+    fp32, int8 = KOKORO.get("fp32", ("", 0.35, 0))[1], KOKORO.get("int8", ("", 0.12, 0))[1]
+    return [("fp32", f"Kokoro ({fp32:.2f} GB)"), ("int8", f"Kokoro, smaller ({int8:.2f} GB)"), ("off", "Windows voices only")]
+
+
+def _device_choices(_profile: dict) -> list[tuple[str, str]]:
+    extra = f"adds {KOKORO_GPU_GB:.1f} GB"
+    return [("auto", f"GPU on an NVIDIA PC ({extra}), else CPU"), ("gpu", f"GPU ({extra})"), ("cpu", "CPU")]
+
+
 OPTIONS: dict[str, list[tuple[Option, object]]] = {
     "models": [
-        (Option("models", "primary", "Chat model", "qwen3.5:9b"), _model_choices),
+        (Option("models", "primary", "Chat model", str(catalog.ollama().get("default_chat_model") or "qwen3.5:9b")),
+         _model_choices),
         (Option("models", "primary_num_ctx", "Context", "32768", number=True),
-         lambda _p: [(str(n), f"{n // 1024}k tokens") for n in (8192, 16384, 32768, 65536)]),
+         lambda _p: [(str(n), f"{n // 1024}k tokens") for n in catalog.context_choices()]),
     ],
     "images": [
         (Option("media", "image_size", "Image size", "1024x1024"),
-         lambda _p: [(s, s.replace("x", " x ")) for s in ("512x512", "768x768", "1024x1024", "1280x1280")]),
+         lambda _p: [(str(s), str(s).replace("x", " x ")) for s in catalog.images().get("sizes") or ("1024x1024",)]),
         (Option("media", "image_steps", "Steps", "8", number=True),
-         lambda _p: [(str(n), f"{n} steps") for n in (4, 6, 8, 12)]),
+         lambda _p: [(str(n), f"{n} steps") for n in catalog.images().get("steps") or (8,)]),
     ],
     "voice_typing": [
         (Option("dictation", "model", "Whisper model", "large-v3-turbo"), _whisper_choices),
         (Option("dictation", "hotkey", "Hotkey", "ctrl+alt+d"), _hotkey_choices),
     ],
     "read_aloud": [
-        (Option("read_aloud", "kokoro", "Voices", "fp32"),
-         lambda _p: [("fp32", "Kokoro (0.35 GB)"), ("int8", "Kokoro, smaller (0.12 GB)"),
-                     ("off", "Windows voices only")]),
-        (Option("read_aloud", "device", "Runs on", "auto"),
-         lambda _p: [("auto", "GPU on an NVIDIA PC (adds 0.8 GB), else CPU"), ("gpu", "GPU (adds 0.8 GB)"),
-                     ("cpu", "CPU")]),
-    ],
-    "recordings": [
-        (Option("media", "whisper_model", "Whisper model", "large-v3-turbo"), _whisper_choices),
+        (Option("read_aloud", "kokoro", "Voices", "fp32"), _kokoro_choices),
+        (Option("read_aloud", "device", "Runs on", "auto"), _device_choices),
     ],
 }
 
@@ -812,7 +825,7 @@ def _switch(installed: bool, on: bool, what: str, where: str, setting: str) -> S
         return Status(True, True, "Installed", where)
     if installed:
         return Status(True, False, "Installed, off", f"Turned off in the tray's Settings ({setting}). Turn it on there, "
-                                                     "or tick it in the installer.", "off")
+                                                     "tick it in the installer, or Remove it.", "off")
     if on:
         return Status(False, True, "Not installed", f"{what} is turned on but not installed: run the installer again.",
                       "warn")
@@ -859,13 +872,13 @@ def _status_gateway(profile: dict, **_) -> Status:
 def _status_chat(profile: dict, **_) -> Status:
     port = (profile.get("ports") or {}).get("open_webui", 3000)
     return _switch(bool(_tool_env("open-webui")), switch_on("chat", profile), "Open WebUI",
-                   f"Open WebUI at http://127.0.0.1:{port}, talking to the gateway.", "Open WebUI (chat)")
+                   f"Open WebUI at http://127.0.0.1:{port}, talking to the gateway.", "Chat in the browser")
 
 
 def _status_tracing(profile: dict, **_) -> Status:
     port = (profile.get("ports") or {}).get("phoenix", 6006)
     return _switch(bool(_tool_env("arize-phoenix")), switch_on("tracing", profile), "Phoenix",
-                   f"Phoenix at http://127.0.0.1:{port}, fed by the gateway.", "Phoenix tracing")
+                   f"Phoenix at http://127.0.0.1:{port}, fed by the gateway.", "Trace viewer")
 
 
 def _status_images(profile: dict, **_) -> Status:
@@ -873,15 +886,15 @@ def _status_images(profile: dict, **_) -> Status:
 
     on = switch_on("images", profile)
     if not (profile.get("media") or {}).get("root"):
-        return _switch(False, on, "ComfyUI", "", "ComfyUI (images)")
+        return _switch(False, on, "ComfyUI", "", "Image generation")
     if media.comfyui_installed(profile):
         missing = media.missing_models(profile, (profile.get("media") or {}).get("image_workflow") or "z_image_turbo")
         if missing:
             return Status(False, on, "Model missing", f"ComfyUI is installed, but {', '.join(x.name for x in missing)} "
                                                       "is not: run the installer again.", "warn")
         return _switch(True, on, "ComfyUI", f"ComfyUI and Z-Image-Turbo in {media.comfyui_dir(profile)}.",
-                       "ComfyUI (images)")
-    return _switch(False, on, "ComfyUI", "", "ComfyUI (images)")
+                       "Image generation")
+    return _switch(False, on, "ComfyUI", "", "Image generation")
 
 
 def _status_read_aloud(profile: dict, **_) -> Status:
@@ -923,16 +936,16 @@ def recordings_installed(profile: dict) -> bool:
 def _status_recordings(profile: dict, **_) -> Status:
     entry, installed = desktop_entry(), recordings_installed(profile)
     if installed and entry:
-        return Status(True, True, "Linked", "Claude Desktop starts the Whisper server when it opens; restart Claude "
-                                            "Desktop after changes.")
+        return Status(True, True, "Linked", "No longer offered: Claude Desktop is closed source. Remove takes the "
+                                            "server, its models and Claude Desktop's entry off this PC.", "warn")
     if installed:
-        return Status(True, False, "Not in Claude Desktop", "Installed, but Claude Desktop does not list the server. "
-                                                            "Tick it in the installer, or run "
-                                                            "`uv run scripts/stack.py whisper register`.", "off")
+        return Status(True, False, "Not in Claude Desktop", "No longer offered, and Claude Desktop no longer lists "
+                                                            "the server: Remove takes its files off this PC.", "off")
     if entry:
-        return Status(False, True, "Files missing", "Claude Desktop lists the Whisper server, but its files are not "
-                                                    "in the media folder: run the installer again.", "warn")
-    return Status(False, False, "Not installed", "Not chosen. Run the installer again to add it.", "off")
+        return Status(False, True, "Files missing", "No longer offered: Claude Desktop still lists the Whisper "
+                                                    "server, whose files are gone. Remove takes the entry out.", "warn")
+    return Status(False, False, "Not installed", "No longer offered: the stack keeps no ties to closed-source apps.",
+                  "off")
 
 
 def _status_openclaw(profile: dict, openclaw=None, **_) -> Status:
@@ -990,9 +1003,16 @@ def statuses(profile: dict, openclaw=None) -> dict[str, Status]:
     return out
 
 
+def present(fid: str, status: dict[str, Status]) -> bool:
+    """Something of the feature is on this PC (or its check failed): a feature no longer offered is listed only then."""
+    s = status.get(fid)
+    return bool(s and (s.installed or s.on or s.unknown or s.state in ("Model missing", "Files missing")))
+
+
 def not_installed(status: dict[str, Status]) -> list[str]:
     """Features that are not (fully) installed, in catalog order; a failed check counts as unknown, not missing."""
-    return [f.id for f in FEATURES if f.id in status and not status[f.id].installed and not status[f.id].unknown]
+    return [f.id for f in FEATURES if f.offered and f.id in status and not status[f.id].installed
+            and not status[f.id].unknown]
 
 
 def service_installed(svc: str, status: dict[str, Status]) -> bool | None:
@@ -1016,7 +1036,6 @@ RECOMMENDED = {
     "images": lambda hw: hw.vram_gb >= 10,            # Z-Image-Turbo int8 peaks at 10.5 GB; smaller cards offload
     "voice_typing": lambda hw: False,                 # holds a hotkey and 1.2 GB of GPU memory: only when asked for
     "read_aloud": lambda hw: False,                   # another hotkey, and Kokoro's 0.35 GB: only when asked for
-    "recordings": lambda hw: False,                   # changes Claude Desktop's config: only when asked for
     "openclaw": lambda hw: True,
 }
 
@@ -1025,6 +1044,8 @@ def locked(fid: str, status: dict[str, Status]) -> bool:
     """Ticked and greyed out in the installer: required, installed and on, or on in the profile while its check
     failed (the installer cannot tell what is there, so it leaves the switch as it is)."""
     s = status.get(fid)
+    if not BY_ID[fid].offered:   # never kept by the installer: it can only be removed
+        return False
     return BY_ID[fid].required or bool(s and (s.locked or (s.unknown and s.on)))
 
 
@@ -1038,7 +1059,9 @@ def initial_choice(status: dict[str, Status], hw: Hardware) -> dict[str, bool]:
     out = {}
     for f in FEATURES:
         s = status.get(f.id)
-        if locked(f.id, status) or (s and s.on and not s.unknown):
+        if not f.offered:
+            out[f.id] = False
+        elif locked(f.id, status) or (s and s.on and not s.unknown):
             out[f.id] = True
         elif s and (s.installed or s.unknown):
             out[f.id] = f.id == "openclaw" and s.installed

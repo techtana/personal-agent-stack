@@ -1,5 +1,5 @@
 """Tests for choosing features in the installer: the profile switches it writes (install.save_features), the plan it
-starts (install.feature_plan), the space each folder needs, the recordings step, opening the window from the tray, and
+starts (install.feature_plan), the space each folder needs, opening the window from the tray, and
 the installer window's two pages (scripts/installer.py) built hidden.
 
 Run with `uv run --with pytest python -m pytest -q tests/test_installer_features.py`.
@@ -18,7 +18,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 sys.path.insert(0, str(REPO / "tests"))
-from stacklib import features, install, whisper  # noqa: E402
+from stacklib import features, install, uninstall  # noqa: E402
 from stacklib import profile as prof  # noqa: E402
 from test_features import hw, make_profile  # noqa: E402
 
@@ -43,8 +43,10 @@ def _refuse(*_a, **_k):
 
 def setUpModule():
     # Nothing here may start setup, write the real machine profile, or change Claude Desktop's config.
+    from stacklib import whisper
+
     for target, name in ((install, "spawn_worker"), (install, "save_paths"), (prof, "write_profile"),
-                         (whisper, "register_desktop"), (whisper, "unregister_desktop"), (whisper, "install")):
+                         (whisper, "unregister_desktop"), (uninstall, "remove"), (uninstall, "remove_model")):
         g = mock.patch.object(target, name, _refuse)
         g.start()
         _guards.append(g)
@@ -156,11 +158,9 @@ class OptionEdits(unittest.TestCase):
 class PlanAndSpace(Temp):
     def test_feature_plan(self):
         plan = install.feature_plan({"images", "openclaw"}, statuses(openclaw=S(True, False, "Not set up", level="warn")))
-        self.assertEqual(plan, {"setup_media": True, "install_openclaw": False, "setup_openclaw": True,
-                                "setup_recordings": False})
-        plan = install.feature_plan({"recordings", "openclaw"}, statuses())
-        self.assertEqual(plan, {"setup_media": False, "install_openclaw": True, "setup_openclaw": True,
-                                "setup_recordings": True})
+        self.assertEqual(plan, {"setup_media": True, "install_openclaw": False, "setup_openclaw": True})
+        plan = install.feature_plan({"recordings", "openclaw"}, statuses())   # recordings: no longer set up
+        self.assertEqual(plan, {"setup_media": False, "install_openclaw": True, "setup_openclaw": True})
         self.assertLessEqual(set(plan), set(vars(install.Plan(model_store="x"))))   # every key is a Plan field
 
     def test_space_each_folder_needs(self):
@@ -171,10 +171,9 @@ class PlanAndSpace(Temp):
         self.assertAlmostEqual(install.tools_need_gb({"chat"}, est, status, moving=True), 0.6 + 1.9)
         self.assertEqual(install.tools_need_gb(set(), est, status), 0.1)
         self.assertAlmostEqual(install.media_need_gb({"images", "recordings", "voice_typing"}, est, status),
-                               16.8 + 2.4 + 0.3 + 1.6)
-        self.assertAlmostEqual(install.media_need_gb({"images", "recordings"}, est,
-                                                     statuses(images=S(True, True, "Installed"))), 2.4 + 1.6)
-        self.assertTrue(install.needs_media({"recordings"}))
+                               16.8 + 0.3 + 1.6)   # recordings is no longer installed, so it needs no room
+        self.assertAlmostEqual(install.media_need_gb({"images"}, est, statuses(images=S(True, True, "Installed"))), 0.1)
+        self.assertTrue(install.needs_media({"images"}))
         self.assertFalse(install.needs_media({"voice_typing", "chat"}))
         # A new media folder gets everything again, installed or not, even what is only partly there in the old one.
         self.assertAlmostEqual(install.media_need_gb({"images"}, est, statuses(images=S(True, True, "Installed")),
@@ -205,73 +204,6 @@ class PlanAndSpace(Temp):
         elsewhere = str(self.tmp / "other")
         self.assertEqual(install.store_need_gb(d, p, elsewhere, pull=True), 7.9)
         self.assertEqual(install.store_need_gb(d, p, "Z:\\models", pull=True, move_from=here), 7.9 + 3.0)
-
-
-class StepRecordings(Temp):
-    def setUp(self):
-        super().setUp()
-        self.media = self.tmp / "media"
-        self.profile = make_profile(self.tmp, media=prof.resolve_media({}, {"root": str(self.media)}),
-                                    agent_access={"allowed_roots": [str(self.media)]})
-        self.repo = self.tmp / "repo"
-        (self.repo / ".git").mkdir(parents=True)   # a main checkout: .git is a folder
-        # desktop_entry stands for this PC's real Claude Desktop config, which must not decide a test.
-        self.entry = mock.Mock(return_value=None)
-        for target, name, value in ((install, "REPO", self.repo), (features, "desktop_entry", self.entry),
-                                    (whisper, "register_desktop", mock.Mock(return_value="registered")),
-                                    (whisper, "install", mock.Mock(return_value="installed faster-whisper"))):
-            patcher = mock.patch.object(target, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-
-    def run_step(self, **plan) -> str:
-        return install.step_recordings(install.Plan(model_store="x", **plan), self.profile, lambda *a: None)
-
-    def install_env(self, server: bytes) -> Path:
-        python = whisper.whisper_python(self.profile)
-        python.parent.mkdir(parents=True)
-        python.write_text("", encoding="utf-8")
-        target = whisper.whisper_dir(self.profile) / "whisper_mcp.py"
-        target.write_bytes(server)
-        return target
-
-    def test_not_chosen_or_no_media_folder(self):
-        with self.assertRaisesRegex(install.Skip, "not chosen"):
-            self.run_step()
-        self.profile["media"] = {}
-        with self.assertRaisesRegex(install.Skip, "media folder"):
-            self.run_step(setup_recordings=True)
-
-    def test_new_install_registers_in_claude_desktop(self):
-        self.assertEqual(self.run_step(setup_recordings=True), "installed faster-whisper; registered")
-        whisper.install.assert_called_once()
-        whisper.register_desktop.assert_called_once_with(self.profile)
-
-    def test_installed_but_not_in_claude_desktop_gets_the_current_server_and_an_entry(self):
-        target = self.install_env(b"old server")
-        self.assertEqual(self.run_step(setup_recordings=True), "updated the server; registered")
-        self.assertEqual(target.read_bytes(), whisper.SERVER_SRC.read_bytes())
-        self.assertEqual(self.run_step(setup_recordings=True), "already installed; registered")
-        whisper.install.assert_not_called()
-
-    def test_an_entry_already_in_claude_desktop_is_never_rewritten(self):
-        self.entry.return_value = {"command": "python", "env": {"MY_OWN": "1"}}
-        target = self.install_env(b"old server")
-        with self.assertRaisesRegex(install.Skip, "already installed and in Claude Desktop"):
-            self.run_step(setup_recordings=True)
-        self.assertEqual(target.read_bytes(), b"old server")   # linked: not even the server file changes
-        target.unlink()   # the entry is there, the files are not: install them, leave the entry
-        self.assertIn("entry was left as it is", self.run_step(setup_recordings=True))
-        whisper.install.assert_called_once()
-        whisper.register_desktop.assert_not_called()
-
-    def test_a_worktree_never_writes_claude_desktops_config(self):
-        (self.repo / ".git").rmdir()
-        (self.repo / ".git").write_text("gitdir: elsewhere", encoding="utf-8")
-        with self.assertRaisesRegex(install.Warn, "Not added to Claude Desktop: this folder is a git worktree"):
-            self.run_step(setup_recordings=True)
-        whisper.install.assert_called_once()   # the environment is shared, so it is installed all the same
-        whisper.register_desktop.assert_not_called()
 
 
 class LaunchWindow(unittest.TestCase):
@@ -349,6 +281,7 @@ class InstallerWindow(Temp):
             mock.patch.object(install, "read_state", return_value={"status": "running", "steps": []}),
             mock.patch.object(prof, "write_profile", return_value=None),
             mock.patch.object(prof, "resolve_profile", return_value=self.profile),
+            mock.patch.object(uninstall, "model_rows", return_value=[]),   # not this PC's Ollama
             *[mock.patch.object(install, name, m) for name, m in self.calls.items()],
         ]
         for p in patches:
@@ -364,8 +297,9 @@ class InstallerWindow(Temp):
         for fid in ("models", "gateway", "chat"):
             self.assertTrue(boxes[fid].instate(["disabled"]), fid)
             self.assertTrue(self.app.feature_vars[fid].get(), fid)
-        for fid in ("tracing", "web_filter", "images", "voice_typing", "recordings", "openclaw"):
+        for fid in ("tracing", "web_filter", "images", "voice_typing", "openclaw"):
             self.assertFalse(boxes[fid].instate(["disabled"]), fid)
+        self.assertNotIn("recordings", boxes)   # no longer offered, and nothing of it here: not listed
         ticked = {fid for fid, v in self.app.feature_vars.items() if v.get()}
         self.assertEqual(ticked, {"models", "gateway", "chat", "web_filter", "images", "openclaw"})
 
@@ -431,18 +365,42 @@ class InstallerWindow(Temp):
         options = self.calls["save_features"].call_args.args[4]
         self.assertEqual(options[("models", "primary")], "qwen3.6:35b-a3b-coding")
 
+    def test_the_folders_page_says_what_install_will_do(self):
+        self.app.show_folders()
+        text = self.app.plan_label.cget("text")
+        self.assertIn(f"Installs {features.BY_ID['web_filter'].short}, {features.BY_ID['images'].short}.", text)
+        self.assertIn("Starts the stack", text)
+        self.app.start.set(False)
+        self.app.validate()
+        self.assertIn("Leaves the stack stopped", self.app.plan_label.cget("text"))
+        self.assertEqual(str(self.app.install_btn.cget("style")), "Accent.TButton")   # the page's one primary action
+
+    def test_progress_bar_covers_the_whole_run(self):
+        steps = [{"id": f"s{i}", "title": f"Step {i}", "status": st, "detail": "", "fraction": fr}
+                 for i, (st, fr) in enumerate((("done", None), ("running", 0.5), ("pending", None), ("pending", None)))]
+        install.read_state.return_value = {"status": "running", "steps": steps}
+        self.app.show_progress()
+        self.assertAlmostEqual(float(self.app.bar["value"]), 1.5 / 4)
+        self.assertIn("Step 2 of 4: Step 1", self.app.bar_text.cget("text"))
+        self.assertIn("50%", self.app.bar_text.cget("text"))
+        steps[1].update(status="failed", fraction=None)
+        install.read_state.return_value = {"status": "failed", "steps": steps}
+        self.app.poll()
+        self.assertTrue(self.app.retry_btn.winfo_manager())
+        self.assertEqual(str(self.app.retry_btn.cget("style")), "Accent.TButton")   # run again is the next step
+
     def test_install_writes_the_choice_and_starts_the_plan(self):
-        self.app.feature_vars["recordings"].set(True)
         self.app.show_folders()
         self.assertTrue(self.app.validate())
         self.app.on_install()
         _profile, chosen, media_root, status, options = self.calls["save_features"].call_args.args
-        self.assertEqual(chosen, {"models", "gateway", "chat", "web_filter", "images", "recordings", "openclaw"})
+        self.assertEqual(chosen, {"models", "gateway", "chat", "web_filter", "images", "openclaw"})
         self.assertEqual(media_root, str(self.tmp / "media"))
         self.assertIs(status, self.status)
         plan = self.calls["spawn_worker"].call_args.args[0]
-        self.assertEqual((plan.setup_media, plan.setup_recordings, plan.install_openclaw, plan.setup_openclaw),
-                         (True, True, False, True))
+        self.assertEqual((plan.setup_media, plan.install_openclaw, plan.setup_openclaw, plan.remove),
+                         (True, False, True, []))
+        self.assertFalse(hasattr(plan, "setup_recordings"))
         self.assertEqual(plan.media_root, str(self.tmp / "media"))
         self.assertEqual(self.app.heading.cget("text"), install.summary({"status": "running"}))
 

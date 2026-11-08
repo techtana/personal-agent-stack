@@ -1,11 +1,13 @@
 """Installer back end: which features, where the models and tools go, then the setup steps in a background worker.
 
 The installer window (scripts/installer.py) or `stack.py install --no-gui` asks which optional features to install
-(stacklib/features.py: what each costs on this PC, and what is installed already) and for the folders, checks them,
-writes the choice into machines/<HOST>.yaml (save_paths, save_features) and starts `stack.py install --worker` as a
-detached process. The worker runs STEPS and records its progress in .run/install/state.json, so the window can be
-closed and opened again while it works. `stack.py setup` runs the same steps in the foreground with the folders and
-features already in the profile.
+or remove (stacklib/features.py: what each costs on this PC, and what is installed already) and for the folders, checks
+them, writes the choice into machines/<HOST>.yaml (save_paths, save_features) and starts `stack.py install --worker` as
+a detached process. The worker runs plan_steps(plan): one removal step per feature or model to remove
+(stacklib/uninstall.py), then STEPS (or the few of them plan.only names), and records its progress in
+.run/install/state.json, so the window can be closed and opened again while it works. The tray's Features card starts
+the same worker for one feature (start_feature) or a removal (start_removal) and reads the same state.
+`stack.py setup` runs STEPS in the foreground with the folders and features already in the profile.
 """
 from __future__ import annotations
 
@@ -18,13 +20,13 @@ import subprocess
 import sys
 import time
 import traceback
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 import yaml
 
 from . import ENV_FILE, IS_WINDOWS, REPO, info, load_dotenv, warn, which
-from . import agents_build, claude_env, clients, disks, features, litellm_build, media, ollama, procname, services, winget_build
+from . import agents_build, catalog, claude_env, clients, disks, features, litellm_build, media, ollama, procname, services, winget_build
 from . import profile as prof
 
 INSTALL_DIR = REPO / ".run" / "install"   # under the repository, not data_dir: it must not move while setup runs
@@ -32,19 +34,14 @@ STATE_FILE = INSTALL_DIR / "state.json"
 PLAN_FILE = INSTALL_DIR / "plan.json"
 LOG_FILE = INSTALL_DIR / "install.log"
 
-# uv tool environments: (tool, environment name, install spec, python, profile switch that enables it).
-# LiteLLM's otel callback imports opentelemetry.sdk, which litellm[proxy] does not pull in; add it via --with.
-TOOLS = (
-    ("litellm", "litellm", ["litellm[proxy]==1.106.3", "--with", "opentelemetry-sdk", "--with", "opentelemetry-exporter-otlp"], "3.12"),
-    ("phoenix", "arize-phoenix", ["arize-phoenix"], "3.12"),
-    ("open-webui", "open-webui", ["open-webui"], "3.11"),
-)
+# uv tool environments: (tool, environment name, install spec, python), from config/installer.yaml python_tools.
+TOOLS = tuple((tid, t["env"], [str(a) for a in t["install"]], str(t["python"]))
+              for tid, t in catalog.python_tools().items() if tid in ("litellm", "phoenix", "open-webui"))
 TOOL_FEATURES = ("gateway", "chat", "tracing")   # the features whose programs are uv tools (LiteLLM, Open WebUI, Phoenix)
 LONG_PATH = 60      # Python packages with deep trees (spaCy, HF cache) break past 260 characters on Windows
-HF_TOOL = ("huggingface-hub", ["huggingface_hub"], "3.12")   # environment name, install spec, python: the `hf` command
+HF_TOOL = (catalog.tool("hf")["env"], [str(a) for a in catalog.tool("hf")["install"]],
+           str(catalog.tool("hf")["python"]))   # environment name, install spec, python: the `hf` command
 HF_CACHE_DIRS = ("hub", "xet", "datasets", "assets")       # what moves from an earlier HF_HOME; the token stays put
-# openclaw 2026.10.9 declares engines.node ">=24.22.1 <25 || >=26.12.1"; winget's OpenJS.NodeJS.LTS was 26.13.0 then.
-OPENCLAW_NODE = ((24, 22, 1), (25, 0, 0), (26, 12, 1))
 
 
 @dataclass
@@ -63,7 +60,11 @@ class Plan:
     setup_openclaw: bool = False    # onboard OpenClaw if needed and make the gateway its only model endpoint
     setup_media: bool = True        # ComfyUI and the image model under media.root, when the profile has one
     media_root: str = ""            # chosen in the installer: written to media.root and agent_access.allowed_roots
-    setup_recordings: bool = False  # Whisper for recordings, registered in Claude Desktop's config: only when chosen
+    remove: list[str] = field(default_factory=list)          # features to remove first (stacklib/uninstall.py)
+    remove_models: list[str] = field(default_factory=list)   # downloaded Ollama models to delete
+    pull_models: list[str] = field(default_factory=list)     # more Ollama models to download (the tray's Download)
+    only: list[str] | None = None   # the STEPS ids to run after the removals; None runs them all, [] none
+    targets: list[str] = field(default_factory=list)   # the features this run is for, so the tray can mark their rows
 
 
 @dataclass
@@ -244,7 +245,7 @@ def media_need_gb(chosen, est: dict, status: dict, moved: bool = False) -> float
     """Space the media folder needs: ComfyUI and Whisper for recordings, plus voice typing's environment, which goes
     there when the profile has a media folder. Shared downloads (the Whisper model) count once. `moved`: the folder
     differs from the profile's media.root, so what is installed in the old one is installed again."""
-    ids = [f for f in ("images", "recordings", "voice_typing", "read_aloud") if f in set(chosen)]
+    ids = [f for f in ("images", "voice_typing", "read_aloud") if f in set(chosen)]
     installed = set() if moved else {f for f in ids if status[f].installed}
     return features.download_gb(ids, est, installed, full=moved) or 0.1
 
@@ -274,6 +275,19 @@ def needs_media(chosen) -> bool:
     return any(features.BY_ID[f].needs_media for f in chosen if f in features.BY_ID)
 
 
+# The setup steps that install (or repair) one feature, for the tray's Install button: the rest of STEPS do not touch it.
+FEATURE_STEPS = {
+    "models": ["pull"],
+    "gateway": ["secrets", "tools", "build"],
+    "chat": ["secrets", "tools", "build"],
+    "tracing": ["tools", "build"],
+    "images": ["media"],
+    "voice_typing": ["secrets", "dictation"],
+    "read_aloud": ["dictation", "read_aloud"],
+    "openclaw": ["openclaw"],
+}
+
+
 def feature_plan(chosen, status: dict) -> dict:
     """Plan fields for the features chosen on the installer's first page. The switches that the machine profile holds
     (Open WebUI, Phoenix, ComfyUI, voice typing) are written by save_features before the worker starts."""
@@ -283,7 +297,6 @@ def feature_plan(chosen, status: dict) -> dict:
         "setup_media": "images" in chosen,
         "install_openclaw": "openclaw" in chosen and not (openclaw and openclaw.installed),
         "setup_openclaw": "openclaw" in chosen,
-        "setup_recordings": "recordings" in chosen,
     }
 
 
@@ -397,23 +410,25 @@ def option_edits(profile: dict, chosen, options: dict[tuple[str, str], str]) -> 
 
 
 def save_features(profile: dict, chosen, media_root: str = "", status: dict | None = None,
-                  options: dict[tuple[str, str], str] | None = None) -> Path | None:
+                  options: dict[tuple[str, str], str] | None = None, remove=()) -> Path | None:
     """Write what the installer's features page chose into machines/<HOST>.yaml, keeping comments: the switches in
     FEATURE_SWITCHES, the options chosen next to the features (option_edits), and the media folder when a chosen
     feature installs there. Only values that change are written.
 
-    A feature that is installed and on stays on, whatever `chosen` says: the installer adds features and never turns
-    one off (the tray's Settings does). A feature whose check failed keeps its switch as it is. Returns the file, or
-    None when nothing changed."""
+    A feature that is installed and on stays on, whatever `chosen` says: the installer adds features and turns one off
+    only to remove it, and that switch is left to the removal step (`remove`), which turns it off the way Settings does
+    and stops what runs. A feature whose check failed keeps its switch as it is. Returns the file, or None when nothing
+    changed."""
     from .yamledit import set_key
 
     status = features.statuses(profile) if status is None else status
-    chosen = chosen_with_required(chosen) | {fid for fid in status if features.locked(fid, status)}
+    remove = set(remove)
+    chosen = (chosen_with_required(chosen) | {fid for fid in status if features.locked(fid, status)}) - remove
     path = prof.machine_file(profile["name"])
     text = original = path.read_text(encoding="utf-8")
     want: dict[tuple[str, str], object] = {}
     for fid, (section, key, on, off) in FEATURE_SWITCHES.items():
-        if fid in status and status[fid].unknown:
+        if (fid in status and status[fid].unknown) or fid in remove:
             continue
         value = on if fid in chosen else off
         have = profile.get(section)   # a profile without the section at all (read_aloud before it existed): off
@@ -533,12 +548,13 @@ def step_secrets(plan: Plan, profile: dict, report) -> str:
 def step_ollama_install(plan: Plan, profile: dict, report) -> str:
     if which("ollama"):
         raise Skip("already installed")
+    o = catalog.ollama()
     if not plan.install_ollama:
-        raise Skip("not installed; install it later from https://ollama.com/download, then run setup again")
+        raise Skip(f"not installed; install it later from {o['download_page']}, then run setup again")
     if not IS_WINDOWS:
-        raise RuntimeError("install Ollama with: curl -fsSL https://ollama.com/install.sh | sh (needs sudo), then run setup again")
-    report("winget install Ollama.Ollama (a few minutes)")
-    r = subprocess.run(["winget", "install", "--id", "Ollama.Ollama", "--exact", "--silent",
+        raise RuntimeError(f"install Ollama with: {o['linux_install']} (needs sudo), then run setup again")
+    report(f"winget install {o['winget_id']} (a few minutes)")
+    r = subprocess.run(["winget", "install", "--id", o["winget_id"], "--exact", "--silent",
                         "--accept-package-agreements", "--accept-source-agreements"], check=False)
     if not which("ollama"):
         raise RuntimeError(f"winget exited with code {r.returncode} and ollama.exe is still missing")
@@ -699,7 +715,8 @@ def step_media(plan: Plan, profile: dict, report) -> str:
     if profile["services"].get("comfyui") != "native" or not (profile.get("media") or {}).get("root"):
         raise Skip("no media folder in the machine profile (media.root); choose one in the installer to add images")
     if not which("git"):
-        raise RuntimeError("git is not installed; install it (winget install Git.Git) and run setup again")
+        raise RuntimeError(f"git is not installed; install it (winget install {winget_build.package_id('git')}) and run "
+                           "setup again")
     notes = [media.install_comfyui(profile, report)]
     notes.append(media.install_models(profile, profile["media"].get("image_workflow") or "z_image_turbo", report))
     changed = media.provision_openwebui(media.openwebui_db(profile), media.image_settings(profile))
@@ -730,49 +747,20 @@ def step_read_aloud(plan: Plan, profile: dict, report) -> str:
     return dictation.install_read_aloud(profile, report)
 
 
-def step_recordings(plan: Plan, profile: dict, report) -> str:
-    """Whisper for recordings, registered as an MCP server in Claude Desktop (as `stack.py whisper install` does).
-
-    Claude Desktop's config is the owner's: an entry that is already there is left alone (`stack.py whisper install`
-    updates it on purpose), and a git worktree never writes one, since the entry would send the server's usage
-    records to the worktree's traces/usage, which the main checkout's tray does not read."""
-    if not plan.setup_recordings:
-        raise Skip("not chosen")
-    if not (profile.get("media") or {}).get("root"):
-        raise Skip("needs the media folder; choose one in the installer")
-    from . import whisper
-
-    installed, linked = features.recordings_installed(profile), features.desktop_entry() is not None
-    if installed and linked:
-        raise Skip("already installed and in Claude Desktop; `uv run scripts/stack.py whisper install` updates it")
-    if installed:
-        whisper.guarded(profile)
-        server = whisper.whisper_dir(profile) / "whisper_mcp.py"
-        notes = ["already installed"]
-        if server.read_bytes() != whisper.SERVER_SRC.read_bytes():
-            shutil.copy2(whisper.SERVER_SRC, server)
-            notes = ["updated the server"]
-    else:
-        notes = [whisper.install(profile, report)]
-    if (REPO / ".git").is_file():
-        raise Warn("; ".join(notes) + ". Not added to Claude Desktop: this folder is a git worktree, and the server "
-                   "would record its usage here, where the main checkout's tray does not look. Run "
-                   "`uv run scripts/stack.py whisper register` from the main checkout.")
-    if linked:
-        return "; ".join(notes) + "; Claude Desktop already lists the server, so its entry was left as it is"
-    report("registering the server in Claude Desktop")
-    notes.append(whisper.register_desktop(profile))
-    return "; ".join(notes)
-
-
 def _version(text: str) -> tuple[int, int, int] | None:
     m = re.search(r"(\d+)\.(\d+)\.(\d+)", text or "")
     return tuple(int(x) for x in m.groups()) if m else None
 
 
 def node_ok_for_openclaw(v: tuple[int, int, int] | None) -> bool:
-    lo, hi, new = OPENCLAW_NODE
-    return v is not None and (lo <= v < hi or v >= new)
+    """A Node.js version OpenClaw accepts (config/installer.yaml openclaw.node_versions)."""
+    return v is not None and any(lo <= v and (hi is None or v < hi) for lo, hi in catalog.node_ranges())
+
+
+def node_requirement() -> str:
+    """"24.22.1+ (below 25.0.0) or 26.12.1+", for messages."""
+    return " or ".join(f"{'.'.join(map(str, lo))}+" + (f" (below {'.'.join(map(str, hi))})" if hi else "")
+                       for lo, hi in catalog.node_ranges())
 
 
 def _node_version() -> tuple[int, int, int] | None:
@@ -814,31 +802,90 @@ def step_openclaw(plan: Plan, profile: dict, report) -> str:
         return _point_openclaw_at_gateway(profile, report, "")
     if not plan.install_openclaw:
         raise Skip("not chosen")
+    oc = catalog.openclaw()
     node = _node_version()
     if not node_ok_for_openclaw(node):
         if not IS_WINDOWS:
-            raise RuntimeError(f"OpenClaw needs Node.js 24.22.1+ or 26.12.1+ (found {_dotted(node)}); install it, then run setup again")
+            raise RuntimeError(f"OpenClaw needs Node.js {node_requirement()} (found {_dotted(node)}); install it, then run "
+                               "setup again")
         report(f"Node.js {_dotted(node)} is too old for OpenClaw; installing the current LTS with winget (Windows asks for admin)")
-        # On an existing OpenJS.NodeJS.LTS install, `winget install` upgrades it in place.
-        subprocess.run(["winget", "install", "--id", "OpenJS.NodeJS.LTS", "--exact", "--silent",
+        # On an existing Node.js LTS install, `winget install` upgrades it in place.
+        subprocess.run(["winget", "install", "--id", oc["node_winget_id"], "--exact", "--silent",
                         "--accept-package-agreements", "--accept-source-agreements"], check=False)
         nodejs = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "nodejs"
         if nodejs.is_dir() and str(nodejs).lower() not in os.environ.get("PATH", "").lower():
             os.environ["PATH"] = f"{nodejs}{os.pathsep}{os.environ.get('PATH', '')}"   # a fresh install is not on our PATH yet
         node = _node_version()
         if not node_ok_for_openclaw(node):
-            raise RuntimeError(f"Node.js is {_dotted(node)} after winget; upgrade it from https://nodejs.org, then run setup again")
+            raise RuntimeError(f"Node.js is {_dotted(node)} after winget; upgrade it from {oc['node_download_page']}, then "
+                               "run setup again")
     npm = which("npm")
     if not npm:
         raise RuntimeError("npm was not found next to Node.js")
-    report("npm install -g openclaw (into your user profile on the system drive)")
-    r = subprocess.run([npm, "install", "-g", "openclaw@latest"], check=False)
+    report(f"npm install -g {oc['npm']} (into your user profile on the system drive)")
+    r = subprocess.run([npm, "install", "-g", oc["npm"]], check=False)
     if r.returncode:
         raise RuntimeError(f"npm install -g openclaw exited with code {r.returncode}; the log has npm's message")
     if plan.setup_openclaw:
         return _point_openclaw_at_gateway(profile, report, f"installed (Node.js {_dotted(node)}). ")
     return (f"installed (Node.js {_dotted(node)}). Next: `uv run scripts/stack.py openclaw` makes the gateway its only "
             "model provider, so chats stay on this machine")
+
+
+def step_pull_more(plan: Plan, profile: dict, report) -> str:
+    """Models chosen one by one (the tray's Download), on top of the ones the profile names."""
+    from . import uninstall
+
+    done = []
+    for i, name in enumerate(plan.pull_models):
+        def progress(frac, got, total, i=i, name=name):
+            text = f"{name}: {got / 1e9:.1f} of {total / 1e9:.1f} GB" if total else f"{name}: starting"
+            report(f"{text} (model {i + 1} of {len(plan.pull_models)})", (i + (frac or 0)) / len(plan.pull_models))
+        done.append(uninstall.download_model(profile, name, progress))
+    return "; ".join(done)
+
+
+def step_remove_feature(fid: str):
+    """A worker step that removes one feature (stacklib/uninstall.py)."""
+    def run(plan: Plan, profile: dict, report) -> str:
+        from . import uninstall
+
+        return uninstall.remove(profile, fid, report)
+    return run
+
+
+def step_remove_models(plan: Plan, profile: dict, report) -> str:
+    from . import uninstall
+
+    done = []
+    for i, name in enumerate(plan.remove_models):
+        report(f"deleting {name}", i / len(plan.remove_models))
+        done.append(uninstall.remove_model(profile, name))
+    return "; ".join(done)
+
+
+def removal_order(fids) -> list[str]:
+    """Features in the order they come off: one that runs inside another first (read aloud before voice typing)."""
+    fids = [f.id for f in features.FEATURES if f.id in set(fids)]
+    return sorted(fids, key=lambda fid: 0 if features.BY_ID[fid].requires else 1)
+
+
+def plan_steps(plan: Plan) -> list[tuple]:
+    """(id, title, function) of every step this plan runs, in order: removals, then STEPS (all, or plan.only)."""
+    out: list[tuple] = []
+    for fid in removal_order(plan.remove):
+        if fid == "read_aloud" and "voice_typing" in plan.remove:
+            continue   # it goes with voice typing's environment
+        out.append((f"remove_{fid}", f"Remove {features.BY_ID[fid].short}", step_remove_feature(fid)))
+    if plan.remove_models:
+        names = ", ".join(plan.remove_models)
+        out.append(("remove_models", f"Delete {names}" if len(plan.remove_models) < 3 else "Delete models",
+                    step_remove_models))
+    only = None if plan.only is None else set(plan.only)
+    out += [s for s in STEPS if only is None or s[0] in only]
+    if plan.pull_models:
+        out.append(("pull_more", "Download " + ", ".join(plan.pull_models), step_pull_more))
+    return out
 
 
 def step_build(plan: Plan, profile: dict, report) -> str:
@@ -917,27 +964,12 @@ def step_start(plan: Plan, profile: dict, report) -> str:
 
 
 def step_links(plan: Plan, profile: dict, report) -> str:
-    """Point what lives outside the app folder at this app: Claude Desktop's recordings server (its entry names a
-    Python script and the folder its usage records go to), the start-at-login entry, scheduled tasks.
-
-    The recordings step leaves an existing Claude Desktop entry alone, since the config is the owner's. The one
-    rewrite here is in the installed app, for an entry whose usage records still go to another folder (the checkout
-    it was registered from): that is the entry moving with the app, after a backup of the config."""
-    from . import deploy, startup, tasks, usage_log, whisper
+    """Point what lives outside the app folder at this app: the start-at-login entry and scheduled tasks. Nothing in a
+    closed-source app's config is written: the recordings server Claude Desktop ran is no longer set up, and Remove on
+    the tray's Features card takes an old one off."""
+    from . import deploy, startup, tasks
 
     notes, warns = [], []
-    entry = features.desktop_entry()
-    if entry is not None and deploy.is_app():
-        try:
-            want = whisper.server_entry(profile)
-            usage_key = usage_log.ENV
-            if (entry.get("env") or {}).get(usage_key) == (want.get("env") or {}).get(usage_key):
-                notes.append("Claude Desktop's recordings server already records into this app")
-            else:
-                whisper.register_desktop(profile)
-                notes.append("Claude Desktop's recordings server now records into this app (restart Claude Desktop)")
-        except (OSError, ValueError, KeyError, RuntimeError) as e:
-            warns.append(f"could not update Claude Desktop's recordings server: {e}")
     if not IS_WINDOWS and startup.is_installed():
         startup.install()   # Windows rewrites its .lnk in the Start step
         notes.append("start at login now starts this app")
@@ -974,20 +1006,22 @@ STEPS = (
     ("media", "Install ComfyUI and the image model", step_media),
     ("dictation", "Install voice typing (Whisper)", step_dictation),
     ("read_aloud", "Install read aloud (Kokoro voices)", step_read_aloud),
-    ("recordings", "Install recordings for Claude Desktop (Whisper)", step_recordings),
     ("openclaw", "Install OpenClaw", step_openclaw),
-    ("links", "Point Claude Desktop and start-up entries at this app", step_links),
+    ("links", "Point start-up entries at this app", step_links),
     ("start", "Start the stack", step_start),
 )
 
 
-def run(plan: Plan, state_file: Path | None = None, steps=STEPS) -> bool:
-    """Run every step; a failed step is recorded and the rest still run. True when none failed."""
-    profile = prof.resolve_profile()
+def run(plan: Plan, state_file: Path | None = None, steps=None) -> bool:
+    """Run every step (plan_steps(plan) unless given); a failed step is recorded and the rest still run. True when
+    none failed. The profile is read again before each step, so a step sees what the one before changed (a removal
+    turns a feature off, and the tools step must not install it again)."""
+    steps = plan_steps(plan) if steps is None else steps
     progress = Progress([(sid, title) for sid, title, _ in steps], state_file)
     for sid, _, fn in steps:
         progress.begin(sid)
         try:
+            profile = prof.resolve_profile()
             detail = fn(plan, profile, lambda d=None, f=None, sid=sid: progress.update(sid, d, f))
             progress.end(sid, "done", detail or "")
         except Skip as e:
@@ -1052,9 +1086,54 @@ def spawn_worker(plan: Plan) -> int:
     # Recorded at once, so a worker that dies before its first write reads as interrupted, not as starting forever.
     STATE_FILE.write_text(json.dumps({
         "status": "running", "pid": proc.pid, "started": services._proc_info(proc.pid)[1], "log": str(LOG_FILE),
-        "steps": [{"id": i, "title": t, "status": "pending", "detail": "", "fraction": None} for i, t, _ in STEPS],
+        "steps": [{"id": i, "title": t, "status": "pending", "detail": "", "fraction": None} for i, t, _ in plan_steps(plan)],
+        "remove": list(plan.remove), "targets": list(plan.targets),
     }), encoding="utf-8")
     return proc.pid
+
+
+def tray_plan(profile: dict, **kw) -> Plan:
+    """A plan for the tray: the profile's folders as they are, no drive check, no Hugging Face move, no Ollama
+    restart and no tray start (the tray is running), and only the steps a change needs."""
+    store = features.model_store(profile)
+    base = dict(model_store=store, pull=False, restart_ollama=False, check_disks=False, setup_huggingface=False,
+                setup_media=False, start_stack=False, only=[])
+    base.update(kw)
+    return Plan(**base)
+
+
+def start_feature(profile: dict, fid: str, status: dict | None = None) -> int:
+    """The tray's Install (or Repair) button: switch the feature on in machines/<HOST>.yaml, with what it runs inside,
+    and run the steps that install it in the setup worker. Raises ValueError when it needs a folder the profile does
+    not have yet (the installer asks for it). Returns the worker's pid."""
+    if not features.BY_ID[fid].offered:
+        raise ValueError(f"{features.BY_ID[fid].short} is no longer offered; it can only be removed")
+    if worker_running():   # before the profile changes: a switch turned on with nothing installed reads as broken
+        raise RuntimeError("setup is already running; try again when it has finished")
+    status = features.statuses(profile) if status is None else status
+    want = features.with_requirements({fid})
+    if any(features.BY_ID[f].needs_media for f in want) and not (profile.get("media") or {}).get("root"):
+        raise ValueError(f"{features.BY_ID[fid].short} needs a media folder; the installer asks for one")
+    on = {f for f, s in status.items() if s.on or s.locked}
+    save_features(profile, on | want, status=status)
+    steps = sorted({s for f in want for s in FEATURE_STEPS.get(f, [])}, key=[s[0] for s in STEPS].index)
+    plan = tray_plan(profile, only=steps, pull=fid == "models", targets=sorted(want), **{
+        "setup_media": "images" in want,
+        "install_openclaw": fid == "openclaw" and not (status.get("openclaw") and status["openclaw"].installed),
+        "setup_openclaw": fid == "openclaw",
+    })
+    return spawn_worker(plan)
+
+
+def start_removal(profile: dict, fids=(), models=()) -> int:
+    """The tray's Remove buttons: remove features and delete Ollama models in the setup worker. Returns its pid."""
+    targets = sorted(fids) + (["models"] if models else [])
+    return spawn_worker(tray_plan(profile, remove=list(fids), remove_models=list(models), targets=targets))
+
+
+def start_download(profile: dict, models) -> int:
+    """The tray's Download button for an Ollama model, in the setup worker. Returns its pid."""
+    return spawn_worker(tray_plan(profile, pull_models=list(models), targets=["models"]))
 
 
 def launch_window() -> int:
@@ -1074,7 +1153,8 @@ def launch_window() -> int:
 
 
 def run_worker(plan_file: Path) -> bool:
-    plan = Plan(**json.loads(Path(plan_file).read_text(encoding="utf-8")))
+    known = {f.name for f in fields(Plan)}
+    plan = Plan(**{k: v for k, v in json.loads(Path(plan_file).read_text(encoding="utf-8")).items() if k in known})
     info(f"[install] {time.strftime('%Y-%m-%d %H:%M:%S')} pid {os.getpid()} plan {json.dumps(asdict(plan))}")
     return run(plan, STATE_FILE)
 

@@ -35,7 +35,6 @@ NOT_IN_TRAY = {
     "media": "folders and image defaults, chosen in the installer (media.root must be an allowed folder)",
     "agent_access": "the folders agent sessions may touch; the owner decides them (decision D-M6)",
     "claude_code": "Claude Code profile B, set up by scripts/claude-local.ps1 and .sh",
-    "model_catalog": "descriptions of the models offered in Settings",
 }
 
 # Ways a file runs a model directly: (pattern, what it means).

@@ -1,7 +1,9 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-08 (blocked sites for Open WebUI's web reading, and audit checks for Claude; open item 37). Before
-that, the same day (read aloud of selected text, an optional part of voice typing; open item 36). Before that,
+Updated: 2026-11-08 (blocked sites for Open WebUI's web reading, and audit checks for Claude; open item 38). Before
+that, the same day (the installer's catalog in config/installer.yaml, install and remove from the tray and the
+installer, the tray's Overview and Settings reworked; open item 37). Before that, the same day (read aloud of selected
+text, an optional part of voice typing; open item 36). Before that,
 the same day (voice typing history kept for dictation.keep_minutes; open item 35). Before that, the same day (the installer makes an app apart from the repository; open item 32). Before that, the same day (the installer asks which features to install, with their load on this PC, and the tray's Features card; open item 30). Before that, 2026-11-08 (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
@@ -632,7 +634,75 @@ once across a session restart.
      install` removes the CPU build and reinstalls the GPU one, and the voice typing install restores the GPU build
      after faster-whisper. Not run here: rerun `uv run scripts/stack.py read-aloud install` (it stops and restarts
      voice typing).
-37. Blocked sites (2026-11-08, branch claude/ban-insecure-web-search-a6dc77). Open WebUI is the stack's one web reader
+37. Installer catalog, install and remove, tray rework (2026-11-08, branch claude/installer-config-ui-refactor-c81bdc).
+   - Catalog: `config/installer.yaml` (read by stacklib/catalog.py) holds every version, URL and model list the
+     installer used to hard-code: the uv tool pins, Ollama's and Node.js's winget ids and pages, `openclaw@latest`,
+     the ComfyUI repository and image model files, the Whisper models and repositories, Kokoro's repository, revision,
+     variants and voices, voice typing's, read aloud's and the recordings server's package pins, the winget package
+     lists, the drop-down choices, and each feature's measured footprint. `model_catalog` moved there from
+     machines/_defaults.yaml (profile["catalog"] still has it). The derived constants were compared with the old
+     literals: identical; the regenerated winget files differ only in their header line.
+   - Remove: stacklib/uninstall.py plans (what goes, sizes, what stays) and removes a feature: Settings' switch off
+     through settings.apply (stops it, restarts what depends on it), then `uv tool uninstall` (Open WebUI, Phoenix),
+     the ComfyUI folder, voice typing's .venv, read aloud's packages (the CPU onnxruntime goes back), the recordings
+     folder and Claude Desktop's entry (backed up), `npm uninstall -g openclaw`, and Hugging Face model folders no
+     other installed feature uses. Open WebUI's microphone goes back to its own Whisper when voice typing goes, and its
+     image button off with ComfyUI. Chats, traces, images, transcripts, OpenClaw's settings and the machine profile
+     stay. Deletes are guarded (drive roots, home, the app folder, media outside allowed_roots, HF folders outside
+     hub/models--*). Ollama models: Download and Remove (refused while Settings names the model).
+   - The setup worker runs removals as steps (Plan.remove, remove_models, pull_models, only, targets; plan_steps),
+     and reads the profile again before each step. The tray's Features card has Install / Repair / Remove per feature
+     and Download / Remove per model, starts the worker for that one feature (install.start_feature, start_removal,
+     start_download), shows its step and progress, and when a run ends reads the profile again and starts what was
+     turned on. The installer's page 1 has a Remove column and "Not used by the stack, delete" for models; Apply
+     changes asks first.
+   - Tray: Services rows are named by module (Local models, Gateway, Agent tools, Chat in the browser, Trace viewer,
+     Image generation, Voice typing, Read aloud) with the program on the line below, two action columns (Open / Hide /
+     Show; Start / Stop, blank where not the stack's), one row per Ollama runner process with its pid and Unload, and a
+     Recordings row for Claude Desktop's Whisper server. The Hugging Face card became Storage (stacklib/storage.py):
+     every model, program and data folder, per drive. Settings groups are cards. Buttons have a fill and outline; the
+     destructive ones are outlined in the danger colour; confirmations name what is lost, with the safe button
+     focused (the stock "Restart Ollama?" box is gone too).
+   - Measured on this PC: storage scan 4 s (32 s with os.walk + lstat); 73.8 GB in all (Models 50.2, Programs 15.1,
+     Data 8.4; C: 35.7, D: 38.1). Not used by the stack: qwen3.6:35b-a3b-coding 22.6 GB, google/siglip2 4.6 GB and
+     facebook/dinov2 0.35 GB in D:\huggingface, the media uv cache 8.4 GB. Ollama's runner matched to its model through
+     the manifest (llama-server child of `ollama serve`, `--model <store>\blobs\sha256-...`): 52 ms per poll.
+   - Verified: unit tests (37 new in tests/test_catalog.py and tests/test_uninstall.py); renders of the tray's
+     Overview, Settings and the remove dialog in both themes, and of the installer's pages, from this worktree with
+     real read-only status and every start, stop and setup patched out; a dry run of every removal plan on this PC.
+   - Not verified: a real install, repair or removal through the worker (nothing was installed or deleted here), the
+     live tray (it runs the installed app's code), the installer's new Remove column clicked by hand, pids of the
+     stack's own services in a render (the worktree has no pid files).
+   - A code review (subagent, read-only) found no critical issue, 3 high and 8 medium ones, all fixed: removal now
+     plans and checks every folder before it changes anything (shape: ComfyUI's main.py, a venv's pyvenv.cfg, the
+     server script, hub/models--*; strictly inside an allowed root; no outputs, inputs, transcripts or HF cache
+     inside a folder that goes), waits for programs to let go, deletes the program folder last, resets Open WebUI's
+     microphone first, retries locked files, and reads Claude Desktop's config with a BOM; the tray's Install refuses
+     before writing the profile when a setup runs; an unexpected error no longer leaves every button disabled; Unload
+     acts on the model it showed; Start and Stop wait while setup owns a service; the installer no longer touches Tk
+     from a thread and always measures before it asks. Also found and fixed here: the Unload button called a function
+     that did not exist (media.unload_model).
+   - Recordings for Claude Desktop retired the same day, at the owner's word ("this app should not have any dependency
+     with non-open source software like claude"): no installer step, option, Services row or re-registration; the
+     Features card and the installer list it only while an old install is here, with Remove; `stack.py whisper` keeps
+     only `unregister`. This PC still has it (Linked, 2.4 GB in C:\media\whisper): Remove it from the tray after
+     merging, with Claude Desktop closed. Open question for the owner: the Claude Code tooling around the repository
+     (profile B, .claude/agents, the security audit skill) is not part of the installed app and was left as it is.
+   - After merging: rerun install.cmd from the main checkout (it updates the app), then restart the tray.
+   - Installer window in the tray's look (same day, branch claude/installer-ui-ux-improvements-5bb01f, on top of this
+     work): the palette, system light/dark theme and ttk styles moved from tray.py to stacklib/theme.py, which both
+     windows apply (new there: TEntry, Good/Card.Head labels, greyed disabled checkboxes). The installer names its
+     three steps at the top (Features, Folders, Install), draws cards, has one accent primary button per page and the
+     danger outline on Remove and apply. Page 1: hairlines between features, the status column coloured only for
+     state (green working, amber/red to look at), the detail card held at its tallest height (no jump while the
+     pointer moves) and set beside Your choice, its load one fact per line. Page 2: folder checks marked ✓/✗ as well
+     as coloured, and a **What happens next** card. Progress: one bar for the whole run, a line with the step, its
+     percentage or elapsed time, a themed log card, and after the run **Open chat** (Open WebUI on) or **Change
+     choices and run again** as the primary button. Verified: unit tests (2 new); renders of every page, the remove
+     confirmation, and a running and a failed progress page, in both themes, from the worktree with writes and setup
+     patched out. Not verified: the live installer, a 150% display, keyboard traversal by hand.
+
+38. Blocked sites (2026-11-08, branch claude/ban-insecure-web-search-a6dc77). Open WebUI is the stack's one web reader
    (its web search, pasted links, its fetch tool), and stacklib/webfilter.py fills both of its filters from
    policy/web-filter.yaml and the profile's `web_filter:` section (on by default; installer feature **Blocked sites (web
    filter)**, setup step `web_filter`, tray Settings > Blocked sites, `stack.py web-filter`).

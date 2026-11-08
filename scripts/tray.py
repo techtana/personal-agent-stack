@@ -2,11 +2,13 @@
 """Agent Stack tray app: keeps the stack's services running in the background and shows their status.
 
 It lives in the notification area (on Windows it starts among the hidden icons). Left-click or "Show status" opens a
-window with three tabs:
-  Overview  each service's health with start/stop and links into the UIs ("Not installed" when its feature is not),
-            the models loaded in Ollama, the features the installer offers (installed, on or off, linked to the
-            stack; what each takes on this PC; Add features opens the installer; OpenClaw's Use gateway button), and
-            where the Hugging Face cache is
+window with four tabs:
+  Overview  each module's health under the name of what it does (the program behind it on the line below), with
+            Open / Hide / Show and Start or Stop, and a row per process for models that run in one of their own
+            (Ollama's runners, the recordings server); the models loaded on the GPU; the features the installer
+            offers, each with Install, Repair or Remove (run by the setup worker, stacklib/install.py and
+            uninstall.py) and, under Local models, Download or Remove per model; and Storage: every model, program
+            and data folder the stack keeps on disk, per drive
   Usage     every model the stack ran (gateway, Whisper, ComfyUI, direct Ollama calls): requests, tokens, audio,
             images, speed and cost per model, service or client, with a per-day chart
   Settings  models, context sizes, tracing and Ollama runtime options; Apply writes machines/<HOST>.yaml,
@@ -90,54 +92,91 @@ from PIL import ImageTk  # noqa: E402
 from stacklib import IS_WINDOWS, clients, media, ollama, process_metrics, procname, profile as prof, services  # noqa: E402
 from stacklib.icon import COLORS, make_icon  # noqa: E402
 from stacklib import settings as cfg  # noqa: E402
-from stacklib import comfy_usage, features, gpu_models, startup, usage, usage_log, webfilter  # noqa: E402
+from stacklib import comfy_usage, features, gpu_models, install, modules, startup, storage, uninstall  # noqa: E402
+from stacklib import usage, usage_log, webfilter  # noqa: E402
+from stacklib import theme  # noqa: E402
+from stacklib.theme import FONT, THEMES, dark_title_bar, system_theme  # noqa: E402,F401
 
 POLL_SECONDS = 10
-CLIENT_SECONDS = 60  # between feature and Hugging Face checks: measuring the cache walks every file in it
+CLIENT_SECONDS = 60  # between feature checks (OpenClaw's config, the uv tool environments, the models Ollama has)
 WEB_FILTER_SECONDS = 600  # between blocked-sites rounds: lists due for download, Open WebUI's search filter
 START_TIMEOUT = 180  # seconds a started service gets to answer its health check
 RESOURCE_SECONDS = 5  # pause between process samples while the Resources tab is on screen
 RESOURCES_TAB = 3
+# Each row is named for what the module does, not for the program or model behind it; ROLES names the program.
 LABELS = {
-    "ollama": "Ollama",
-    "phoenix": "Phoenix",
-    "litellm": "LiteLLM gateway",
-    "orchestrator": "Orchestrator MCP",
-    "open_webui": "Open WebUI",
-    "comfyui": "ComfyUI",
-    "kokoro": "Kokoro",
+    "ollama": "Local models",
+    "phoenix": "Trace viewer",
+    "litellm": "Gateway",
+    "orchestrator": "Agent tools",
+    "open_webui": "Chat in the browser",
+    "comfyui": "Image generation",
+    "kokoro": "Read aloud",
     "dictation": "Voice typing",
 }
 ROLES = {
-    "ollama": "runs the local models",
-    "phoenix": "trace viewer",
-    "litellm": "one API for every model",
-    "orchestrator": "department delegation for agents",
-    "open_webui": "chat in the browser",
-    "comfyui": "image, video and music generation",
-    "kokoro": "text to speech",
-    "dictation": "speak into any app (Whisper)",
+    "ollama": "Ollama: runs the chat, embedding and autocomplete models",
+    "phoenix": "Phoenix: shows the steps of each request",
+    "litellm": "LiteLLM: one address for every model, with the privacy rules",
+    "orchestrator": "orchestrator MCP: agents hand work to the departments",
+    "open_webui": "Open WebUI: chat with the department models",
+    "comfyui": "ComfyUI: pictures for the chat's image button",
+    "kokoro": "Kokoro: text to speech",
+    "dictation": "Whisper: speech to text in any app",
 }
-CLIENTS = (("huggingface", "Hugging Face cache", "model weights for Python tools"),)
-FONT = "Segoe UI" if IS_WINDOWS else "TkDefaultFont"
+# The Services card's order: what everything else needs first, then the apps on top of it.
+ROW_ORDER = ["ollama", "litellm", "orchestrator", "open_webui", "phoenix", "comfyui", "dictation", "kokoro"]
+OLLAMA_SLOTS = 4   # rows for Ollama's runners, one per loaded model (OLLAMA_MAX_LOADED_MODELS is 1 or 2 here)
+# Feature states where setup can put back what is missing (a model, the files, Claude Desktop's entry): Repair.
+REPAIR_STATES = {"Models missing", "Model missing", "Files missing", "Not in Claude Desktop"}
+# Spacing tokens (px), so every card uses the same few gaps.
+GAP_XS, GAP_S, GAP_M, GAP_L, GAP_XL = 4, 8, 12, 16, 24
+BTN_A, BTN_B = 13, 10   # widths (characters) of the two action columns: Open / Hide / Show, and Start / Stop
+# Storage bar: categorical slots 1-3 of the dataviz palette (blue, orange, aqua), stepped per theme. Validated against
+# the card colours: they pass the colour-vision checks in both themes; light aqua is below 3:1 on the card, so the
+# legend and the table beside the bar carry every figure.
+STORAGE_COLORS = {"light": ("#2a78d6", "#eb6834", "#1baf7a"), "dark": ("#3987e5", "#d95926", "#199e70")}
+STORAGE_BAR_PX = 8
+STORAGE_SECONDS = 600   # measure again by itself at most this often; Refresh measures at once
+SETTING_CONTROL_W = "2.7i"   # Settings cards' control column, wider than its widest control (scales with DPI)
+SETTING_GROUPS = [
+    ("Models", "models", "Which local models answer the gateway's aliases, and how much context each one gets."),
+    ("Services and tracing", ("observability", "services"),
+     "What the stack runs, and what it records about each request."),
+    ("Voice typing", "dictation", "The mic button and the hotkey that type what you say into any app."),
+    ("Refine selected text", "refine", "The pencil button and the hotkeys that rewrite the text you selected."),
+    ("Read aloud", "read_aloud", "The speaker button and the hotkey that read the text you selected aloud."),
+    ("Blocked sites", "web_filter", "Sites Open WebUI's web search and page fetches never use: request catchers, data "
+     "brokers, phishing, and your own list."),
+    ("Ollama runtime", "ollama_env", "Applying any of these restarts Ollama, which interrupts requests in progress."),
+]
 
-# Window palette (light / dark): neutral surfaces, one blue accent for data, status colours only for state.
-# Every colour used for text (ink2, muted, accent, good, warn, bad) is at least 4.5:1 on page and card, and accent_ink
-# at least 4.5:1 on accent (WCAG AA); check changes with .claude/skills/ux-rules/scripts/contrast.py.
-THEMES = {
-    "light": {
-        "page": "#f3f3f1", "card": "#fcfcfb", "ink": "#0b0b0b", "ink2": "#52514e", "muted": "#6b6a65",
-        "grid": "#e1e0d9", "border": "#dcdbd4", "accent": "#2368c0", "accent_ink": "#ffffff", "hover": "#ebeae5",
-        "good": "#087a08", "warn": "#8a5f00", "bad": "#c03535", "select": "#dbe8f8",
-    },
-    "dark": {
-        "page": "#111110", "card": "#1a1a19", "ink": "#f0efec", "ink2": "#c3c2b7", "muted": "#898781",
-        "grid": "#2c2c2a", "border": "#33332f", "accent": "#3987e5", "accent_ink": "#0b0b0b", "hover": "#252523",
-        "good": "#0ca30c", "warn": "#fab219", "bad": "#e05252", "select": "#1f3a5c",
-    },
-}
 RANGES = [("Today", 1), ("7 days", 7), ("30 days", 30)]
 SEP = "\x1f"  # joins a model and a client in a Usage table row id
+
+
+def ollama_log() -> Path:
+    """The Ollama app's server log, for Show log on its row."""
+    if IS_WINDOWS:
+        return Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Ollama" / "server.log"
+    return Path.home() / ".ollama" / "logs" / "server.log"
+
+
+MODEL_ROLES = {"fim": "autocomplete", "embed": "embeddings", "small": "chat", "primary": "chat", "reviewer": "code review"}
+
+
+def model_role(m) -> str:
+    """What a catalog model is for, in a word or two ("" for a model the catalog does not know)."""
+    return MODEL_ROLES.get(getattr(m, "role", ""), "")
+
+
+def model_line(m) -> str:
+    """The line under a model's name on the Features card: what the stack uses it for, or what it is."""
+    role = model_role(m)
+    kind = f"{role} model" if role else "model"
+    if m.downloaded:
+        return f"in use: {m.use}" if m.use else f"{kind}, not used by the stack"
+    return f"{kind}, not downloaded" + (f"; Settings names it for {m.use}" if m.use else "")
 
 
 def ui_links(p: dict) -> dict[str, str]:
@@ -148,18 +187,6 @@ def ui_links(p: dict) -> dict[str, str]:
         "litellm": f"http://127.0.0.1:{ports['litellm']}/ui",
         "comfyui": f"http://127.0.0.1:{ports['comfyui']}",
     }
-
-
-def system_theme() -> str:
-    if IS_WINDOWS:
-        try:
-            import winreg
-
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as k:
-                return "light" if winreg.QueryValueEx(k, "AppsUseLightTheme")[0] else "dark"
-        except OSError:
-            pass
-    return "light"
 
 
 def compact(n: float) -> str:
@@ -232,6 +259,19 @@ class TrayApp:
         self.dictation_button: bool | None = None  # floating mic button visible? None while voice typing is down
         self.refine_button: bool | None = None     # the refine (pencil) button next to it, the same way
         self.read_button: bool | None = None       # and the read aloud (speaker) button
+        self.ollama_tree: dict = {"pid": None, "runners": []}   # Ollama's server and one runner per loaded model
+        self.unloading: set[str] = set()           # models an Unload click is taking out of Ollama
+        self.model_rows: list = []                 # Local models: every catalog model and any other Ollama has
+        self.setup_state: dict = {}                # the setup worker's state (stacklib/install.py read_state)
+        self.setup_seen: str | None = None         # the last finished run the tray handled (None until the first read)
+        self.setup_watch = False                   # show the setup line: a run was seen while it worked
+        self.setup_job: str | None = None          # the 1 s redraw while the setup worker runs
+        self.setup_lock = threading.Lock()         # _check_setup runs on the poll thread and on refresh_soon's
+        self.setup_read_at = 0.0                   # monotonic time of the setup state kept
+        self.feature_starting: dict[str, str] = {}  # feature -> "Installing" / "Removing" while its worker starts
+        self.storage: storage.Scan | None = None   # the Storage card's last measurement
+        self.storage_busy = False
+        self.storage_error = ""
         self.usage_data: dict | None = None
         self.usage_notes: list[str] = []  # model use the Usage tab cannot count, while it can happen
         self.usage_notes_at = -1e9  # monotonic time of the last check
@@ -275,7 +315,9 @@ class TrayApp:
         rows = services.status(self.profile)
         self.loaded = ollama.ps(f"http://127.0.0.1:{self.profile['ports']['ollama']}")
         self._store_rows(rows, checked)
+        self._check_setup()
         self._check_dictation()
+        self._check_processes()
         self._collect_usage()
         self._maintain_web_filter(checked)
         self._check_gpu_models()
@@ -325,6 +367,69 @@ class TrayApp:
             self.dictation_button = self.refine_button = self.read_button = None
             self.dictation_health = None
 
+    def _check_processes(self) -> None:
+        """Pids for the Services card: Ollama's server and one runner per loaded model."""
+        try:
+            up = self.rows.get("ollama", {}).get("healthy")
+            self.ollama_tree = modules.ollama_tree(self.loaded) if up else {"pid": None, "runners": []}
+        except Exception as e:  # noqa: BLE001 - a process that vanished mid-scan must not stop the poller
+            print(f"[tray] process check failed: {e}")
+
+    def _check_setup(self) -> None:
+        """The setup worker's state, whoever started it (Install or Remove here, or the installer window). Its steps
+        show under the features while it runs; when a run ends, the tray reads the profile again, starts what it
+        turned on, and checks the features and storage at once."""
+        read_at, state = time.monotonic(), install.read_state()
+        with self.setup_lock:
+            if not self._set_setup_state(state, read_at):
+                return   # a newer read is already in
+            status = state.get("status")
+            if status == "running":
+                self.setup_watch = True
+                self.setup_seen = self.setup_seen or "running"
+                return
+            key = f"{state.get('pid')}:{state.get('started')}:{status}"
+            first = self.setup_seen is None
+            if key == self.setup_seen:
+                return
+            self.setup_seen = key
+        if not first and status:
+            self._setup_finished(state)
+
+    def _set_setup_state(self, state: dict, read_at: float) -> bool:
+        """Keep the newest reading of the setup worker's state file (several threads read it); False when an older
+        reading arrives after a newer one."""
+        if read_at < self.setup_read_at:
+            return False
+        self.setup_read_at, self.setup_state = read_at, state
+        return True
+
+    def _setup_finished(self, state: dict) -> None:
+        old_profile, old = self.profile, set(self.managed)
+        self.profile = prof.resolve_profile(self.profile["name"])
+        usage_log.configure(self.profile)
+        self.managed = [s for s in services.SERVICE_ORDER if s in services.commands(self.profile)]
+        self.feature_est = features.estimates(self.profile, self.hardware, self.loaded)
+        self.clients_checked = 0.0   # the features changed: check them in this pass
+        new = [s for s in self.managed if s not in old and not self.rows.get(s, {}).get("healthy")]
+        # The gateway's environment names the image model for the reply label (services.gateway_label_env): an image
+        # feature set up here (not through Settings, which restarts it itself) needs the gateway restarted.
+        relabel = "images" in (state.get("targets") or []) and not (state.get("remove") or []) \
+            and self.rows.get("litellm", {}).get("healthy") and "litellm" in self.managed
+        print(f"[tray] setup finished ({state.get('status')}); starting {', '.join(new) or 'nothing new'}"
+              + ("; restarting the gateway for the image label" if relabel else ""))
+
+        def ui() -> None:
+            if new:
+                self._act("start", new)
+            if relabel:
+                self.restart_service("litellm")
+            if self._window_built():
+                if not cfg.changed(old_profile, self._edits()):
+                    self._load_settings()   # Settings shows the switches the run changed (unless it holds edits)
+                self.scan_storage(force=True)
+        self.ui_queue.put(ui)
+
     def _check_gpu_models(self) -> None:
         """The GPU card's rows: Ollama's models plus voice typing's Whisper and ComfyUI's models when they hold the card."""
         stats, label = None, ""
@@ -364,14 +469,11 @@ class TrayApp:
         threading.Thread(target=run, daemon=True, name="web-filter").start()
 
     def _check_clients(self) -> dict[str, clients.ClientStatus]:
-        out = {}
-        for key, fn in (("huggingface", clients.huggingface),
-                        ("openclaw", lambda: clients.openclaw(self.profile["ports"]["litellm"]))):
-            try:
-                out[key] = fn()
-            except Exception as e:  # noqa: BLE001 - a bad config file must not stop the poller
-                out[key] = clients.ClientStatus("warn", "Not checked", str(e) or type(e).__name__)
-        return out
+        """OpenClaw's config: whether the gateway is its only model endpoint (its Features row and Use gateway)."""
+        try:
+            return {"openclaw": clients.openclaw(self.profile["ports"]["litellm"])}
+        except Exception as e:  # noqa: BLE001 - a bad config file must not stop the poller
+            return {"openclaw": clients.ClientStatus("warn", "Not checked", str(e) or type(e).__name__)}
 
     def _check_features(self) -> None:
         """What is installed, on and linked (stacklib/features.py), and what each feature takes with the models that
@@ -379,6 +481,7 @@ class TrayApp:
         try:
             self.feature_status = features.statuses(self.profile, openclaw=self.client_status.get("openclaw"))
             self.feature_est = features.estimates(self.profile, self.hardware, self.loaded)
+            self.model_rows = uninstall.model_rows(self.profile)
         except Exception as e:  # noqa: BLE001 - the poller must go on; the card keeps its last reading
             print(f"[tray] feature check failed: {e}")
 
@@ -506,18 +609,57 @@ class TrayApp:
         threading.Thread(target=self.refresh, daemon=True).start()
 
     # ---------- actions ----------
+    def _setup_owns(self, svc: str) -> bool:
+        """The setup worker is installing or removing the feature this service belongs to: hands off until it ends."""
+        st = self.setup_state
+        return st.get("status") == "running" and features.SERVICE_FEATURE.get(svc) in (st.get("targets") or [])
+
+    def restart_service(self, svc: str) -> None:
+        """Stop and start one service, with its row showing Starting while it comes back."""
+        if svc in self.pending:
+            return
+        entry = ("start", time.monotonic())
+        self.pending[svc] = entry
+        self._render_services()
+        self._tick_soon()
+
+        def run() -> None:
+            problem = None
+            try:
+                with self.service_locks[svc]:
+                    services.stop(self.profile, [svc])
+                    reasons = services.start(self.profile, [svc])
+                if svc in reasons:
+                    problem = (f"Not restarted: {reasons[svc]}.", services.log_file(self.profile, svc))
+                elif not services.wait_healthy(self.profile, [svc], timeout=START_TIMEOUT)[svc]:
+                    problem = ("No answer from its health check after the restart.", services.log_file(self.profile, svc))
+            except Exception as e:  # noqa: BLE001 - shown on the row
+                traceback.print_exc()
+                problem = (f"Could not restart: {e}", LOG_FILE)
+            checked = time.monotonic()
+            row = services.probe(self.profile, svc)
+            self.ui_queue.put(lambda: self._action_done(svc, entry, row, checked, problem))
+
+        threading.Thread(target=run, daemon=True, name=f"restart-{svc}").start()
+
     def _running(self, svc: str) -> bool:
         """Running, starting, or being started: what Stop applies to."""
         pending = self.pending.get(svc)
         return pending[0] == "start" if pending else self.rows.get(svc, {}).get("state", "stopped") != "stopped"
 
     def start_all(self, *_):
-        self._on_ui(lambda: self._act("start", [s for s in self.managed if not self._running(s) and s not in self.pending]))
+        self._on_ui(lambda: self._act("start", [s for s in self.managed if not self._running(s) and s not in self.pending
+                                                and not self._setup_owns(s)]))
 
     def stop_all(self, *_):
-        self._on_ui(lambda: self._act("stop", [s for s in self.managed if self._running(s)]))
+        self._on_ui(lambda: self._act("stop", [s for s in self.managed if self._running(s) and not self._setup_owns(s)]))
 
     def toggle(self, svc: str) -> None:
+        if svc == "ollama":   # the Ollama app's server: Start brings the app back, nothing here stops it
+            self.start_ollama()
+            return
+        if self._setup_owns(svc):
+            return
         self._act("stop" if self._running(svc) else "start", [svc])
 
     def set_gpu_mode(self, mode: str) -> None:
@@ -596,9 +738,9 @@ class TrayApp:
             pystray.MenuItem("Show status", lambda *_: self.ui_queue.put(lambda: self.show_window(0)), default=True),
             pystray.MenuItem("Usage by model", lambda *_: self.ui_queue.put(lambda: self.show_window(1))),
             pystray.MenuItem("Settings", lambda *_: self.ui_queue.put(lambda: self.show_window(2))),
-            pystray.MenuItem("Add features...", self.open_installer),
+            pystray.MenuItem("Open installer...", self.open_installer),
             pystray.Menu.SEPARATOR,
-            *[pystray.MenuItem(self._status_text(s), None, enabled=False) for s in ["ollama", *services.SERVICE_ORDER]],
+            *[pystray.MenuItem(self._status_text(s), None, enabled=False) for s in self._service_order()],
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Open chat (Open WebUI)", lambda *_: webbrowser.open(links["open_webui"])),
             pystray.MenuItem("Open traces (Phoenix)", lambda *_: webbrowser.open(links["phoenix"])),
@@ -669,7 +811,7 @@ class TrayApp:
                 try:
                     pid = install.launch_window()
                     self.installer = (pid, services._proc_info(pid)[1])
-                    note = "Opening the installer; this card updates once setup has run."
+                    note = "Opening the installer; this card follows its setup while it runs."
                 except OSError as e:
                     note = f"Could not open the installer: {e}. Run install.cmd instead."
             print(f"[tray] {note}")
@@ -698,73 +840,18 @@ class TrayApp:
         self.window.lift()
         self.window.focus_force()
         self._sample_resources()
+        self.scan_storage()
 
     def _style(self) -> None:
-        t = self.t = THEMES[system_theme()]
-        s = ttk.Style(self.root)
-        s.theme_use("clam")
-        base = (FONT, 10)
-        s.configure(".", background=t["page"], foreground=t["ink"], font=base, bordercolor=t["border"],
-                    lightcolor=t["card"], darkcolor=t["card"], troughcolor=t["page"], focuscolor=t["accent"])
-        s.configure("Card.TFrame", background=t["card"])
-        s.configure("TLabel", background=t["page"], foreground=t["ink"])
-        for name, fg, font in (("", t["ink"], base), ("Muted", t["muted"], (FONT, 9)), ("Sub", t["ink2"], base),
-                               ("Title", t["ink"], (FONT, 11, "bold")), ("Big", t["ink"], (FONT, 18, "bold"))):
-            s.configure(f"Card.{name}.TLabel" if name else "Card.TLabel", background=t["card"], foreground=fg, font=font)
-        s.configure("Head.TLabel", background=t["page"], foreground=t["ink"], font=(FONT, 16, "bold"))
-        s.configure("HeadSub.TLabel", background=t["page"], foreground=t["ink2"])
-        s.configure("Warn.TLabel", background=t["card"], foreground=t["warn"])
-        s.configure("Bad.TLabel", background=t["card"], foreground=t["bad"])
-        # Keyboard focus: clam's dotted ring inside, plus a 2 px solid ring (clam draws a border only for a solid or
-        # raised relief). Rings are accent on surfaces and ink or accent-ink on accent fills, 3:1 or more either way.
-        s.configure("TButton", background=t["card"], foreground=t["ink"], padding=(10, 4), relief="flat", borderwidth=1)
-        s.map("TButton", background=[("disabled", t["page"]), ("active", t["hover"])], foreground=[("disabled", t["muted"])],
-              relief=[("focus", "solid")], bordercolor=[("focus", t["accent"])])
-        s.configure("Accent.TButton", background=t["accent"], foreground=t["accent_ink"], bordercolor=t["accent"], focuscolor=t["accent_ink"])
-        s.map("Accent.TButton", background=[("disabled", t["border"]), ("active", t["accent"])], bordercolor=[("focus", t["ink"])])
-        s.configure("Seg.TRadiobutton", background=t["card"], foreground=t["ink2"], padding=(10, 3), indicatorrelief="flat", relief="flat")
-        s.layout("Seg.TRadiobutton", [("Radiobutton.border", {"sticky": "nswe", "children": [("Radiobutton.padding", {"sticky": "nswe", "children": [
-            ("Radiobutton.focus", {"sticky": "nswe", "children": [("Radiobutton.label", {"sticky": "nswe"})]})]})]})])
-        s.map("Seg.TRadiobutton", background=[("selected", t["accent"]), ("active", t["hover"])], foreground=[("selected", t["accent_ink"])],
-              relief=[("focus", "solid")], bordercolor=[("focus", "selected", t["ink"]), ("focus", t["accent"])],
-              focuscolor=[("selected", t["accent_ink"])])
-        for w in ("TCheckbutton",):
-            s.configure(w, background=t["card"], foreground=t["ink"], indicatorbackground=t["card"], indicatorforeground=t["accent"], relief="flat")
-            s.layout(w, [("Checkbutton.border", {"sticky": "nswe", "children": [("Checkbutton.padding", {"sticky": "nswe", "children": [
-                ("Checkbutton.indicator", {"side": "left", "sticky": ""}),
-                ("Checkbutton.focus", {"side": "left", "sticky": "w", "children": [("Checkbutton.label", {"sticky": "nswe"})]})]})]})])
-            s.map(w, background=[("active", t["card"])], indicatorbackground=[("selected", t["card"])],
-                  relief=[("focus", "solid")], bordercolor=[("focus", t["accent"])])
-        s.configure("Page.TCheckbutton", background=t["page"])
-        s.map("Page.TCheckbutton", background=[("active", t["page"])])
-        s.configure("TCombobox", fieldbackground=t["card"], background=t["card"], foreground=t["ink"], arrowcolor=t["ink2"], padding=3)
-        # The field draws bordercolor outside and lightcolor inside: both on focus make the 2 px ring, since these
-        # maps hide clam's own cue for a focused read-only box (its selected text).
-        s.map("TCombobox", fieldbackground=[("readonly", t["card"])], foreground=[("readonly", t["ink"])],
-              selectbackground=[("readonly", t["card"])], selectforeground=[("readonly", t["ink"])],
-              bordercolor=[("focus", t["accent"])], lightcolor=[("focus", t["accent"])])
-        self.root.option_add("*TCombobox*Listbox.background", t["card"])
-        self.root.option_add("*TCombobox*Listbox.foreground", t["ink"])
-        self.root.option_add("*TCombobox*Listbox.selectBackground", t["select"])
-        self.root.option_add("*TCombobox*Listbox.selectForeground", t["ink"])
-        s.configure("TNotebook", background=t["page"], borderwidth=0, tabmargins=(0, 0, 0, 0))
-        s.configure("TNotebook.Tab", background=t["page"], foreground=t["ink2"], padding=(16, 7), borderwidth=0, font=(FONT, 10))
-        s.map("TNotebook.Tab", background=[("selected", t["card"])], foreground=[("selected", t["ink"])],
-              lightcolor=[("focus", "selected", t["accent"]), ("selected", t["card"])],
-              bordercolor=[("focus", "selected", t["accent"]), ("selected", t["border"])], expand=[("selected", (0, 0, 0, 0))])
-        s.configure("Treeview", background=t["card"], fieldbackground=t["card"], foreground=t["ink"], rowheight=26, borderwidth=0)
-        s.map("Treeview", background=[("selected", t["select"])], foreground=[("selected", t["ink"])])
-        s.configure("Treeview.Heading", background=t["card"], foreground=t["ink2"], relief="flat", font=(FONT, 9, "bold"), padding=(6, 4))
-        s.map("Treeview.Heading", background=[("active", t["hover"])])
-        s.configure("Vertical.TScrollbar", background=t["card"], troughcolor=t["page"], arrowcolor=t["ink2"], bordercolor=t["page"])
+        self.t = theme.apply(self.root)
 
     def _card(self, parent, title: str | None = None, **grid) -> ttk.Frame:
         outer = tk.Frame(parent, bg=self.t["border"], padx=1, pady=1)
         outer.grid(sticky="nsew", **grid)
-        inner = ttk.Frame(outer, style="Card.TFrame", padding=14)
+        inner = ttk.Frame(outer, style="Card.TFrame", padding=GAP_L)
         inner.pack(fill="both", expand=True)
         if title:
-            ttk.Label(inner, text=title, style="Card.Title.TLabel").grid(row=0, column=0, columnspan=10, sticky="w", pady=(0, 8))
+            ttk.Label(inner, text=title, style="Card.Title.TLabel").grid(row=0, column=0, columnspan=10, sticky="w", pady=(0, GAP_M))
         return inner
 
     def _scroll_area(self, tab, parent, bg: str, **frame) -> tuple[tk.Frame, ttk.Frame]:
@@ -810,18 +897,10 @@ class TrayApp:
         t = self.t
         w = tk.Toplevel(self.root, bg=t["page"])
         w.title("Agent Stack")
-        w.geometry(f"940x{min(900, w.winfo_screenheight() - 80)}")  # Overview scrolls: services, GPU, features, HF cache
-        w.minsize(760, 560)
+        w.geometry(f"960x{min(900, w.winfo_screenheight() - 80)}")  # Overview scrolls: services, GPU, features, storage
+        w.minsize(780, 560)
         w.protocol("WM_DELETE_WINDOW", w.withdraw)  # closing hides it; the tray keeps running
-        if IS_WINDOWS and system_theme() == "dark":
-            try:  # dark title bar (DWMWA_USE_IMMERSIVE_DARK_MODE)
-                import ctypes
-
-                w.update_idletasks()
-                hwnd = ctypes.windll.user32.GetParent(w.winfo_id())
-                ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(ctypes.c_int(1)), 4)
-            except (OSError, AttributeError):
-                pass
+        dark_title_bar(w)
         self.window = w
         w.bind("<Map>", lambda e: self._sample_resources() if e.widget is w else None)  # restored from the taskbar
 
@@ -852,10 +931,10 @@ class TrayApp:
             # A settings text box scrolls its own text first (Tk's Text binding); the tab scrolls only while the
             # whole text is in view, so the wheel never moves both at once.
             self.root.bind_class("SettingText", seq, lambda e: "break" if e.widget.yview() != (0.0, 1.0) else None)
-        self._build_overview(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
-        self._build_usage(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
-        self._build_settings(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
-        self._build_resources(ttk.Frame(self.tabs, padding=(0, 12, 0, 0)))
+        self._build_overview(ttk.Frame(self.tabs, padding=(0, GAP_M, 0, 0)))
+        self._build_usage(ttk.Frame(self.tabs, padding=(0, GAP_M, 0, 0)))
+        self._build_settings(ttk.Frame(self.tabs, padding=(0, GAP_M, 0, 0)))
+        self._build_resources(ttk.Frame(self.tabs, padding=(0, GAP_M, 0, 0)))
 
     # ---------- Overview tab ----------
     def _build_overview(self, tab: ttk.Frame) -> None:
@@ -866,127 +945,238 @@ class TrayApp:
         holder, body = self._scroll_area(tab, tab, self.t["page"])
         holder.grid(row=0, column=0, sticky="nsew")
         body.columnconfigure(0, weight=1)
+        self._build_services(body)
+        self._build_gpu(body)
+        self._build_features(body)
+        self._build_storage(body)
+
+        bar = ttk.Frame(tab, padding=(0, GAP_M, 0, 0))
+        bar.grid(row=1, column=0, sticky="we")
+        ttk.Button(bar, text="Open chat", style="Accent.TButton", command=lambda: self.open_url("open_webui")).pack(side="left")
+        self.start_btn = ttk.Button(bar, text="Start all", command=self.start_all)
+        self.start_btn.pack(side="left", padx=(GAP_S, GAP_XS))
+        self.stop_btn = ttk.Button(bar, text="Stop all", command=self.stop_all)
+        self.stop_btn.pack(side="left")
+        ttk.Button(bar, text="Logs", command=self.open_logs).pack(side="left", padx=GAP_XS)
+        self.startup_var = tk.BooleanVar(value=startup.is_installed())
+        ttk.Checkbutton(bar, text="Start at login", style="Page.TCheckbutton", variable=self.startup_var,
+                        command=self._toggle_startup).pack(side="right")
+
+    def _service_order(self) -> list[str]:
+        """The Services card's rows: ROW_ORDER, then any service it does not name yet."""
+        known = ["ollama", *services.SERVICE_ORDER]
+        return [s for s in ROW_ORDER if s in known] + [s for s in known if s not in ROW_ORDER]
+
+    def _role(self, svc: str) -> str:
+        """The line under a module's name: the program behind it and its port."""
+        if self._kokoro_in_app(svc):   # read aloud runs Kokoro inside voice typing: no port of its own
+            pid = self.rows.get("dictation", {}).get("pid")
+            return "Kokoro: text to speech, inside voice typing" + (f" (pid {pid})" if pid else "")
+        return f"{ROLES[svc]}  ·  port {self.profile['ports'][svc]}"
+
+    def _line(self, parent, row: int, columns: int = 5) -> tk.Frame:
+        """A hairline between two blocks of a card."""
+        line = tk.Frame(parent, height=1, bg=self.t["grid"])
+        line.grid(row=row, column=0, columnspan=columns, sticky="we", pady=GAP_S)
+        return line
+
+    @staticmethod
+    def _action(parent, text: str, command, width: int = 0) -> ttk.Button:
+        """One button in a row's first action column (Open, Hide or Show), stacked one per line."""
+        btn = ttk.Button(parent, text=text, width=width or BTN_A, command=command)
+        btn.pack(side="top", fill="x", pady=(0, GAP_XS))
+        return btn
+
+    def _build_services(self, body) -> None:
+        """One block per module, named for what it does (the program behind it is on the line below): a dot, the
+        state, then two action columns, Open / Hide / Show (one per line) and Start or Stop (blank where the stack
+        does not start or stop it). Local models gets a row per model Ollama has loaded, since each runs in a runner
+        process of its own. A failed start or stop adds a line with the reason."""
+        t = self.t
         card = self._card(body, "Services", row=0, column=0)
         card.columnconfigure(1, weight=1)
-        self.row_widgets: dict[str, tuple] = {}
+        self.row_widgets: dict[str, dict] = {}
         self.reason_widgets: dict[str, tuple] = {}
+        self.runner_slots: list[tuple] = []
         links = ui_links(self.profile)
-        for n, svc in enumerate(["ollama", *services.SERVICE_ORDER]):
-            i = 2 * n + 1  # each service has a second grid row for the reason a start or stop failed
-            dot = tk.Label(card, text="●", font=(FONT, 12), bg=self.t["card"])
-            dot.grid(row=i, column=0, padx=(0, 10), pady=5)
+        for n, svc in enumerate(self._service_order()):
+            base = 10 * n + 1
+            line = self._line(card, base) if n else None
+            row = base + 1
+            dot = tk.Label(card, text="●", font=(FONT, 12), bg=t["card"], fg=t["muted"])
+            dot.grid(row=row, column=0, sticky="n", padx=(0, GAP_S))
             names = ttk.Frame(card, style="Card.TFrame")
-            names.grid(row=i, column=1, sticky="w")
-            ttk.Label(names, text=LABELS[svc], style="Card.TLabel", font=(FONT, 10, "bold")).pack(anchor="w")
-            if self._kokoro_in_app(svc):   # read aloud runs Kokoro inside voice typing: no port of its own
-                role = features.read_aloud_row(self.profile, None)[2]
-            else:
-                role = f"{ROLES[svc]}  ·  port {self.profile['ports'][svc]}"
-            ttk.Label(names, text=role, style="Card.Muted.TLabel").pack(anchor="w")
-            state = ttk.Label(card, text="", style="Card.Sub.TLabel", width=-18)  # at least 18 characters, grows to fit
-            state.grid(row=i, column=2, sticky="w", padx=8)
-            buttons = ttk.Frame(card, style="Card.TFrame")
-            buttons.grid(row=i, column=3, sticky="e")
+            names.grid(row=row, column=1, sticky="nw")
+            label, role = LABELS[svc], self._role(svc)
+            ttk.Label(names, text=label, style="Card.Name.TLabel").pack(anchor="w")
+            role_label = ttk.Label(names, text=role, style="Card.Muted.TLabel")
+            role_label.pack(anchor="w")
+            state = ttk.Label(card, text="", style="Card.Sub.TLabel", width=-20)
+            state.grid(row=row, column=2, sticky="nw", padx=GAP_M)
+            actions = ttk.Frame(card, style="Card.TFrame")
+            actions.grid(row=row, column=3, sticky="ne", padx=(0, GAP_S))
             if svc in links:
-                ttk.Button(buttons, text="Open", width=7, command=lambda s=svc: self.open_url(s)).pack(side="left", padx=2)
+                self._action(actions, "Open", lambda s=svc: self.open_url(s))
             if svc == "dictation":
                 # Bring back (or hide) the floating mic and refine buttons without opening Settings.
-                self.dictation_btn = ttk.Button(buttons, text="Hide mic", width=11,
-                                                command=lambda: self.set_dictation_button(not self.dictation_button))
-                self.dictation_btn.pack(side="left", padx=2)
-                self.refine_btn = ttk.Button(buttons, text="Hide pencil", width=11,
-                                             command=lambda: self.set_refine_button(not self.refine_button))
-                self.refine_btn.pack(side="left", padx=2)
+                self.dictation_btn = self._action(actions, "Hide mic", lambda: self.set_dictation_button(not self.dictation_button))
+                self.refine_btn = self._action(actions, "Hide pencil", lambda: self.set_refine_button(not self.refine_button))
             if svc == "kokoro":
-                # Read aloud's speaker button lives with its voice, on the Kokoro row.
-                self.read_btn = ttk.Button(buttons, text="Hide speaker", width=12,
-                                           command=lambda: self.set_read_button(not self.read_button))
-                self.read_btn.pack(side="left", padx=2)
-            toggle = ttk.Button(buttons, text="Stop", width=7, command=lambda s=svc: self.toggle(s))
-            if svc != "ollama" and not self._kokoro_in_app(svc):   # read aloud starts and stops with voice typing
-                toggle.pack(side="left", padx=2)
-            self.row_widgets[svc] = (dot, state, toggle)
-            reason = ttk.Label(card, text="", style="Bad.TLabel", wraplength=560, justify="left")
-            reason.grid(row=i + 1, column=1, columnspan=2, sticky="w", pady=(0, 6))
-            show = ttk.Button(card, text="Show log", width=9, command=lambda s=svc: self.show_log(s))
-            show.grid(row=i + 1, column=3, sticky="e", padx=2, pady=(0, 6))
+                # Read aloud's speaker button lives on its own row, next to its voice.
+                self.read_btn = self._action(actions, "Hide speaker", lambda: self.set_read_button(not self.read_button))
+            toggle = ttk.Button(card, text="Stop", width=BTN_B, command=lambda s=svc: self.toggle(s))
+            toggle.grid(row=row, column=4, sticky="ne")
+            toggle.grid_remove()   # _render_services shows it where the stack starts and stops the module
+            self.row_widgets[svc] = {"dot": dot, "state": state, "toggle": toggle, "role": role_label,
+                                     "all": [w for w in (line, dot, names, state, actions) if w is not None]}
+            if svc == "ollama":
+                self.runner_slots = [self._runner_slot(card, row + 1 + k, k) for k in range(OLLAMA_SLOTS)]
+            reason = ttk.Label(card, text="", style="Bad.TLabel", wraplength=480, justify="left")
+            reason.grid(row=base + 7, column=1, columnspan=2, sticky="w", pady=(GAP_XS, 0))
+            show = ttk.Button(card, text="Show log", width=BTN_A, command=lambda s=svc: self.show_log(s))
+            show.grid(row=base + 7, column=3, sticky="ne", padx=(0, GAP_S), pady=(GAP_XS, 0))
             reason.grid_remove()
             show.grid_remove()
             self.reason_widgets[svc] = (reason, show)
 
-        # One card for the GPU: every model loaded (Ollama, Whisper, ComfyUI), and the switch that hands the card to chat or to media (plan G1).
-        models = self._card(body, "GPU: loaded models", row=1, column=0, pady=(12, 0))
+    def _runner_slot(self, card, row: int, k: int) -> tuple:
+        """A row under Local models for one loaded model's runner process; hidden until Ollama loads that many."""
+        names = ttk.Frame(card, style="Card.TFrame")
+        names.grid(row=row, column=1, sticky="nw", padx=(GAP_L, 0), pady=(GAP_S, 0))
+        name = ttk.Label(names, text="", style="Card.TLabel")
+        name.pack(anchor="w")
+        detail = ttk.Label(names, text="", style="Card.Muted.TLabel")
+        detail.pack(anchor="w")
+        state = ttk.Label(card, text="", style="Card.Sub.TLabel")
+        state.grid(row=row, column=2, sticky="nw", padx=GAP_M, pady=(GAP_S, 0))
+        unload = ttk.Button(card, text="Unload", width=BTN_B)   # its model is bound on every render
+        unload.grid(row=row, column=4, sticky="ne", pady=(GAP_S, 0))
+        for w in (names, state, unload):
+            w.grid_remove()
+        return names, name, detail, state, unload
+
+    def _build_gpu(self, body) -> None:
+        """One card for the GPU: every model loaded (Ollama, Whisper, ComfyUI), and the switch that hands the card to
+        chat or to media (plan G1)."""
+        models = self._card(body, "GPU: loaded models", row=1, column=0, pady=(GAP_L, 0))
         models.columnconfigure(0, weight=1)
         self.loaded_frame = ttk.Frame(models, style="Card.TFrame")
         self.loaded_frame.grid(row=1, column=0, columnspan=2, sticky="we")
         self.gpu_text = getattr(self, "gpu_text", "Chat and media share the card: Media before long image or video "
                                 "jobs, Chat for fast replies.")
         self.gpu_label = ttk.Label(models, text=self.gpu_text, style="Card.Muted.TLabel", wraplength=640, justify="left")
-        self.gpu_label.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.gpu_label.grid(row=2, column=0, sticky="w", pady=(GAP_S, 0))
         gbtn = ttk.Frame(models, style="Card.TFrame")
-        gbtn.grid(row=2, column=1, sticky="e", pady=(6, 0))
-        ttk.Button(gbtn, text="Chat", width=7, command=lambda: self.set_gpu_mode("chat")).pack(side="left", padx=2)
-        ttk.Button(gbtn, text="Media", width=7, command=lambda: self.set_gpu_mode("media")).pack(side="left", padx=2)
+        gbtn.grid(row=2, column=1, sticky="e", pady=(GAP_S, 0))
+        ttk.Button(gbtn, text="Chat", width=BTN_B, command=lambda: self.set_gpu_mode("chat")).pack(side="left", padx=(0, GAP_XS))
+        ttk.Button(gbtn, text="Media", width=BTN_B, command=lambda: self.set_gpu_mode("media")).pack(side="left")
 
-        # The installer's features: installed, on or off, linked to the stack, and what each takes on this PC.
-        feats = self._card(body, "Features", row=2, column=0, pady=(12, 0))
-        feats.columnconfigure(1, weight=1)
-        self.feature_widgets: dict[str, tuple] = {}
+    def _build_features(self, body) -> None:
+        """The installer's features: installed, on or off, linked to the stack, what each takes on this PC, and an
+        Install, Repair or Remove button that runs the setup worker for that feature alone. Under Local models, every
+        model in the installer's catalog (and any other Ollama has), with Download or Remove."""
+        card = self._card(body, "Features", row=2, column=0, pady=(GAP_L, 0))
+        card.columnconfigure(1, weight=1)
+        self.features_card = card
+        self.feature_widgets: dict[str, dict] = {}
+        self.model_widgets: list = []
+        self.model_shown: tuple = ()
         for n, f in enumerate(features.FEATURES):
-            i = 2 * n + 1
-            dot = tk.Label(feats, text="●", font=(FONT, 12), bg=self.t["card"], fg=self.t["muted"])
-            dot.grid(row=i, column=0, padx=(0, 10), pady=(5, 0), sticky="n")
-            names = ttk.Frame(feats, style="Card.TFrame")
-            names.grid(row=i, column=1, sticky="w")
-            ttk.Label(names, text=f.title, style="Card.TLabel", font=(FONT, 10, "bold")).pack(anchor="w")
+            base = 100 * n + 1
+            line = self._line(card, base) if n else None
+            row = base + 1
+            dot = tk.Label(card, text="●", font=(FONT, 12), bg=self.t["card"], fg=self.t["muted"])
+            dot.grid(row=row, column=0, sticky="n", padx=(0, GAP_S))
+            names = ttk.Frame(card, style="Card.TFrame")
+            names.grid(row=row, column=1, sticky="nw")
+            ttk.Label(names, text=f.title, style="Card.Name.TLabel").pack(anchor="w")
             load = ttk.Label(names, text="", style="Card.Muted.TLabel")
             load.pack(anchor="w")
-            state = ttk.Label(feats, text="Checking...", style="Card.Sub.TLabel", width=-18)
-            state.grid(row=i, column=2, sticky="w", padx=8)
-            detail = ttk.Label(feats, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
-            detail.grid(row=i + 1, column=1, columnspan=2, sticky="w", pady=(0, 6))
-            fix = None
-            if f.id == "openclaw":
-                fix = ttk.Button(feats, text="Use gateway", command=self.openclaw_use_gateway)
-                fix.grid(row=i, column=3, sticky="e", padx=2)
-                fix.grid_remove()
-            self.feature_widgets[f.id] = (dot, load, state, detail, fix)
-        foot = ttk.Frame(feats, style="Card.TFrame")
-        foot.grid(row=2 * len(features.FEATURES) + 1, column=0, columnspan=4, sticky="we", pady=(4, 0))
+            detail = ttk.Label(names, text="", style="Card.Muted.TLabel", wraplength=440, justify="left")
+            detail.pack(anchor="w", pady=(2, 0))
+            state = ttk.Label(card, text="Checking...", style="Card.Sub.TLabel", width=-20)
+            state.grid(row=row, column=2, sticky="nw", padx=GAP_M)
+            actions = ttk.Frame(card, style="Card.TFrame")
+            actions.grid(row=row, column=3, sticky="ne", padx=(0, GAP_S))
+            fix = self._action(actions, "Use gateway", self.openclaw_use_gateway) if f.id == "openclaw" else None
+            repair = self._action(actions, "Repair", lambda fid=f.id: self.feature_action(fid, repair=True))
+            for btn in (fix, repair):
+                if btn is not None:
+                    btn.pack_forget()
+            main = ttk.Button(card, text="Install", width=BTN_B, command=lambda fid=f.id: self.feature_action(fid))
+            main.grid(row=row, column=4, sticky="ne")
+            main.grid_remove()
+            self.feature_widgets[f.id] = {"dot": dot, "load": load, "state": state, "detail": detail, "fix": fix,
+                                          "repair": repair, "main": main, "base": base,
+                                          "block": [x for x in (line, dot, names, state, actions) if x is not None]}
+        foot = ttk.Frame(card, style="Card.TFrame")
+        foot.grid(row=100 * len(features.FEATURES) + 1, column=0, columnspan=5, sticky="we", pady=(GAP_M, 0))
         foot.columnconfigure(0, weight=1)
+        self.setup_label = ttk.Label(foot, text="", style="Card.Sub.TLabel", wraplength=640, justify="left")
+        self.setup_label.grid(row=0, column=0, sticky="w")
+        self.setup_bar = ttk.Progressbar(foot, mode="determinate", maximum=1.0)
+        self.setup_bar.grid(row=1, column=0, columnspan=2, sticky="we", pady=(GAP_XS, GAP_S))
+        self.setup_label.grid_remove()
+        self.setup_bar.grid_remove()
         self.features_note = ttk.Label(foot, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
-        self.features_note.grid(row=0, column=0, sticky="w")
-        self.add_features_btn = ttk.Button(foot, text="Add features...", command=self.open_installer)
-        self.add_features_btn.grid(row=0, column=1, sticky="e", padx=(8, 2))
+        self.features_note.grid(row=2, column=0, sticky="w")
+        self.add_features_btn = ttk.Button(foot, text="Open installer...", command=self.open_installer)
+        self.add_features_btn.grid(row=2, column=1, sticky="e", padx=(GAP_S, 0))
 
-        extras = self._card(body, "Hugging Face cache", row=3, column=0, pady=(12, 0))
-        extras.columnconfigure(1, weight=1)
-        self.client_widgets: dict[str, tuple] = {}
-        for n, (key, label, role) in enumerate(CLIENTS):
-            i = 2 * n + 1
-            dot = tk.Label(extras, text="●", font=(FONT, 12), bg=self.t["card"])
-            dot.grid(row=i, column=0, padx=(0, 10), pady=(5, 0), sticky="n")
-            names = ttk.Frame(extras, style="Card.TFrame")
-            names.grid(row=i, column=1, sticky="w")
-            ttk.Label(names, text=label, style="Card.TLabel", font=(FONT, 10, "bold")).pack(anchor="w")
-            ttk.Label(names, text=role, style="Card.Muted.TLabel").pack(anchor="w")
-            state = ttk.Label(extras, text="Checking...", style="Card.Sub.TLabel", width=-18)
-            state.grid(row=i, column=2, sticky="w", padx=8)
-            detail = ttk.Label(extras, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
-            detail.grid(row=i + 1, column=1, columnspan=2, sticky="w", pady=(0, 6))
-            self.client_widgets[key] = (dot, state, detail)
-
-        bar = ttk.Frame(tab, padding=(0, 12, 0, 0))
-        bar.grid(row=1, column=0, sticky="we")
-        ttk.Button(bar, text="Open chat", style="Accent.TButton", command=lambda: self.open_url("open_webui")).pack(side="left")
-        self.start_btn = ttk.Button(bar, text="Start all", command=self.start_all)
-        self.start_btn.pack(side="left", padx=(8, 4))
-        self.stop_btn = ttk.Button(bar, text="Stop all", command=self.stop_all)
-        self.stop_btn.pack(side="left")
-        ttk.Button(bar, text="Logs", command=self.open_logs).pack(side="left", padx=4)
-        self.startup_var = tk.BooleanVar(value=startup.is_installed())
-        ttk.Checkbutton(bar, text="Start at login", style="Page.TCheckbutton", variable=self.startup_var,
-                        command=self._toggle_startup).pack(side="right")
+    def _build_storage(self, body) -> None:
+        """Storage: everything the stack keeps on disk, as a thin bar split into models, programs and data, a total
+        per drive, and the breakdown below (stacklib/storage.py). Measured in a thread, on opening and on Refresh."""
+        t = self.t
+        card = self._card(body, None, row=3, column=0, pady=(GAP_L, 0))
+        card.columnconfigure(0, weight=1)
+        head = ttk.Frame(card, style="Card.TFrame")
+        head.grid(row=0, column=0, sticky="we")
+        head.columnconfigure(0, weight=1)
+        ttk.Label(head, text="Storage", style="Card.Title.TLabel").grid(row=0, column=0, sticky="w")
+        self.storage_note = ttk.Label(head, text="", style="Card.Muted.TLabel")
+        self.storage_note.grid(row=0, column=1, sticky="e", padx=(0, GAP_S))
+        self.storage_btn = ttk.Button(head, text="Refresh", width=BTN_B, command=lambda: self.scan_storage(force=True))
+        self.storage_btn.grid(row=0, column=2, sticky="e")
+        self.storage_total = ttk.Label(card, text="Measuring what the stack keeps on disk...", style="Card.TLabel",
+                                       wraplength=820, justify="left")
+        self.storage_total.grid(row=1, column=0, sticky="w", pady=(GAP_S, 0))
+        self.storage_bar = tk.Canvas(card, height=STORAGE_BAR_PX, bg=t["card"], highlightthickness=0)
+        self.storage_bar.grid(row=2, column=0, sticky="we", pady=(GAP_S, GAP_S))
+        self.storage_bar.bind("<Configure>", lambda _e: self._draw_storage_bar())
+        legend = ttk.Frame(card, style="Card.TFrame")
+        legend.grid(row=3, column=0, sticky="w")
+        self.storage_legend: dict[str, ttk.Label] = {}
+        colors = STORAGE_COLORS[system_theme()]
+        for i, group in enumerate(storage.GROUPS):
+            tk.Label(legend, text="■", font=(FONT, 11), bg=t["card"], fg=colors[i]).pack(side="left", padx=(0 if i == 0 else GAP_L, GAP_XS))
+            self.storage_legend[group] = ttk.Label(legend, text=group, style="Card.TLabel")
+            self.storage_legend[group].pack(side="left")
+        cols = (("size", "Size", 80, "e"), ("note", "Note", 250, "w"), ("where", "Where", 210, "w"))
+        self.storage_tree = ttk.Treeview(card, columns=[c[0] for c in cols], show="tree headings", selectmode="browse",
+                                         height=4)
+        self.storage_tree.heading("#0", text="What", anchor="w")
+        self.storage_tree.column("#0", width=290, minwidth=200, anchor="w", stretch=True)
+        for key, title, width, anchor in cols:
+            self.storage_tree.heading(key, text=title, anchor=anchor)
+            self.storage_tree.column(key, width=width, minwidth=60, anchor=anchor, stretch=key == "where")
+        self.storage_tree.grid(row=4, column=0, sticky="we", pady=(GAP_M, 0))
+        self.storage_tree.tag_configure("group", font=(FONT, 10, "bold"))
+        self.storage_tree.tag_configure("off", foreground=t["muted"])
+        self.storage_tree.tag_configure("warn", foreground=t["warn"])
+        self.storage_tree.bind("<<TreeviewSelect>>", lambda _e: self._storage_selected())
+        self.storage_tree.bind("<Double-1>", lambda _e: self.open_storage_folder())
+        self.storage_tree.bind("<Return>", lambda _e: self.open_storage_folder())
+        self.storage_tree.bind("<<TreeviewOpen>>", lambda _e: self.root.after_idle(self._fit_storage_tree))
+        self.storage_tree.bind("<<TreeviewClose>>", lambda _e: self.root.after_idle(self._fit_storage_tree))
+        for seq in ("<MouseWheel>", "<Button-4>", "<Button-5>"):   # the page scrolls; the table shows every row
+            self.storage_tree.bind(seq, lambda e: (self._wheel(e), "break")[1])
+        foot = ttk.Frame(card, style="Card.TFrame")
+        foot.grid(row=5, column=0, sticky="we", pady=(GAP_S, 0))
+        foot.columnconfigure(1, weight=1)
+        self.storage_open_btn = ttk.Button(foot, text="Open folder", command=self.open_storage_folder, state="disabled")
+        self.storage_open_btn.grid(row=0, column=0, sticky="w")
+        self.storage_problems = ttk.Label(foot, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
+        self.storage_problems.grid(row=0, column=1, sticky="w", padx=(GAP_M, 0))
 
     def _window_built(self) -> bool:
         return self.window is not None and self.window.winfo_exists()
@@ -1009,8 +1199,8 @@ class TrayApp:
         self.head_sub.configure(text=f"{self.profile['name']}  ·  primary {m.get('primary')} @ {compact(m.get('primary_num_ctx', 0))} ctx  ·  {cloud}")
         self.startup_var.set(startup.is_installed())
         self._render_loaded()
-        self._render_clients()
         self._render_features()
+        self._render_storage()
         if any(r["state"] == "starting" for r in self.rows.values()):
             self._tick_soon()
 
@@ -1021,18 +1211,21 @@ class TrayApp:
             return
         t = self.t
         up = 0
-        for svc, (dot, state, toggle) in self.row_widgets.items():
+        for svc, w in self.row_widgets.items():
+            dot, state, toggle = w["dot"], w["state"], w["toggle"]
             if self._kokoro_in_app(svc):
                 level, text, _role = features.read_aloud_row(self.profile, self.dictation_health,
                                                              self.feature_status.get("read_aloud"))
                 dot.configure(fg=t[{"off": "muted"}.get(level, level)])
                 state.configure(text=text, style="Warn.TLabel" if level in ("warn", "bad") else "Card.Sub.TLabel")
+                w["role"].configure(text=self._role(svc))
+                toggle.grid_remove()   # read aloud starts and stops with voice typing
                 continue
             row = self.rows.get(svc, {})
             healthy = bool(row.get("healthy"))
             enabled = svc == "ollama" or svc in self.managed
             up += healthy and enabled
-            pid = row.get("pid")
+            pid = self.ollama_tree.get("pid") if svc == "ollama" else row.get("pid")
             pending = self.pending.get(svc)
             installed = features.service_installed(svc, self.feature_status)  # None until the first feature check
             if pending:
@@ -1041,7 +1234,7 @@ class TrayApp:
                 state.configure(text=verb + waited(time.monotonic() - pending[1]), style="Warn.TLabel")
             elif healthy:
                 dot.configure(fg=t["good"])
-                state.configure(text=f"Running{f'  (pid {pid})' if pid else ''}", style="Card.Sub.TLabel")
+                state.configure(text=f"Running{f'  ·  pid {pid}' if pid else ''}", style="Card.Sub.TLabel")
             elif row.get("state") == "starting":  # the process is alive but does not answer yet
                 created = self._created(pid)
                 dot.configure(fg=t["warn"])
@@ -1049,6 +1242,9 @@ class TrayApp:
             elif installed is False:  # its feature was not installed: Start would only fail
                 dot.configure(fg=t["warn"] if enabled else t["muted"])
                 state.configure(text="Not installed", style="Warn.TLabel" if enabled else "Card.Sub.TLabel")
+            elif svc == "ollama":
+                dot.configure(fg=t["bad"])
+                state.configure(text="Not running", style="Card.Sub.TLabel")
             elif enabled:
                 dot.configure(fg=t["bad"])
                 state.configure(text="Stopped", style="Card.Sub.TLabel")
@@ -1058,10 +1254,22 @@ class TrayApp:
             else:
                 dot.configure(fg=t["muted"])
                 state.configure(text="Off in settings", style="Card.Sub.TLabel")
-            stopping = bool(pending) and pending[0] == "stop"
-            startable = (enabled and installed is not False) or healthy or self._running(svc)
-            toggle.configure(text="Stop" if self._running(svc) else "Start",
-                             state="disabled" if self.busy or stopping or not startable else "normal")
+            if svc == "ollama":
+                # The Ollama app runs it, not the stack: Start only brings it back when it is down.
+                if pending or not healthy:
+                    toggle.configure(text="Start", state="disabled" if pending or self.busy else "normal")
+                    toggle.grid()
+                else:
+                    toggle.grid_remove()
+            else:
+                stopping = bool(pending) and pending[0] == "stop"
+                startable = (enabled and installed is not False) or healthy or self._running(svc)
+                if startable or self._running(svc):
+                    toggle.configure(text="Stop" if self._running(svc) else "Start",
+                                     state="disabled" if self.busy or stopping or self._setup_owns(svc) else "normal")
+                    toggle.grid()
+                else:
+                    toggle.grid_remove()   # off in Settings or not installed: nothing to start here
             problem = self.problems.get(svc)
             if problem and (problem[0] == "start") == healthy:
                 del self.problems[svc]  # it came up (or went down) after all
@@ -1074,6 +1282,7 @@ class TrayApp:
             else:
                 reason.grid_remove()
                 show.grid_remove()
+        self._render_runners()
         for attr, shown, name in (("dictation_btn", self.dictation_button, "mic"),
                                   ("refine_btn", self.refine_button, "pencil"),
                                   ("read_btn", self.read_button, "speaker")):
@@ -1089,10 +1298,78 @@ class TrayApp:
         activity = self._activity()
         busy = f"  ·  {activity}..." if activity else ""
         self.pill_text.configure(text=f"{up}/{total} running  ·  checked {self.checked_at or '...'}{busy}")
-        can_start = any(not self._running(s) and s not in self.pending for s in self.managed)
-        can_stop = any(self._running(s) and self.pending.get(s, ("",))[0] != "stop" for s in self.managed)
+        can_start = any(not self._running(s) and s not in self.pending and not self._setup_owns(s) for s in self.managed)
+        can_stop = any(self._running(s) and self.pending.get(s, ("",))[0] != "stop" and not self._setup_owns(s)
+                       for s in self.managed)
         self.start_btn.configure(state="normal" if can_start and not self.busy else "disabled")
         self.stop_btn.configure(state="normal" if can_stop and not self.busy else "disabled")
+
+    def _render_runners(self) -> None:
+        """One row per model Ollama has loaded, each in its own runner process: name, context, GPU memory, its pid."""
+        runners = self.ollama_tree.get("runners") or []
+        sizes = {str(m.get("name")): m for m in self.loaded}
+        for k, (names, name, detail, state, unload) in enumerate(self.runner_slots):
+            r = runners[k] if k < len(runners) else None
+            if r is None:
+                for w in (names, state, unload):
+                    w.grid_remove()
+                continue
+            m = sizes.get(r["model"], {})
+            ctx = int(m.get("context_length") or r.get("context") or 0)
+            vram = int(m.get("size_vram") or 0)
+            bits = ["model runner"] + ([f"{ctx // 1024}k context"] if ctx else []) + \
+                   ([f"{human_bytes(vram)} on the GPU"] if vram else [])
+            name.configure(text=r["model"])
+            detail.configure(text="  ·  ".join(bits))
+            leaving = r["model"] in self.unloading
+            state.configure(text="Unloading..." if leaving else f"Loaded  ·  pid {r['pid']}",
+                            style="Warn.TLabel" if leaving else "Card.Sub.TLabel")
+            unload.configure(state="disabled" if leaving or r["model"] not in sizes else "normal",
+                             command=lambda name=r["model"]: self.unload_model(name))
+            for w in (names, state, unload):
+                w.grid()
+
+    def unload_model(self, name: str) -> None:
+        """Unload one model from Ollama (keep_alive 0); the next request that needs it loads it again."""
+        if name in self.unloading:
+            return
+        self.unloading.add(name)
+        self._render_runners()
+
+        def run() -> None:
+            try:
+                ok = media.unload_model(self.profile, name)
+                print(f"[tray] unload {name}: {'done' if ok else 'Ollama did not answer'}")
+                self.refresh()
+            finally:
+                self.ui_queue.put(lambda: (self.unloading.discard(name), self._render_runners()))
+
+        threading.Thread(target=run, daemon=True, name="unload-model").start()
+
+    def start_ollama(self) -> None:
+        """Start the Ollama app when it is down (it is the Ollama app's server, not one of the stack's services)."""
+        if "ollama" in self.pending:
+            return
+        entry = ("start", time.monotonic())
+        self.pending["ollama"] = entry
+        self.problems.pop("ollama", None)
+        self._render_services()
+        self._tick_soon()
+        base = f"http://127.0.0.1:{self.profile['ports']['ollama']}"
+
+        def run() -> None:
+            problem = None
+            try:
+                ollama.restart(base)
+                if not ollama.version(base):
+                    problem = ("Ollama did not answer within 30 s. Start it from the Start menu.", ollama_log())
+            except Exception as e:  # noqa: BLE001 - shown on the row
+                problem = (f"Could not start Ollama: {e}", ollama_log())
+            checked = time.monotonic()
+            row = services.probe(self.profile, "ollama")
+            self.ui_queue.put(lambda: self._action_done("ollama", entry, row, checked, problem))
+
+        threading.Thread(target=run, daemon=True, name="start-ollama").start()
 
     def _level_look(self, level: str) -> tuple[str, str]:
         """(dot colour, state label style) for a status level: ok, warn, bad or off."""
@@ -1100,50 +1377,287 @@ class TrayApp:
         return ({"ok": t["good"], "warn": t["warn"], "bad": t["bad"]}.get(level, t["muted"]),
                 {"warn": "Warn.TLabel", "bad": "Bad.TLabel"}.get(level, "Card.Sub.TLabel"))
 
-    def _render_clients(self) -> None:
-        for key, (dot, state, detail) in self.client_widgets.items():
-            s = self.client_status.get(key)
-            if s:
-                fg, style = self._level_look(s.level)
-                dot.configure(fg=fg)
-                state.configure(text=s.state, style=style)
-                detail.configure(text=s.detail)
+    # ---------- Features: install, repair, remove ----------
+    def _setup_running(self) -> bool:
+        return self.setup_state.get("status") == "running"
+
+    def _setup_step(self) -> dict | None:
+        return next((s for s in self.setup_state.get("steps") or [] if s.get("status") == "running"), None)
+
+    def _feature_busy(self, fid: str) -> str:
+        """"Installing", "Repairing", "Removing", "Downloading" or "" for a feature the setup worker works on now."""
+        if fid in self.feature_starting:
+            return self.feature_starting[fid]
+        st = self.setup_state
+        if st.get("status") != "running" or fid not in (st.get("targets") or []):
+            return ""
+        sid = str((self._setup_step() or {}).get("id") or "")
+        return "Removing" if sid.startswith("remove") else "Downloading" if sid == "pull_more" else "Installing"
+
+    @staticmethod
+    def _feature_buttons(fid: str, s) -> tuple[bool, str]:
+        """(Repair shown in the first action column?, the second column's button: Install, Remove, or ""). A feature
+        no longer offered has Remove only, while something of it is on this PC."""
+        f = features.BY_ID[fid]
+        if s is None or s.unknown:
+            return False, ""
+        if not f.offered:
+            return False, "Remove" if features.present(fid, {fid: s}) else ""
+        repair = s.state in REPAIR_STATES
+        if f.required:
+            return repair, "" if s.installed or repair else "Install"
+        if s.installed or repair:
+            return repair, "Remove"
+        return False, "Install"
 
     def _render_features(self) -> None:
-        """The Features card, from the last feature check (once a minute) and OpenClaw's Use gateway state."""
+        """The Features card, from the last feature check (once a minute), the setup worker's state and OpenClaw's Use
+        gateway state."""
         if not self._window_built() or not hasattr(self, "feature_widgets"):
             return
+        t = self.t
         status = self.feature_status
-        for fid, (dot, load, state, detail, fix) in self.feature_widgets.items():
+        running = self._setup_running()
+        for fid, w in self.feature_widgets.items():
             f, s, e = features.BY_ID[fid], status.get(fid), self.feature_est.get(fid)
             if e:
-                load.configure(text=("Required  ·  " if f.required else "") + features.brief(e))
-            if fid == "openclaw" and self.openclaw_busy:
-                dot.configure(fg=self.t["warn"])
-                state.configure(text="Setting up...", style="Warn.TLabel")
+                w["load"].configure(text=("Required  ·  " if f.required else "") + features.brief(e))
+            listed = f.offered or (s is not None and features.present(fid, status)) or bool(self._feature_busy(fid))
+            for widget in w["block"]:   # a feature no longer offered shows only while something of it is here
+                widget.grid() if listed else widget.grid_remove()
+            if not listed:
+                w["main"].grid_remove()
+                continue
+            busy = self._feature_busy(fid)
+            if busy:
+                step = self._setup_step()
+                w["dot"].configure(fg=t["warn"])
+                w["state"].configure(text=f"{busy}...", style="Warn.TLabel")
+                w["detail"].configure(text=(step or {}).get("detail") or "Waiting for the setup worker...")
+            elif fid == "openclaw" and self.openclaw_busy:
+                w["dot"].configure(fg=t["warn"])
+                w["state"].configure(text="Setting up...", style="Warn.TLabel")
             elif s:
                 fg, style = self._level_look(s.level)
-                dot.configure(fg=fg)
-                state.configure(text=s.state, style=style)
-                detail.configure(text=(self.openclaw_result + "  " if fid == "openclaw" and self.openclaw_result else "")
-                                 + s.detail)
-            if fix is not None:
-                # Shown while OpenClaw is installed but not gateway-only; a failure keeps it up so the owner can retry.
-                if self.openclaw_busy or (s and s.installed and not s.on and s.state != "Not checked"):
-                    fix.configure(state="disabled" if self.openclaw_busy else "normal")
-                    fix.grid()
-                else:
-                    fix.grid_remove()
+                w["dot"].configure(fg=fg)
+                w["state"].configure(text=s.state, style=style)
+                extra = self.openclaw_result + "  " if fid == "openclaw" and self.openclaw_result else ""
+                w["detail"].configure(text=uninstall.short_text(extra + s.detail))
+            blocked = running or bool(self.busy) or bool(self.feature_starting)
+            show_repair, label = self._feature_buttons(fid, s)
+            # The first column, in a fixed order: Use gateway (OpenClaw installed but not gateway-only; a failure
+            # keeps it up so the owner can retry), then Repair.
+            fix, repair = w["fix"], w["repair"]
+            for btn in (fix, repair):
+                if btn is not None:
+                    btn.pack_forget()
+            if fix is not None and (self.openclaw_busy or (s and s.installed and not s.on and s.state != "Not checked")):
+                fix.configure(state="disabled" if self.openclaw_busy or blocked else "normal")
+                fix.pack(side="top", fill="x", pady=(0, GAP_XS))
+            if show_repair and not busy:
+                repair.configure(state="disabled" if blocked else "normal")
+                repair.pack(side="top", fill="x", pady=(0, GAP_XS))
+            if label and not busy:
+                w["main"].configure(text=label, state="disabled" if blocked else "normal")
+                w["main"].grid()
+            else:
+                w["main"].grid_remove()
+        self._render_models()
+        self._render_setup()
         missing = [features.BY_ID[fid].short for fid in features.not_installed(status)]
         if not status:
             note = "Checking which features are installed..."
-        elif missing:
-            note = (f"Not installed: {', '.join(missing)}. Add features opens the installer, which shows what each one "
-                    "takes on this PC; installed features stay as they are.")
+        elif running:
+            note = "One setup runs at a time: Install and Remove wait until this one finishes."
         else:
-            note = "Every feature is installed. The installer checks and repairs them; Settings turns them off."
+            note = ("Install and Remove use the folders the installer chose before; Open installer changes folders and "
+                    "options, and shows what each feature costs on this PC." if missing else
+                    "Every feature is installed. Remove takes one off again; Settings turns one off without removing it.")
         self.features_note.configure(text=f"{self.installer_note}  {note}" if self.installer_note else note)
-        self.add_features_btn.configure(text="Add features..." if missing or not status else "Open installer...")
+
+    def _render_models(self) -> None:
+        """The rows under Local models: every model in the catalog and any other Ollama has, with Download or Remove.
+        Rebuilt only when the list changes; buttons follow the setup worker on every render."""
+        w = self.feature_widgets.get("models")
+        if w is None:
+            return
+        rows = self.model_rows
+        shape = tuple((m.name, m.downloaded, m.use, round(m.size_gb, 1)) for m in rows)
+        card = self.features_card
+        if shape != self.model_shown:
+            for widget in self.model_widgets:
+                widget.destroy()
+            self.model_widgets, self.model_buttons = [], {}
+            for i, m in enumerate(rows):
+                r = w["base"] + 2 + i
+                names = ttk.Frame(card, style="Card.TFrame")
+                names.grid(row=r, column=1, sticky="nw", padx=(GAP_L, 0), pady=(GAP_S if i == 0 else GAP_XS, 0))
+                ttk.Label(names, text=m.name, style="Card.TLabel").pack(anchor="w")
+                ttk.Label(names, text=model_line(m), style="Card.Muted.TLabel").pack(anchor="w")
+                size = ttk.Label(card, text=f"{m.size_gb:.1f} GB" + ("" if m.downloaded else " download"),
+                                 style="Card.Sub.TLabel")
+                size.grid(row=r, column=2, sticky="nw", padx=GAP_M, pady=(GAP_S if i == 0 else GAP_XS, 0))
+                btn = ttk.Button(card, text="Remove" if m.downloaded else "Download", width=BTN_B,
+                                 command=lambda m=m: self.model_action(m))
+                btn.grid(row=r, column=4, sticky="ne", pady=(GAP_S if i == 0 else GAP_XS, 0))
+                self.model_widgets += [names, size, btn]
+                self.model_buttons[m.name] = (btn, m)
+            self.model_shown = shape
+        running = self._setup_running()
+        for btn, m in getattr(self, "model_buttons", {}).values():
+            blocked = running or self.busy or bool(self.feature_starting) or (m.downloaded and bool(m.use))
+            btn.configure(state="disabled" if blocked else "normal")
+
+    def _render_setup(self) -> None:
+        """The line under the features while the setup worker runs (or just ran): its step, and a measure."""
+        st = self.setup_state
+        status = st.get("status")
+        if not st or status not in ("running", "failed", "warnings", "interrupted") or not self.setup_watch:
+            self.setup_label.grid_remove()
+            self.setup_bar.stop()
+            self.setup_bar.grid_remove()
+            return
+        steps = st.get("steps") or []
+        if status == "running":
+            step = self._setup_step()
+            n = [s.get("id") for s in steps].index(step["id"]) + 1 if step else 0
+            text = (f"Setup, step {n} of {len(steps)}: {step['title']}" + (f": {step['detail']}" if step.get("detail") else "")
+                    if step else "Setup is starting...")
+            self.setup_label.configure(text=uninstall.short_text(text), style="Card.Sub.TLabel")
+            frac = step.get("fraction") if step else None
+            if frac is not None:
+                if str(self.setup_bar.cget("mode")) != "determinate":
+                    self.setup_bar.stop()
+                    self.setup_bar.configure(mode="determinate")
+                self.setup_bar["value"] = frac
+            elif str(self.setup_bar.cget("mode")) != "indeterminate":
+                self.setup_bar.configure(mode="indeterminate")
+                self.setup_bar.start(15)
+            self.setup_bar.grid()
+            if self.setup_job is None:   # follow the worker every second while it runs, not only every poll
+                self.setup_job = self.root.after(1000, self._setup_tick)
+        else:
+            bad = [s for s in steps if s.get("status") in ("failed", "warning")]
+            text = install.summary(st) + " " + " ".join(f"{s['title']}: {s.get('detail') or s['status']}." for s in bad[:3])
+            self.setup_label.configure(text=uninstall.short_text(text.strip()), style="Warn.TLabel")
+            self.setup_bar.stop()
+            self.setup_bar.grid_remove()
+        self.setup_label.grid()
+
+    def _setup_tick(self) -> None:
+        """Once a second while the setup worker runs: read its state file (a few hundred bytes) and redraw the
+        features. When it has ended, the poll handles the end at once (_check_setup)."""
+        self.setup_job = None
+        if not self._window_built():
+            return
+        self._set_setup_state(install.read_state(), time.monotonic())
+        self._render_features()
+        self._render_services()
+        if self.setup_state.get("status") != "running":
+            self.refresh_soon()
+
+    def feature_action(self, fid: str, repair: bool = False) -> None:
+        """Install, Repair or Remove on a feature row. Install and Repair run at once (setup only adds); Remove asks
+        first, with what it deletes and what it keeps."""
+        s = self.feature_status.get(fid)
+        show_repair, label = self._feature_buttons(fid, s)
+        if self._setup_running() or self.feature_starting or (repair and not show_repair) or (not repair and not label):
+            return
+        if label == "Remove" and not repair:
+            self._ask_remove(fid)
+            return
+        f = features.BY_ID[fid]
+        needs_folder = any(features.BY_ID[x].needs_media for x in features.with_requirements({fid})) \
+            and not (self.profile.get("media") or {}).get("root")
+        if needs_folder or (fid == "models" and s and s.state == "Not installed"):
+            self.installer_note = (f"{f.short[0].upper()}{f.short[1:]} needs a folder (or a program) the installer "
+                                   "asks for: opening it.")
+            self.open_installer()
+            return
+        self._start_setup(fid, "Repairing" if repair else "Installing",
+                          lambda: install.start_feature(self.profile, fid, self.feature_status))
+
+    def _start_setup(self, fid: str, verb: str, start) -> None:
+        """Run `start` (it spawns the setup worker) off the Tk thread; the row says so at once."""
+        self.feature_starting[fid] = verb
+        self.setup_watch = True
+        self._render_features()
+
+        def run() -> None:
+            note = ""
+            try:
+                pid = start()
+                print(f"[tray] setup worker pid {pid} for {fid} ({verb.lower()})")
+            except Exception as e:  # noqa: BLE001 - any failure: say so on the card, never leave the buttons locked
+                traceback.print_exc()
+                note = f"Could not start setup: {e}"
+            finally:
+                read_at, state = time.monotonic(), install.read_state()
+
+                def done() -> None:
+                    self._set_setup_state(state, read_at)
+                    self.feature_starting.pop(fid, None)
+                    self.installer_note = note
+                    self._render_features()
+                    self._render_services()
+                self.ui_queue.put(done)
+
+        threading.Thread(target=run, daemon=True, name=f"setup-{fid}").start()
+
+    def _ask_remove(self, fid: str) -> None:
+        """Measure what removing the feature deletes (seconds for a big folder), then ask."""
+        f = features.BY_ID[fid]
+        btn = self.feature_widgets[fid]["main"]
+        btn.configure(text="Checking...", state="disabled")
+
+        def run() -> None:
+            try:
+                plan = uninstall.plan(self.profile, fid, self.feature_status)
+            except Exception as e:  # noqa: BLE001 - shown in the dialog
+                plan = uninstall.Removal(fid, f.title, blocked=f"Could not check what it would delete: {e}")
+
+            def ask() -> None:
+                self._render_features()
+                if not self._window_built():
+                    return
+                if self.window.state() != "normal":   # closed (hidden) while the folders were measured
+                    self.window.deiconify()
+                    self.window.lift()
+                if plan.blocked:
+                    self._notice(f"{f.title} cannot be removed now", plan.blocked)
+                    return
+                size = f", about {uninstall.features_gb(plan.size_gb)}" if plan.size_gb >= 0.01 else ""
+                self._confirm(f"Remove {f.short}?", f"This removes {f.title} from this PC{size}.\n\n{plan.text()}",
+                              f"Remove {f.short}", lambda: self._start_setup(
+                                  fid, "Removing", lambda: install.start_removal(self.profile, [fid])),
+                              cancel="Keep it")
+            self.ui_queue.put(ask)
+
+        threading.Thread(target=run, daemon=True, name=f"plan-remove-{fid}").start()
+
+    def model_action(self, m) -> None:
+        """Download or Remove on a model row under Local models. Removing asks first; a download checks the space."""
+        if self._setup_running() or self.feature_starting:
+            return
+        if m.downloaded:
+            if m.use:
+                return
+            where = features.effective_model_store(self.profile)
+            self._confirm(f"Delete {m.name}?",
+                          f"This deletes the model {m.name} from {uninstall.short_path(where)} and frees about "
+                          f"{m.size_gb:.1f} GB. The stack does not use it now; you can download it again from this list.",
+                          "Delete model", lambda: self._start_setup(
+                              "models", "Removing", lambda: install.start_removal(self.profile, models=[m.name])),
+                          cancel="Keep it")
+            return
+        store = features.effective_model_store(self.profile)
+        free = storage.free_bytes(storage.drive_of(store))
+        if free is not None and free / 1e9 < m.size_gb + 1:
+            self._notice(f"Not enough space for {m.name}",
+                         f"{m.name} needs about {m.size_gb:.1f} GB, and {storage.drive_of(store)} has "
+                         f"{free / 1e9:.1f} GB free. Free some space, or move the models folder in the installer.")
+            return
+        self._start_setup("models", "Downloading", lambda: install.start_download(self.profile, [m.name]))
 
     def openclaw_use_gateway(self) -> None:
         """Onboard OpenClaw if needed and make the gateway its only model endpoint (clients.setup_openclaw). No
@@ -1166,10 +1680,214 @@ class TrayApp:
             def done() -> None:
                 self.openclaw_busy = False
                 self.openclaw_result = result if result.startswith("Use gateway failed") else ""
-                self._render_clients()
                 self._render_features()
             self._on_ui(done)
         threading.Thread(target=run, daemon=True, name="openclaw-setup").start()
+
+    # ---------- dialogs ----------
+    def _dialog(self, title: str) -> tuple[tk.Toplevel, ttk.Frame]:
+        """A small modal window over the status window, in the window's theme."""
+        t = self.t
+        d = tk.Toplevel(self.window, bg=t["card"])
+        d.withdraw()
+        d.title(title)
+        d.transient(self.window)
+        d.resizable(False, False)
+        dark_title_bar(d)
+        frame = ttk.Frame(d, style="Card.TFrame", padding=GAP_XL)
+        frame.pack(fill="both", expand=True)
+        return d, frame
+
+    def _show_dialog(self, d: tk.Toplevel, focus) -> None:
+        d.update_idletasks()
+        w = self.window
+        x = w.winfo_rootx() + max(0, (w.winfo_width() - d.winfo_reqwidth()) // 2)
+        y = w.winfo_rooty() + max(0, (w.winfo_height() - d.winfo_reqheight()) // 3)
+        d.geometry(f"+{x}+{y}")
+        d.deiconify()
+        d.lift()
+
+        def grab(tries: int = 10) -> None:
+            try:
+                d.grab_set()
+            except tk.TclError:   # not viewable yet: try again in a moment
+                if tries and d.winfo_exists():
+                    d.after(50, lambda: grab(tries - 1))
+        grab()
+        focus.focus_set()
+
+    def _confirm(self, title: str, body: str, action: str, on_yes, cancel: str = "Cancel", danger: bool = True) -> None:
+        """Ask before something costly or irreversible (ERR-03): the title names the object, the body says what
+        happens to what, the buttons are verbs, and the safe choice has the focus, so Enter or Esc keep things as
+        they are."""
+        d, frame = self._dialog(title)
+        ttk.Label(frame, text=title, style="Card.Title.TLabel").pack(anchor="w")
+        ttk.Label(frame, text=body, style="Card.TLabel", wraplength=520, justify="left").pack(anchor="w", pady=(GAP_S, GAP_L))
+        buttons = ttk.Frame(frame, style="Card.TFrame")
+        buttons.pack(fill="x")
+
+        def close() -> None:
+            d.grab_release()
+            d.destroy()
+
+        def yes() -> None:
+            close()
+            on_yes()
+
+        keep = ttk.Button(buttons, text=cancel, command=close)
+        keep.pack(side="right")
+        go = ttk.Button(buttons, text=action, style="Danger.TButton" if danger else "TButton", command=yes)
+        go.pack(side="right", padx=(0, GAP_S))
+        d.bind("<Escape>", lambda _e: close())
+        d.bind("<Return>", lambda e: e.widget.invoke() if isinstance(e.widget, ttk.Button) else close())
+        d.protocol("WM_DELETE_WINDOW", close)
+        self._show_dialog(d, keep)
+
+    def _notice(self, title: str, body: str) -> None:
+        """Say why something cannot be done now, with one button to close."""
+        d, frame = self._dialog(title)
+        ttk.Label(frame, text=title, style="Card.Title.TLabel").pack(anchor="w")
+        ttk.Label(frame, text=body, style="Card.TLabel", wraplength=520, justify="left").pack(anchor="w", pady=(GAP_S, GAP_L))
+
+        def close() -> None:
+            d.grab_release()
+            d.destroy()
+
+        ok = ttk.Button(frame, text="Close", command=close)
+        ok.pack(side="right")
+        d.bind("<Escape>", lambda _e: close())
+        d.bind("<Return>", lambda _e: close())
+        d.protocol("WM_DELETE_WINDOW", close)
+        self._show_dialog(d, ok)
+
+    # ---------- Storage ----------
+    def scan_storage(self, force: bool = False) -> None:
+        """Measure what the stack keeps on disk, in a thread (a few seconds: it walks every file). Without force,
+        only when the last scan is older than STORAGE_SECONDS."""
+        if self.storage_busy or not self._window_built():
+            return
+        if not force and self.storage and time.time() - self.storage.at < STORAGE_SECONDS:
+            return
+        self.storage_busy = True
+        self._render_storage()
+
+        def run() -> None:
+            try:
+                result, error = storage.scan(self.profile, self.feature_status or None), ""
+            except Exception as e:  # noqa: BLE001 - the card says what failed and keeps the last scan
+                traceback.print_exc()
+                result, error = None, str(e) or type(e).__name__
+
+            def done() -> None:
+                self.storage_busy = False
+                if result is not None:
+                    self.storage = result
+                self.storage_error = error
+                self._render_storage()
+            self.ui_queue.put(done)
+
+        threading.Thread(target=run, daemon=True, name="storage-scan").start()
+
+    def _render_storage(self) -> None:
+        if not self._window_built() or not hasattr(self, "storage_tree"):
+            return
+        s = self.storage
+        self.storage_btn.configure(state="disabled" if self.storage_busy else "normal")
+        if self.storage_busy:
+            self.storage_note.configure(text="Measuring...")
+        elif s:
+            self.storage_note.configure(text=f"Measured {datetime.fromtimestamp(s.at):%H:%M} in {s.took_s:.0f} s")
+        if s is None:
+            if self.storage_error:
+                self.storage_total.configure(text=f"Could not measure: {self.storage_error}", style="Warn.TLabel")
+            return
+        drives = []
+        for drive, used in s.by_drive().items():
+            free = storage.free_bytes(drive)
+            drives.append(f"{drive} {storage.size_text(used)}" + (f" ({storage.size_text(free)} free)" if free is not None else ""))
+        self.storage_total.configure(text=f"The stack keeps {storage.size_text(s.total())} on this PC: " + "  ·  ".join(drives),
+                                     style="Card.TLabel")
+        for group, label in self.storage_legend.items():
+            label.configure(text=f"{group} {storage.size_text(s.total(group))}")
+        tree = self.storage_tree
+        was_open = {i: tree.item(i, "open") for i in tree.get_children()}
+        sel = tree.selection()
+        keep = sel[0] if sel else None
+        tree.delete(*tree.get_children())
+        for group in storage.GROUPS:
+            entries = sorted((e for e in s.entries if e.group == group), key=lambda e: -e.bytes)
+            if not entries:
+                continue
+            tree.insert("", "end", iid=group, text=group, values=(storage.size_text(s.total(group)), "", ""),
+                        tags=("group",), open=was_open.get(group, True))
+            for i, e in enumerate(entries):
+                tree.insert(group, "end", iid=f"{group}:{i}", text=e.name,
+                            values=(storage.size_text(e.bytes) if e.bytes else "-", e.note, uninstall.short_path(e.path)),
+                            tags=(e.level,) if e.level in ("off", "warn") else ())
+        if keep and tree.exists(keep):
+            tree.selection_set(keep)
+        self._fit_storage_tree()
+        self._storage_selected()
+        problems = list(s.problems) + ([f"Last refresh failed: {self.storage_error}"] if self.storage_error else [])
+        self.storage_problems.configure(text=" ".join(problems) or "Double-click a row (or Open folder) to see it in "
+                                                                     "Explorer. Remove features or models above to free space.")
+        self._draw_storage_bar()
+
+    def _fit_storage_tree(self) -> None:
+        """Show every visible row: the page scrolls, not the table."""
+        tree = self.storage_tree
+        n = sum(1 + (len(tree.get_children(g)) if tree.item(g, "open") else 0) for g in tree.get_children())
+        tree.configure(height=max(3, n))
+
+    def _storage_path(self) -> Path | None:
+        sel = self.storage_tree.selection()
+        if not sel or ":" not in sel[0] or not self.storage:
+            return None
+        group, _, i = sel[0].partition(":")
+        entries = sorted((e for e in self.storage.entries if e.group == group), key=lambda e: -e.bytes)
+        p = Path(entries[int(i)].path)
+        return p.parent if p.is_file() else p
+
+    def _storage_selected(self) -> None:
+        self.storage_open_btn.configure(state="normal" if self._storage_path() else "disabled")
+
+    def open_storage_folder(self) -> None:
+        p = self._storage_path()
+        if p is not None and p.exists():
+            self.open_path(p)
+
+    def _draw_storage_bar(self) -> None:
+        """A thin bar split into models, programs and data (no text: the legend and the table carry the figures),
+        2 px card-coloured gaps between the parts, rounded outer ends."""
+        c = self.storage_bar
+        c.delete("all")
+        s = self.storage
+        total = s.total() if s else 0
+        w, h = max(c.winfo_width(), 100), STORAGE_BAR_PX
+        if not total:
+            self._pill(c, 0, 0, w, h, self.t["grid"], True, True)
+            return
+        colors = STORAGE_COLORS[system_theme()]
+        parts = [(s.total(g), colors[i]) for i, g in enumerate(storage.GROUPS) if s.total(g)]
+        x = 0.0
+        for i, (size, color) in enumerate(parts):
+            seg = w * size / total
+            x1 = w if i == len(parts) - 1 else x + seg - 2   # the 2 px gap in the card colour
+            if x1 - x >= 1:
+                self._pill(c, x, 0, x1, h, color, i == 0, i == len(parts) - 1)
+            x += seg
+
+    @staticmethod
+    def _pill(c: tk.Canvas, x0: float, y0: float, x1: float, y1: float, fill: str, round_left: bool, round_right: bool) -> None:
+        r = (y1 - y0) / 2
+        left = x0 + (r if round_left else 0)
+        right = x1 - (r if round_right else 0)
+        if right > left:
+            c.create_rectangle(left, y0, right, y1, fill=fill, width=0)
+        if round_left:
+            c.create_oval(x0, y0, x0 + 2 * r, y1, fill=fill, width=0)
+        if round_right:
+            c.create_oval(x1 - 2 * r, y0, x1, y1, fill=fill, width=0)
 
     def _render_loaded(self) -> None:
         for child in self.loaded_frame.winfo_children():
@@ -1468,7 +2186,7 @@ class TrayApp:
             y = top + plot_h * (1 - frac)
             c.create_line(left, y, w - right, y, fill=t["grid"] if frac else t["border"])
             label = f"{top_val * frac:.1f}" if top_val < 10 and top_val * frac != int(top_val * frac) else compact(top_val * frac)
-            c.create_text(left - 8, y, text=label, anchor="e", fill=t["muted"], font=(FONT, 8))
+            c.create_text(left - 8, y, text=label, anchor="e", fill=t["muted"], font=(FONT, 9))
         n = len(values)
         slot = plot_w / n
         bar_w = max(2.0, min(48.0, slot - 2))  # 2px surface gap between bars
@@ -1485,7 +2203,7 @@ class TrayApp:
             self.bars.append((left + i * slot, left + (i + 1) * slot, d, v))
             if i % step == 0 or i == n - 1:
                 label = "Today" if d == date.today().isoformat() else datetime.fromisoformat(d).strftime("%b %d").replace(" 0", " ")
-                c.create_text((x0 + x1) / 2, h - 8, text=label, fill=t["muted"], font=(FONT, 8))
+                c.create_text((x0 + x1) / 2, h - 8, text=label, fill=t["muted"], font=(FONT, 9))
 
     def _round_top_rect(self, x0, y0, x1, y1, r, fill) -> None:
         """Bar with 4px rounded top corners, square at the baseline."""
@@ -1516,74 +2234,76 @@ class TrayApp:
 
     # ---------- Settings tab ----------
     def _build_settings(self, tab: ttk.Frame) -> None:
+        """One card per group of settings, each with a line on what the group is for. In a card, each setting has its
+        name and help on the left and its control on the right, with a hairline between settings."""
         self.tabs.add(tab, text="Settings")
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(0, weight=1)
-        outer = tk.Frame(tab, bg=self.t["border"], padx=1, pady=1)
-        outer.grid(row=0, column=0, sticky="nsew")
-        holder, form = self._scroll_area(tab, outer, self.t["card"], style="Card.TFrame", padding=(18, 14))
-        holder.pack(fill="both", expand=True)
-        form.columnconfigure(1, weight=1)
-        self.form = form
+        holder, page = self._scroll_area(tab, tab, self.t["page"])
+        holder.grid(row=0, column=0, sticky="nsew")
+        page.columnconfigure(0, weight=1)
+        self.form = page
 
-        groups = [("Models", "models"), ("Tracing and services", ("observability", "services")),
-                  ("Voice typing", "dictation"), ("Refine selected text", "refine"), ("Read aloud", "read_aloud"),
-                  ("Blocked sites", "web_filter"), ("Ollama runtime", "ollama_env")]
         self.setting_vars: dict[str, tk.Variable | TextVar] = {}
         self.model_boxes: list[ttk.Combobox] = []
         self.changed_marks: dict[str, ttk.Label] = {}
         self.default_buttons: dict[str, tuple[ttk.Button, object]] = {}  # "text" settings: Restore default
         self.advanced_parts: list[dict] = []
-        row = 0
-        for title, sections in groups:
-            ttk.Label(form, text=title, style="Card.Title.TLabel").grid(row=row, column=0, columnspan=3, sticky="w", pady=(8 if row else 0, 4))
-            row += 1
-            if title == "Ollama runtime":
-                ttk.Label(form, text="Applying any of these restarts Ollama, which interrupts requests in progress.",
-                          style="Card.Muted.TLabel").grid(row=row, column=0, columnspan=3, sticky="w", pady=(0, 6))
-                row += 1
+        for i, (title, sections, about) in enumerate(SETTING_GROUPS):
+            card = self._card(page, None, row=i, column=0, pady=(0 if i == 0 else GAP_L, 0))
+            card.columnconfigure(0, weight=1)
+            card.columnconfigure(1, minsize=SETTING_CONTROL_W)   # the controls line up from card to card
+            ttk.Label(card, text=title, style="Card.Title.TLabel").grid(row=0, column=0, columnspan=3, sticky="w")
+            ttk.Label(card, text=about, style="Card.Muted.TLabel", wraplength=760, justify="left").grid(
+                row=1, column=0, columnspan=3, sticky="w", pady=(2, GAP_XS))
+            row = 2
             in_group = [s for s in cfg.SETTINGS if s.section in (sections if isinstance(sections, tuple) else (sections,))]
-            for s in in_group:
-                if not s.advanced:
-                    row = self._add_setting(form, s, row)
+            for n, s in enumerate(x for x in in_group if not x.advanced):
+                row = self._add_setting(card, s, row, line=n > 0)
             if any(s.advanced for s in in_group):
-                row = self._build_advanced(form, row, [s for s in in_group if s.advanced])
+                row = self._build_advanced(card, row, [s for s in in_group if s.advanced])
             if title == "Models":
-                self.cloud_label = ttk.Label(form, text="", style="Card.Muted.TLabel", wraplength=640, justify="left")
-                self.cloud_label.grid(row=row, column=0, columnspan=3, sticky="w", pady=(4, 0))
-                self.settings_warning = ttk.Label(form, text="", style="Warn.TLabel", wraplength=640, justify="left")
+                self.cloud_label = ttk.Label(card, text="", style="Card.Muted.TLabel", wraplength=760, justify="left")
+                self.cloud_label.grid(row=row, column=0, columnspan=3, sticky="w", pady=(GAP_S, 0))
+                self.settings_warning = ttk.Label(card, text="", style="Warn.TLabel", wraplength=760, justify="left")
                 self.settings_warning.grid(row=row + 1, column=0, columnspan=3, sticky="w")
                 row += 2
 
-        bar = ttk.Frame(tab, padding=(0, 12, 0, 0))
+        bar = ttk.Frame(tab, padding=(0, GAP_M, 0, 0))
         bar.grid(row=1, column=0, sticky="we")
         bar.columnconfigure(0, weight=1)
         self.pending_label = ttk.Label(bar, text="", style="HeadSub.TLabel", wraplength=520, justify="left")
         self.pending_label.grid(row=0, column=0, sticky="w")
-        ttk.Button(bar, text="Open profile file", command=lambda: self.open_path(prof.machine_file(self.profile["name"]))).grid(row=0, column=1, padx=4)
+        ttk.Button(bar, text="Open profile file", command=lambda: self.open_path(prof.machine_file(self.profile["name"]))).grid(row=0, column=1, padx=GAP_XS)
         self.revert_btn = ttk.Button(bar, text="Revert", command=self._load_settings)
-        self.revert_btn.grid(row=0, column=2, padx=4)
+        self.revert_btn.grid(row=0, column=2, padx=GAP_XS)
         self.apply_btn = ttk.Button(bar, text="Apply", style="Accent.TButton", command=self._apply_settings)
         self.apply_btn.grid(row=0, column=3)
         self.apply_log = ttk.Label(bar, text="", style="HeadSub.TLabel", wraplength=820, justify="left")
-        self.apply_log.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        self.apply_log.grid(row=1, column=0, columnspan=4, sticky="w", pady=(GAP_S, 0))
         self._load_settings()
 
-    def _add_setting(self, parent, s, row: int) -> int:
-        """One setting from grid row `row`: label, control and "changed" mark, then its help. Returns the next free row.
-        A "text" setting puts its help under the label and its box across the whole width below."""
+    def _add_setting(self, parent, s, row: int, line: bool = True) -> int:
+        """One setting from grid row `row`: a hairline above it (line), its name with the help under it on the left,
+        its control and the "changed" mark on the right. A "text" setting puts its box across the whole card under the
+        help. Returns the next free row."""
         sid = cfg.setting_id(s)
-        ttk.Label(parent, text=s.label, style="Card.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 24), pady=(6, 0))
-        mark = ttk.Label(parent, text="", style="Warn.TLabel")
-        mark.grid(row=row, column=2, sticky="e", pady=(6, 0))
+        if line:
+            self._line(parent, row, columns=3)
+        row += 1
+        text = ttk.Frame(parent, style="Card.TFrame")
+        text.grid(row=row, column=0, sticky="nw", padx=(0, GAP_XL), pady=(GAP_XS, GAP_XS))
+        ttk.Label(text, text=s.label, style="Card.TLabel").pack(anchor="w")
+        ttk.Label(text, text=s.help, style="Card.Muted.TLabel", wraplength=470 if s.kind != "text" else 760,
+                  justify="left").pack(anchor="w", pady=(2, 0))
+        mark = ttk.Label(parent, text="", style="Warn.TLabel", width=8)
+        mark.grid(row=row, column=2, sticky="nw", padx=(GAP_S, 0), pady=(GAP_XS + 3, 0))
         self.changed_marks[sid] = mark
         if s.kind == "text":
-            ttk.Label(parent, text=s.help, style="Card.Muted.TLabel", wraplength=640, justify="left").grid(
-                row=row + 1, column=0, columnspan=3, sticky="w", pady=(0, 4))
             var, box = self._text_box(parent, s)
-            box.grid(row=row + 2, column=0, columnspan=3, sticky="we", pady=(2, 6))
+            box.grid(row=row + 1, column=0, columnspan=3, sticky="we", pady=(GAP_S, GAP_XS))
             self.setting_vars[sid] = var
-            return row + 3
+            return row + 2
         if s.kind == "bool":
             var: tk.Variable = tk.BooleanVar()
             widget = ttk.Checkbutton(parent, variable=var, text="On", command=self._settings_dirty)
@@ -1600,11 +2320,9 @@ class TrayApp:
             widget.bind("<<ComboboxSelected>>", lambda _e: self._settings_dirty())
             if s.kind == "model":
                 self.model_boxes.append(widget)
-        widget.grid(row=row, column=1, sticky="w", pady=(6, 0))
+        widget.grid(row=row, column=1, sticky="nw", pady=(GAP_XS, 0))
         self.setting_vars[sid] = var
-        ttk.Label(parent, text=s.help, style="Card.Muted.TLabel", wraplength=560, justify="left").grid(
-            row=row + 1, column=0, columnspan=2, sticky="w", pady=(0, 4))
-        return row + 2
+        return row + 1
 
     def _text_box(self, parent, s) -> tuple["TextVar", ttk.Frame]:
         """A setting of several lines (voice typing's cleanup prompt): a text box, and Restore default under it."""
@@ -1644,13 +2362,15 @@ class TrayApp:
     def _build_advanced(self, form, row: int, items: list) -> int:
         """A group's rarely changed settings behind Show advanced, closed until opened. A note beside the button says
         when one of them is not the built-in value, so a closed part never hides a change from you."""
+        self._line(form, row, columns=3)
+        row += 1
         head = ttk.Frame(form, style="Card.TFrame")
-        head.grid(row=row, column=0, columnspan=3, sticky="w", pady=(10, 2))
+        head.grid(row=row, column=0, columnspan=3, sticky="w", pady=(GAP_XS, GAP_XS))
         part = {"items": items, "open": False, "button": ttk.Button(head),
                 "note": ttk.Label(head, text="", style="Card.Muted.TLabel")}
         part["button"].configure(command=lambda: self._toggle_advanced(part))
         part["button"].pack(side="left")
-        part["note"].pack(side="left", padx=(10, 0))
+        part["note"].pack(side="left", padx=(GAP_M, 0))
         before = set(form.grid_slaves())
         row += 1
         for s in items:
@@ -1742,14 +2462,15 @@ class TrayApp:
         self.apply_btn.configure(state=state)
         self.revert_btn.configure(state=state)
 
-    def _apply_settings(self) -> None:
+    def _apply_settings(self, confirmed: bool = False) -> None:
         edits = self._edits()
         todo = cfg.changed(self.profile, edits)
         if not todo:
             return
-        if any(s.effect == "ollama" for s in todo) and not messagebox.askokcancel(
-                "Restart Ollama?", "These changes restart Ollama. Requests in progress will fail and the next one reloads the model.",
-                parent=self.window):
+        if any(s.effect == "ollama" for s in todo) and not confirmed:
+            self._confirm("Restart Ollama?", "These changes restart Ollama. Requests in progress fail, and the next "
+                          "request loads its model again (up to a minute or two).", "Restart Ollama and apply",
+                          lambda: self._apply_settings(confirmed=True), cancel="Not now", danger=False)
             return
         lines: list[str] = []
 

@@ -198,7 +198,7 @@ def resolve_profile(name: str | None = None) -> dict:
         "claude_code": {**defaults["claude_code"], **(m.get("claude_code") or {})},
         "model_store": m.get("model_store") or "",
         "data_dir": data_dir,
-        "catalog": defaults.get("model_catalog", {}),
+        "catalog": _model_catalog(defaults),
         "media": resolve_media(defaults.get("media") or {}, m.get("media") or {}),
         "dictation": {**(defaults.get("dictation") or {}), **{k: v for k, v in (m.get("dictation") or {}).items() if v is not None}},
         "refine": resolve_refine(defaults.get("refine") or {}, m.get("refine") or {}),
@@ -207,6 +207,14 @@ def resolve_profile(name: str | None = None) -> dict:
                        **{k: v for k, v in (m.get("web_filter") or {}).items() if v is not None}},
         "agent_access": {"allowed_roots": list(((m.get("agent_access") or {}).get("allowed_roots")) or [])},
     }
+
+
+def _model_catalog(defaults: dict) -> dict:
+    """Ollama models the installer and Settings offer: config/installer.yaml `models`, plus any model_catalog entries
+    an older machines/_defaults.yaml still carries."""
+    from . import catalog
+
+    return {**(defaults.get("model_catalog") or {}), **catalog.models()}
 
 
 def resolve_refine(defaults: dict, machine: dict) -> dict:

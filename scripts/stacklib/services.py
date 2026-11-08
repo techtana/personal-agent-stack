@@ -11,7 +11,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import IS_WINDOWS, LITELLM_DIR, REPO, TRACES_DIR, env_value, info, load_dotenv, procname, warn, which
+from . import IS_WINDOWS, LITELLM_DIR, REPO, TRACES_DIR, catalog, env_value, info, load_dotenv, procname, warn, which
 from . import webfilter
 
 # Media services (ComfyUI, Kokoro) start before Open WebUI, which points its image and speech settings at them.
@@ -22,11 +22,8 @@ SERVICE_ORDER = ["phoenix", "litellm", "orchestrator", "comfyui", "kokoro", "ope
 # Python, not the per-script launcher uv writes to ~/.local/bin. Smart App Control judges each executable by
 # reputation: every launcher is a unique file (the script is embedded), so it can be blocked (phoenix.exe was,
 # WinError 4551), while the environment's python.exe is the same standard venv launcher everywhere and runs.
-TOOL_SCRIPTS = {
-    "phoenix": ("arize-phoenix", "phoenix"),
-    "litellm": ("litellm", "litellm"),
-    "open_webui": ("open-webui", "open-webui"),
-}
+TOOL_SCRIPTS = {svc: (catalog.tool(tid)["env"], catalog.tool(tid)["script"])
+                for svc, tid in (("phoenix", "phoenix"), ("litellm", "litellm"), ("open_webui", "open-webui"))}
 _uv_tool_dir_cache: list[Path | None] = []
 
 

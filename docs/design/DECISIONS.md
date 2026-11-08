@@ -9,6 +9,29 @@ entry stays and gets a "Done <date>" note.
 
 ## 2026-11-08
 
+- **Pending: the stack keeps no ties to closed-source apps; recordings for Claude Desktop are retired.** Asked by the
+  owner on seeing the tray: "this app should not have any dependency with non-open source software like claude".
+  - The recordings feature (a Whisper MCP server registered in Claude Desktop's config, 2026-11-05) served only
+    Claude Desktop. The installer no longer offers or sets it up, setup no longer re-registers it when the app moves,
+    the Services card has no row for it, and `stack.py whisper` keeps only `unregister`. The Features card and the
+    installer list it only while an old install is on this PC, with Remove (config entry out after a backup, files
+    and unshared Whisper models deleted).
+  - Kept on purpose: scripts/whisper_mcp.py, because the Usage tab still reads the records it wrote; the
+    Claude Code developer tooling around the repository (profile B, generated .claude/agents, the security audit
+    skill), which is not part of the installed app; asking the owner about it is an open item.
+  - Rejected: deleting the feature's code at once, which would have left the owner's current install (2.4 GB and the
+    config entry) with no way to take it off from the app.
+- **Pending: the installer's catalog, install and remove from the tray and the installer, the tray reworked.** Asked
+  by the owner: versions, URLs, model lists and defaults as config; install and uninstall features and models from
+  the installer or the tray's Features card; services named by module, two action columns, one row per model
+  process; a Storage card; Settings in cards. Details: memory/state.md open item 37.
+  - `config/installer.yaml` (stacklib/catalog.py) is the one place for what the installer downloads and offers;
+    machines/_defaults.yaml keeps settings and hardware classes. Rejected: a section in _defaults.yaml (it mixes
+    machine settings with what can be installed).
+  - Removal runs in the setup worker (stacklib/uninstall.py), so the installer window and the tray show the same
+    progress. It plans and checks every folder before it changes anything, turns the feature off through Settings'
+    code, deletes the program folder last, and keeps what the owner made. Rejected: removing from a tray thread (a
+    tray restart would cut it off halfway).
 - **Pending: read selected text aloud, an optional part of the voice typing app.** Asked by the owner: the same
   manner, settings and interface as voice typing and refine; buttons pencil, mic, speaker from left to right; a
   separate optional choice in the installer, handled gracefully when missing.
