@@ -1,6 +1,6 @@
 # Voice typing in every app
 
-Date: 2026-11-07. Status: built on branch `claude/whisper-speech-to-text-extension-99ad1f`; verified on SEKAIHOME
+Date: 2026-11-07. Status: built on branch `claude/whisper-speech-to-text-extension-99ad1f`; verified on the reference machine
 with recorded speech (details below); not yet used with a live microphone.
 Manual: [user-guide.md, "Voice typing"](../../manuals/user-guide.md#voice-typing). Code: `scripts/stacklib/dictation/`.
 
@@ -29,7 +29,7 @@ cleaned up (fillers removed, sentences shortened) the way Pixel's AI keyboard do
 | V13 | Privacy | Audio only in memory; logs carry lengths and timings, not words; the cached model loads with `local_files_only` | faster-whisper otherwise asks huggingface.co for a newer revision on every load. |
 | V14 | Language choice | All 100 codes faster-whisper 1.2.1 accepts (`_LANGUAGE_CODES`), with English names, in a type-to-search picker (substring over names, other names and codes) in the button's menu and the tray; English only for `.en` and distil models | A submenu or drop-down of 101 entries cannot be scanned. Added 2026-11-08 at the owner's request. |
 
-## Measurements (SEKAIHOME, 2026-11-07)
+## Measurements (the reference machine, 2026-11-07)
 
 - large-v3-turbo on the RTX 3060 with qwen3.5:9b resident: load 5-8 s from the USB SSD; 3.5 s of speech in 0.30 s,
   15 s in 0.6 s (warm); VRAM 7977 -> 9174 MiB (about 1.2 GB).

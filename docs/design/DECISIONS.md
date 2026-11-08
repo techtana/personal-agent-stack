@@ -9,6 +9,15 @@ entry stays and gets a "Done <date>" note.
 
 ## 2026-11-07
 
+- **Pending: machine profiles are local, and the repository names no person or computer.** Asked by the owner after
+  finding the computer name in the repository: values like that are set during install and never committed, on any
+  branch. `machines/<HOST>.yaml` is ignored by git and written by the installer; a linked worktree reads the main
+  checkout's profile; docs say "the reference machine", "the owner" and `<owner>`; the generated LiteLLM header drops
+  the machine name; `tests/test_personal_info.py` scans files git would publish for this machine's names and git email
+  (read at test time, plus a gitignored `.personal-terms`). Rejected: renaming the tracked profile to a neutral name
+  (the next machine's `doctor --write-profile` would publish its name again), a per-user config folder outside the
+  repository (bigger change; every doc names `machines/<HOST>.yaml`), and a denylist of names inside the repository
+  (it would publish them). Not covered: git history and GitHub's pull request pages.
 - **Pending: a weekly security and confidentiality audit of the Claude setup (`/claude-security-audit`).** Asked by
   the owner: regularly look for vulnerabilities and for new Claude settings that improve confidentiality and safety,
   and always replace the owner's identity with placeholders where it is written down. The skill reports on settings
@@ -23,7 +32,8 @@ entry stays and gets a "Done <date>" note.
   - Rejected:
     - editing settings automatically;
     - a cloud routine, which can't see local configuration;
-    - treating the computer name as identity to replace, since machine profiles are named after it (it is reported).
+    - treating the computer name as identity to replace, since machine profiles are named after it (it is reported). Superseded by
+      2026-11-07 (the entry above): machine profiles are local, and the repository names no computer.
 
 - **Pending: voice typing in every app, as the stack service `dictation`.** Asked by the owner: Whisper on this machine
   instead of typing into text fields, documents and Logseq, with a button, a hotkey, a stop after quiet, and text as
@@ -163,7 +173,7 @@ entry stays and gets a "Done <date>" note.
   cloud tiers**; the LiteLLM request log and admin UI replace them. Why: no stored prompt text; departments become
   gateway aliases and Open WebUI models. Still in the tree today. Source: SHARED-COMPONENTS section 5.
 - **Identity: Authentik on Plan A, Keycloak on Plan B.** Why: both give TOTP, passkeys, OIDC and invitations; Keycloak
-  measured at about 0.5 GB on SEKAIHOME. Rejected: Authentik on Windows; a custom invite service. Source:
+  measured at about 0.5 GB on the reference machine. Rejected: Authentik on Windows; a custom invite service. Source:
   SHARED-COMPONENTS S7, [PLAN-B](../plans/PLAN-B-LOCAL-LED.md) B-S0.
 - **The privacy gate uses small spaCy models and embedding exemplars for topics.** Why: `en_core_web_lg` alone is
   978 MB (target 900 MB); zero-shot topic models take 0.5-3 s per text (target 50 ms). Source: SHARED-COMPONENTS V4, G7.
@@ -179,8 +189,8 @@ entry stays and gets a "Done <date>" note.
   only when its header flag is on. Source: SHARED-COMPONENTS V3.
 - **Plan defaults:** external models off (G3); a sensitive verdict can never be overridden (G6); generalise/redact
   off (G4). Source: SHARED-COMPONENTS section 6.
-- **Plan A keys and TLS stay outside Google:** Trustee on SEKAIHOME as key broker (manual unlock when offline), TLS
-  ends inside the VM, no Secret Manager for app secrets. Host order: confidential CPU model server, then SEKAIHOME,
+- **Plan A keys and TLS stay outside Google:** Trustee on the reference machine as key broker (manual unlock when offline), TLS
+  ends inside the VM, no Secret Manager for app secrets. Host order: confidential CPU model server, then the reference machine,
   then an encrypted queue. Rejected: Google load balancer; a confidential GPU server by default (about $10+/h).
   Source: [PLAN-A](../plans/PLAN-A-CLOUD-LED.md) section 8.
 - **Plan B ships owner mode first; edge mode later uses a TCP relay that terminates nothing.** Source: PLAN-B B-D1.
@@ -210,7 +220,7 @@ entry stays and gets a "Done <date>" note.
   warns and the batch continues. Why: Smart App Control blocks each unsigned launcher. Source: `memory/lessons.md`.
 - **Identify a service by pid plus process start time.** Why: Windows reuses pids and many `uv.exe` run at once.
   Source: `memory/lessons.md`.
-- **SEKAIHOME's primary is `qwen3.5:9b` at 32k**; the 35B MoE stays the class default. Why: about 52 tok/s with
+- **The reference machine's primary is `qwen3.5:9b` at 32k**; the 35B MoE stays the class default. Why: about 52 tok/s with
   about 17 GB RAM free, against about 25 tok/s with about 1 GB free. Source: `memory/state.md` benchmarks.
 - **The MoE class sends `use_mmap: true` and Ollama gets a 15-minute load timeout.** Why: Ollama disables mmap on
   Windows+CUDA and the load timed out. Source: [ORCHESTRATOR-DESIGN.md](../ORCHESTRATOR-DESIGN.md) section 6.

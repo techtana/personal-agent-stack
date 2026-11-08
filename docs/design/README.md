@@ -11,6 +11,7 @@ today's code; it gets a dated "Outcome" note instead.
 
 | Date | Plan | Status |
 |---|---|---|
+| 2026-11-08 | [Voice typing that learns the owner's voice](plans/2026-11-08-dictation-learning.md) | proposed; nothing built; P1-P2 need no owner decision, P3-P5 wait on L1-L4 |
 | 2026-11-07 | [Voice typing in every app](plans/2026-11-07-voice-typing.md) | built on branch `claude/whisper-speech-to-text-extension-99ad1f`; tested with recorded speech, not yet with a live microphone |
 | 2026-11-01 | [Multimodal stack: vision, speech, images, video with audio, music, routing per message](plans/2026-11-01-multimodal-stack.md) | proposed; nothing built; next session starts from the [handoff](../HANDOFF-2026-11-01-multimodal.md) |
 | 2026-11-01 | [`/ux-rules` UX rule catalog skill](plans/2026-11-01-ux-rules-skill.md) | done 2026-11-01 ([PR #13](https://github.com/techtana/personal-agent-stack/pull/13)); move into `skills/` and second eval round open |

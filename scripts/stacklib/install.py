@@ -37,7 +37,7 @@ TOOLS = (
     ("phoenix", "arize-phoenix", ["arize-phoenix"], "3.12"),
     ("open-webui", "open-webui", ["open-webui"], "3.11"),
 )
-TOOLS_GB = 3.0      # the three environments measured 2.85 GB on SEKAIHOME (2026-11-01)
+TOOLS_GB = 3.0      # the three environments measured 2.85 GB on the reference machine (2026-11-01)
 LONG_PATH = 60      # Python packages with deep trees (spaCy, HF cache) break past 260 characters on Windows
 HF_TOOL = ("huggingface-hub", ["huggingface_hub"], "3.12")   # environment name, install spec, python: the `hf` command
 HF_CACHE_DIRS = ("hub", "xet", "datasets", "assets")       # what moves from an earlier HF_HOME; the token stays put
@@ -351,6 +351,7 @@ def ensure_env_file() -> dict[str, str]:
         ("LITELLM_MASTER_KEY", lambda: "sk-" + secrets.token_hex(24)),
         ("ORCHESTRATOR_BEARER", lambda: secrets.token_urlsafe(32)),
         ("WEBUI_SECRET_KEY", lambda: secrets.token_hex(32)),
+        ("DICTATION_BEARER", lambda: secrets.token_urlsafe(32)),  # Open WebUI's microphone -> voice typing
     )
     for k, gen in generators:
         if not env.get(k):

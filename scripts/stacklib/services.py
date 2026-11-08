@@ -216,6 +216,7 @@ def commands(profile: dict) -> dict[str, dict]:
                 "OPENAI_API_KEY": master,
                 "ENABLE_OLLAMA_API": "false",
                 **openwebui_embedding_env(profile, master),
+                **openwebui_stt_env(profile, env_value("DICTATION_BEARER", dotenv)),
                 "ENABLE_EVALUATION_ARENA_MODELS": "false",
                 **media.openwebui_env(profile),
             },
@@ -257,6 +258,39 @@ def openwebui_embedding_env(profile: dict, master: str) -> dict[str, str]:
                 "RAG_OLLAMA_BASE_URL": f"http://127.0.0.1:{profile['ports']['ollama']}"}
     return {"RAG_EMBEDDING_ENGINE": str(s["rag.embedding_engine"]), "RAG_EMBEDDING_MODEL": str(s["rag.embedding_model"]),
             "RAG_OPENAI_API_BASE_URL": str(s["rag.openai.api_base_url"]), "RAG_OPENAI_API_KEY": str(s["rag.openai.api_key"])}
+
+
+def openwebui_stt_settings(profile: dict, key: str | None = None) -> dict[str, object]:
+    """Open WebUI config rows that send the microphone in its chat box to voice typing's Whisper (large-v3-turbo on
+    the GPU, through the transcription endpoint on the dictation port), so each recording is counted in the tray's
+    Usage tab; {} unless voice typing runs here (services.dictation: native), which leaves Open WebUI's own engine
+    alone. The rows go together: engine "openai" with Open WebUI's default base URL would send recordings to
+    api.openai.com. The key is voice typing's own DICTATION_BEARER (dictation.api_key), never the gateway's master
+    key; {} without one. The model row only labels Open WebUI's admin page; voice typing transcribes with
+    dictation.model whatever it says."""
+    if (profile.get("services") or {}).get("dictation") != "native":
+        return {}
+    from . import dictation
+
+    key = dictation.api_key() if key is None else key
+    if not key:
+        return {}
+    return {"audio.stt.engine": "openai", "audio.stt.openai.api_base_url": dictation.transcription_url(profile),
+            "audio.stt.openai.api_key": key, "audio.stt.openai.api_request_format": "multipart",
+            "audio.stt.model": dictation.Config.from_profile(profile).model}
+
+
+def openwebui_stt_env(profile: dict, key: str) -> dict[str, str]:
+    """The same as environment variables, which Open WebUI reads only on a fresh install (`stack.py media provision`
+    writes the rows into an existing one). {} keeps Open WebUI's own Whisper."""
+    s = openwebui_stt_settings(profile, key)
+    if not s:
+        return {}
+    return {"AUDIO_STT_ENGINE": str(s["audio.stt.engine"]),
+            "AUDIO_STT_OPENAI_API_BASE_URL": str(s["audio.stt.openai.api_base_url"]),
+            "AUDIO_STT_OPENAI_API_KEY": str(s["audio.stt.openai.api_key"]),
+            "AUDIO_STT_OPENAI_API_REQUEST_FORMAT": str(s["audio.stt.openai.api_request_format"]),
+            "AUDIO_STT_MODEL": str(s["audio.stt.model"])}
 
 
 def _pid_file(profile: dict, svc: str) -> Path:

@@ -23,7 +23,8 @@ is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `
    `evals/*/promptfooconfig.yaml`, `evals/*/prompt.json`, `infrastructure/litellm/config.yaml`, `winget/*.winget`). Edit
    `agents/*.yaml`, `machines/*.yaml` or `agents/_common.md`, then run `uv run scripts/stack.py build`.
 2. Hardware-dependent values (models, context sizes, Ollama env, ports) come from `machines/<HOST>.yaml`
-   plus `machines/_defaults.yaml`. Adding a machine = `uv run scripts/stack.py doctor --write-profile` on it.
+   plus `machines/_defaults.yaml`. The profile is local: the installer (or `uv run scripts/stack.py doctor
+   --write-profile`) writes it on each machine, git ignores it, and a worktree uses the main checkout's. Never commit it.
 3. Never pass `temperature`, `top_p` or `top_k` to Anthropic models (HTTP 400 since 2026-10-21). Local
    deployments may set them under `local:` in the agent YAML.
 4. Secrets live only in `.env` (gitignored) and `.claude/settings.local.json`; `.mcp.json` reads
@@ -39,9 +40,13 @@ is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `
    privacy skills, hooks or MCP add-ons for clients outside the privacy boundary (Claude Code profile A, Claude
    Desktop): they can only advise and would imply enforcement that does not exist. The exception is an audit that
    only reports and says plainly what it cannot enforce (`/claude-security-audit`).
-10. Never write the owner's identity (email addresses, full name, account IDs, the OS user name in paths or prose) or
-   guesses about the owner into this public repository, commits, PRs, memory or requests. Use placeholders
-   (`you@example.com`, `Your Name`, `%USERPROFILE%` or `~`, `%USERNAME%`); `/claude-security-audit` finds and
+10. The repository is public. Never write the owner's identity (a person's name, an email address, account IDs, a
+   computer or account name, the OS user name in paths or prose), guesses about the owner or a secret into a
+   tracked file, a commit message, a pull request, memory or a request. Write "the owner" and "the reference
+   machine", and placeholders such as `machines/<HOST>.yaml`, `%USERPROFILE%` or `~` (or `C:\Users\<owner>`),
+   `%USERNAME%`, `you@example.com` and `Your Name`. Values that differ per machine are set during install and stay
+   in the local profile or `.env`. `tests/test_personal_info.py` fails when this machine's own names appear in a
+   file git would publish (add other private words to `.personal-terms`); `/claude-security-audit` finds and
    replaces leftovers.
 11. Everything the stack adds shows in the tray (`scripts/tray.py`). A new service gets its `LABELS` and `ROLES` row
    and a place in `services.SERVICE_ORDER`; a new profile section gets Settings entries (`stacklib/settings.py`) or

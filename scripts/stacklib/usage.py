@@ -67,11 +67,14 @@ SERVICE_MODELS: dict[str, str | None] = {
     "litellm": "the gateway: one trace line per chat or embedding request, local model or outside API",
     "phoenix": None,
     "orchestrator": "delegates to the departments through the gateway (agent-stack-orchestrator)",
-    "open_webui": "chat, titles, tags and document embeddings through the gateway; images through ComfyUI; "
-                  "its own speech-to-text is in UNCOUNTED",
+    "open_webui": "chat, titles, tags and document embeddings through the gateway; images through ComfyUI; the chat "
+                  "box's microphone through voice typing's Whisper (source voice-typing, client Open WebUI) once "
+                  "`stack.py media provision` points it there, else its own Whisper, in UNCOUNTED",
     "comfyui": "image jobs, collected from ComfyUI's history by the tray (source comfyui)",
     "kokoro": "text to speech, in UNCOUNTED until it records its calls",
-    "dictation": "Whisper calls (source voice-typing); the text clean-up through the gateway (agent-stack-voice-typing)",
+    "dictation": "Whisper calls (source voice-typing): its own, and Open WebUI's microphone through "
+                 "/v1/audio/transcriptions (client Open WebUI); the text clean-up through the gateway "
+                 "(agent-stack-voice-typing)",
 }
 
 
@@ -95,12 +98,31 @@ def _openwebui_setting(profile: dict, key: str) -> tuple[bool, str | None]:
     return True, None if row is None or row[0] is None else str(row[0]).strip('"')
 
 
-def _openwebui_own_stt(profile: dict) -> bool:
-    """Open WebUI's speech-to-text engine "" is its own faster-whisper model, which the gateway never sees."""
+def _openwebui_stt(profile: dict) -> str:
+    """Where the microphone in Open WebUI's chat box goes: "own" (engine "", a faster-whisper model inside Open WebUI
+    that records nothing), "stack" (voice typing's /v1/audio/transcriptions, counted under source voice-typing),
+    "other" (another engine, or an OpenAI-style URL that is not voice typing's), or "" while Open WebUI is off."""
     if (profile.get("services") or {}).get("open_webui") != "native":
+        return ""
+    _, engine = _openwebui_setting(profile, "audio.stt.engine")
+    if engine is None:  # no database yet: its first start takes services.openwebui_stt_env
+        return "stack" if (profile.get("services") or {}).get("dictation") == "native" else "own"
+    if not engine:
+        return "own"
+    if engine != "openai":
+        return "other"
+    _, url = _openwebui_setting(profile, "audio.stt.openai.api_base_url")
+    return "stack" if _is_voice_typing(profile, url) else "other"
+
+
+def _is_voice_typing(profile: dict, url: str | None) -> bool:
+    from .dictation import transcription_url
+
+    try:
+        ours = transcription_url(profile)
+    except (KeyError, TypeError, ValueError):
         return False
-    found, engine = _openwebui_setting(profile, "audio.stt.engine")
-    return not found or not engine  # a fresh install starts with its own Whisper
+    return (url or "").strip().rstrip("/").lower() in (ours, ours.replace("127.0.0.1", "localhost"))
 
 
 def _openwebui_direct_embeddings(profile: dict) -> bool:
@@ -124,7 +146,11 @@ class Gap:
 # Model use the tab cannot count (yet), shown under the table while it can happen.
 UNCOUNTED = (
     Gap("open_webui", "Open WebUI's own speech-to-text: the microphone in its chat box runs Whisper (base) inside "
-                      "Open WebUI", _openwebui_own_stt),
+                      "Open WebUI until `stack.py media provision` sends it to voice typing's Whisper (voice typing "
+                      "on)", lambda p: _openwebui_stt(p) == "own"),
+    Gap("open_webui", "Open WebUI's speech-to-text through an engine outside the stack (its Admin Settings > Audio); "
+                      "`stack.py media provision` sends it to voice typing's Whisper (voice typing on)",
+        lambda p: _openwebui_stt(p) == "other"),
     Gap("open_webui", "Open WebUI's document embeddings, which go straight to Ollama until `stack.py media provision` "
                       "sends them through the gateway (then restart Open WebUI)", _openwebui_direct_embeddings),
     Gap("kokoro", "Kokoro text to speech", lambda p: (p.get("services") or {}).get("kokoro") == "native"),
