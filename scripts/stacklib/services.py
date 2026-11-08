@@ -11,7 +11,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import IS_WINDOWS, LITELLM_DIR, REPO, TRACES_DIR, env_value, info, load_dotenv, warn, which
+from . import IS_WINDOWS, LITELLM_DIR, REPO, TRACES_DIR, env_value, info, load_dotenv, procname, warn, which
 
 # Media services (ComfyUI, Kokoro) start before Open WebUI, which points its image and speech settings at them.
 # Voice typing (dictation) comes last: it needs only the gateway, for its cleanup.
@@ -180,8 +180,11 @@ def commands(profile: dict) -> dict[str, dict]:
         "cwd": str(LITELLM_DIR),
         "env": litellm_env,
     }
+    # The project environment's own Python when it exists (`uv run` would add a uv.exe parent process and sync).
+    project_python = REPO / ".venv" / ("Scripts/python.exe" if IS_WINDOWS else "bin/python")
     out["orchestrator"] = {
-        "cmd": [which("uv") or "uv", "run", "--quiet", "python", "-m", "orchestrator.server"],
+        "cmd": [str(project_python), "-m", "orchestrator.server"] if project_python.exists()
+        else [which("uv") or "uv", "run", "--quiet", "python", "-m", "orchestrator.server"],
         "cwd": str(REPO),
         "env": {
             **base_env,
@@ -223,6 +226,11 @@ def commands(profile: dict) -> dict[str, dict]:
     spec = dictation.service_command(profile, base_env)
     if spec:
         out["dictation"] = spec
+    for svc, spec in out.items():
+        # Each service runs as PAS-<Name>.exe (procname); plain_cmd is the original, for a copy Windows refuses.
+        named = procname.named_cmd(spec["cmd"], svc)
+        if named != spec["cmd"]:
+            spec["plain_cmd"], spec["cmd"] = spec["cmd"], named
     return out
 
 
@@ -293,7 +301,8 @@ def _pid_file(profile: dict, svc: str) -> Path:
 # was started: pid files record the process start time (Windows creation FILETIME, Linux /proc starttime ticks, ps
 # lstart elsewhere), and a pid counts as the service only while a process with that pid AND that start time exists.
 # Paths alone are not enough: every `uv run` shares one uv.exe path, and on Linux a venv's python resolves to a shared
-# base interpreter. Pid files from before start times were recorded fall back to these launcher names.
+# base interpreter. Pid files from before start times were recorded fall back to these launcher names (and the
+# service's PAS-<Name>.exe, see procname).
 EXPECTED_IMAGES = {
     "phoenix": ("phoenix",),
     "litellm": ("litellm",),
@@ -303,6 +312,7 @@ EXPECTED_IMAGES = {
     "kokoro": ("python", "uv"),
     "dictation": ("pythonw", "python"),
 }
+EXPECTED_IMAGES = {svc: (*names, procname.NAMES[svc].lower()) for svc, names in EXPECTED_IMAGES.items()}
 # Services run with a console that has no window (CREATE_NO_WINDOW), not with no console at all (DETACHED_PROCESS).
 # Every recorded pid is a launcher: a venv's Scripts\python.exe or uv.exe, each of which starts the real interpreter as
 # a console child. A child of a DETACHED_PROCESS parent gets a brand-new visible console window, and closing that
@@ -429,6 +439,19 @@ def last_log_line(profile: dict, svc: str, since: int = 0) -> str:
     return lines[-1][:300] if lines else ""
 
 
+def spawn(c: dict, **kwargs) -> subprocess.Popen:
+    """Popen of a commands() entry. When Windows refuses its PAS-<Name>.exe (Smart App Control or an App Control
+    policy, WinError 4551), the copy is marked to be rebuilt signed and the original command runs instead."""
+    try:
+        return subprocess.Popen(c["cmd"], **kwargs)
+    except OSError as e:
+        if getattr(e, "winerror", None) != 4551 or not c.get("plain_cmd"):
+            raise
+        procname.mark_blocked(c["cmd"][0])
+        warn(f"Windows refused {Path(c['cmd'][0]).name}; starting {Path(c['plain_cmd'][0]).name} instead")
+        return subprocess.Popen(c["plain_cmd"], **kwargs)
+
+
 def start(profile: dict, services: list[str] | None = None) -> dict[str, str]:
     """Start the services that are not running. Returns, for each service it did not start, the reason in a sentence
     the tray window can show; the command line gets the same text."""
@@ -463,13 +486,13 @@ def start(profile: dict, services: list[str] | None = None) -> dict[str, str]:
             kwargs["start_new_session"] = True
         try:
             try:
-                proc = subprocess.Popen(c["cmd"], **kwargs)
+                proc = spawn(c, **kwargs)
             except PermissionError:
                 if not IS_WINDOWS:
                     raise
                 # The launching shell's job forbids breakaway; the service will stop when that shell's job closes.
                 kwargs["creationflags"] &= ~CREATE_BREAKAWAY_FROM_JOB
-                proc = subprocess.Popen(c["cmd"], **kwargs)
+                proc = spawn(c, **kwargs)
                 warn(f"{svc}: could not leave the launching shell's job; it stops when that shell exits")
         except OSError as e:
             if isinstance(e, FileNotFoundError):

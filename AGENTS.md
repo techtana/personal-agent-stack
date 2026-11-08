@@ -53,7 +53,8 @@ is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `
    a reason in `tests/test_tray_coverage.py`. Every model call is counted in the Usage tab: through the gateway with
    `User-Agent: agent-stack-<id>` (id in `stacklib/usage.py` COMPONENTS), or recorded with
    `stacklib.usage_log.record(<source>, ...)` (source in SOURCES); say in SERVICE_MODELS how a new service's model
-   use is counted, and put use that cannot be counted yet in UNCOUNTED. `tests/test_tray_coverage.py` checks this.
+   use is counted, and put use that cannot be counted yet in UNCOUNTED. `tests/test_tray_coverage.py` checks this. Every process the stack starts runs as `PAS-<Name>.exe`
+   (`stacklib/procname.py` NAMES; start Python through `procname.named`); `tests/test_procname.py` checks services.
 
 ## Everyday commands
 
