@@ -22,7 +22,7 @@ from pathlib import Path
 import yaml
 
 from . import ENV_FILE, IS_WINDOWS, REPO, info, load_dotenv, warn, which
-from . import agents_build, claude_env, clients, disks, litellm_build, media, ollama, services, winget_build
+from . import agents_build, claude_env, clients, disks, litellm_build, media, ollama, procname, services, winget_build
 from . import profile as prof
 
 INSTALL_DIR = REPO / ".run" / "install"   # under the repository, not data_dir: it must not move while setup runs
@@ -745,11 +745,12 @@ def worker_running() -> bool:
 
 
 def _console_python() -> str:
-    """python.exe next to pythonw.exe: the worker needs a (hidden) console that uv, winget and ollama can inherit."""
+    """python.exe next to pythonw.exe: the worker needs a (hidden) console that uv, winget and ollama can inherit.
+    It runs as PAS-Installer.exe (procname) when sys.executable is a venv launcher the copy can be made from."""
     exe = Path(sys.executable)
     if exe.name.lower() == "pythonw.exe" and (exe.parent / "python.exe").exists():
-        return str(exe.parent / "python.exe")
-    return str(exe)
+        exe = exe.parent / "python.exe"
+    return str(procname.named(exe, "installer"))
 
 
 def spawn_worker(plan: Plan) -> int:

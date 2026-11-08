@@ -84,9 +84,10 @@ if __name__ == "__main__" and (sys.stdout is None or not sys.stdout.isatty()):
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import psutil  # noqa: E402
 import pystray  # noqa: E402
-from PIL import Image, ImageDraw  # noqa: E402
+from PIL import ImageTk  # noqa: E402
 
-from stacklib import IS_WINDOWS, clients, media, ollama, process_metrics, profile as prof, services  # noqa: E402
+from stacklib import IS_WINDOWS, clients, media, ollama, process_metrics, procname, profile as prof, services  # noqa: E402
+from stacklib.icon import COLORS, make_icon  # noqa: E402
 from stacklib import settings as cfg  # noqa: E402
 from stacklib import comfy_usage, startup, usage, usage_log  # noqa: E402
 
@@ -117,7 +118,6 @@ ROLES = {
 }
 CLIENTS = (("huggingface", "Hugging Face cache", "model weights for Python tools"),
            ("openclaw", "OpenClaw", "agent client; private only through the gateway"))
-COLORS = {"ok": "#2e9d57", "warn": "#d99a1e", "bad": "#c94a3d", "idle": "#8a8f98"}  # tray icon fills
 FONT = "Segoe UI" if IS_WINDOWS else "TkDefaultFont"
 
 # Window palette (light / dark): neutral surfaces, one blue accent for data, status colours only for state.
@@ -147,14 +147,6 @@ def ui_links(p: dict) -> dict[str, str]:
         "litellm": f"http://127.0.0.1:{ports['litellm']}/ui",
         "comfyui": f"http://127.0.0.1:{ports['comfyui']}",
     }
-
-
-def make_icon(color: str) -> Image.Image:
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    d.ellipse((4, 4, 60, 60), fill=color)
-    d.polygon([(32, 14), (48, 50), (40, 50), (32, 30), (24, 50), (16, 50)], fill="white")  # stylised "A"
-    return img
 
 
 def system_theme() -> str:
@@ -223,8 +215,12 @@ class TrayApp:
         self.checked_at = ""
         self.ui_queue: queue.Queue = queue.Queue()
         self.stop_event = threading.Event()
+        procname.set_app_id("tray")  # the taskbar shows the window icon below, not Python's
         self.root = tk.Tk()
         self.root.withdraw()
+        # The tray's icon on every window (title bar, taskbar, Alt+Tab), kept referenced for Tk.
+        self.window_icons = [ImageTk.PhotoImage(make_icon(COLORS["ok"], n)) for n in (16, 32, 64)]
+        self.root.iconphoto(True, *self.window_icons)
         self.window: tk.Toplevel | None = None
         self.refresh_lock = threading.Lock()
         self.icon_color = COLORS["idle"]

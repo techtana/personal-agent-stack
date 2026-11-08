@@ -43,6 +43,17 @@ class Installer:
         self.root, self.tk, self.ttk, self.filedialog = root, tk, ttk, filedialog
         root.title("Agent Stack setup")
         root.minsize(680, 520)
+        try:  # the tray's icon on the window and taskbar (Pillow may be missing on a first run)
+            from PIL import ImageTk
+
+            from stacklib import procname
+            from stacklib.icon import BRAND, make_icon
+
+            procname.set_app_id("installer")
+            self.icons = [ImageTk.PhotoImage(make_icon(BRAND, n)) for n in (16, 32, 64)]
+            root.iconphoto(True, *self.icons)
+        except Exception:  # noqa: BLE001 - only cosmetics
+            pass
         self.body = None
         self.step_rows: dict[str, tuple] = {}
         if install.worker_running():

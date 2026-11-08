@@ -1,6 +1,6 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
+Updated: 2026-11-07 night (PAS-<Name> process names; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
 late evening (uv tools start through their own Python; pid files carry start times). Earlier the
 same day: default primary switched to qwen3.5:9b, and the MoE primary was benchmarked. First written 2026-10-24, when
 the on-prem session executed docs/HANDOFF-2026-10-24.md.
@@ -322,6 +322,21 @@ once across a session restart.
    - run `stack.py whisper install` and restart Claude Desktop (recordings);
    - run `stack.py media provision` and restart Open WebUI (embeddings);
    - restart the orchestrator (its name in the traces).
+26. Process names (2026-11-07, branch claude/pas-process-naming-bc10e1). Every process the stack starts runs as
+   `PAS-<Name>.exe` (stacklib/procname.py): Tray, Phoenix, LiteLLM, Orchestrator, ComfyUI, Kokoro, OpenWebUI,
+   VoiceTyping, Recordings (Whisper MCP), Supervisor (Task Scheduler), Installer (setup worker). Each is a copy of its
+   venv's base python(w).exe plus DLLs in `<venv>\pas\`, so one process replaces launcher + child interpreter. The
+   orchestrator now starts on .venv's Python directly, not `uv run`. Task Manager's Processes tab shows the file's
+   description and icon: copies get "PAS-<Name>" and the tray icon only where Smart App Control is off, because writing
+   them unsigns the file. Here (SAC on) copies stay byte-identical: Details tab, tasklist and the tray's Resources tab
+   show PAS names; the Processes tab still says "Python". A refused copy (WinError 4551) falls back to the plain command
+   and its folder stays signed-only. Tray and setup windows carry the tray icon; Start menu and login shortcuts are
+   rewritten to PAS-Tray.exe with that icon. Off switch: AGENT_STACK_PROCESS_NAMES=0 (AGENT_STACK_PROCESS_ICON=0 for
+   branding only). Verified: unit tests; a branded copy's resources read back (FileDescription, icon, unsigned; not
+   run here); a PAS-Orchestrator.exe from the worktree venv ran as one process under SAC and imported the orchestrator.
+   Not verified: the live tray and services as PAS processes, branded copies running on a machine without SAC, Linux
+   (unchanged). After merging: restart the tray through `stack.py tray` (rewrites the shortcuts), rerun
+   `stack.py whisper install` and `stack.py tasks install` if used, so their saved commands name the PAS copies.
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render
