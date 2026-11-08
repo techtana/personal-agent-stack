@@ -82,7 +82,7 @@ within a model", because less effort means fewer hidden reasoning tokens. Since 
 **Subscription is not API billing.** Claude Code on a Max plan shows dollar figures that are computed locally from token
 counts at list price. Anthropic's own docs, quoted in the research, say these are estimates and not relevant for billing
 on a subscription; only the Console usage page is authoritative. Label such figures "API-equivalent". This stack has no
-Anthropic API key on SEKAIHOME, so the gateway's cloud cost is zero; Claude Code on the subscription is outside the
+Anthropic API key on the reference machine, so the gateway's cloud cost is zero; Claude Code on the subscription is outside the
 gateway entirely (`memory/state.md`).
 
 ### 2.3 What running locally costs
@@ -275,7 +275,7 @@ Design history and reasons: [../design/DECISIONS.md](../design/DECISIONS.md) (th
   the trace store, custom per-token prices (zero for Ollama), and Anthropic's published Prometheus and Grafana compose
   for metrics. The repo implemented the gateway and the JSONL callback; Prometheus, Grafana and the GPU exporter were
   documented but not wired (`docs/ORCHESTRATOR-DESIGN.md` section 12).
-- **2026-10-25.** Benchmarks on SEKAIHOME: qwen3.5:9b decodes at 51 to 52 tok/s and uses about 5.9 GB of VRAM at 16k
+- **2026-10-25.** Benchmarks on the reference machine: qwen3.5:9b decodes at 51 to 52 tok/s and uses about 5.9 GB of VRAM at 16k
   context; the 35B mixture-of-experts model decodes at about 25 tok/s and leaves about 1 GB of RAM free. RAM pressure,
   not VRAM, was the limit (lessons 2026-10-25).
 - **2026-10-26.** Smart App Control blocked compiled modules inside the Phoenix tool environment (pyarrow, sqlalchemy,

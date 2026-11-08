@@ -24,7 +24,7 @@ STYLES = ("verbatim", "clean", "concise")
 INSERTS = ("paste", "type")
 DEVICES = ("auto", "cuda", "cpu")
 
-# Versions that loaded under Smart App Control on SEKAIHOME (2026-11-07; Python 3.14 from python.org). Smart App
+# Versions that loaded under Smart App Control on the reference machine (2026-11-07; Python 3.14 from python.org). Smart App
 # Control judges compiled modules file by file, so a new version is a new judgement: test it in a throwaway venv first.
 PACKAGES = (
     "faster-whisper==1.2.1",

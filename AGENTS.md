@@ -23,7 +23,8 @@ is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `
    `evals/*/promptfooconfig.yaml`, `evals/*/prompt.json`, `infrastructure/litellm/config.yaml`, `winget/*.winget`). Edit
    `agents/*.yaml`, `machines/*.yaml` or `agents/_common.md`, then run `uv run scripts/stack.py build`.
 2. Hardware-dependent values (models, context sizes, Ollama env, ports) come from `machines/<HOST>.yaml`
-   plus `machines/_defaults.yaml`. Adding a machine = `uv run scripts/stack.py doctor --write-profile` on it.
+   plus `machines/_defaults.yaml`. The profile is local: the installer (or `uv run scripts/stack.py doctor
+   --write-profile`) writes it on each machine, git ignores it, and a worktree uses the main checkout's. Never commit it.
 3. Never pass `temperature`, `top_p` or `top_k` to Anthropic models (HTTP 400 since 2026-10-21). Local
    deployments may set them under `local:` in the agent YAML.
 4. Secrets live only in `.env` (gitignored) and `.claude/settings.local.json`; `.mcp.json` reads
@@ -38,6 +39,11 @@ is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `
    models are explicit aliases behind the privacy gate (`docs/plans/SHARED-COMPONENTS.md` section 2). Do not build
    privacy skills, hooks or MCP add-ons for clients outside the privacy boundary (Claude Code profile A, Claude
    Desktop): they can only advise and would imply enforcement that does not exist.
+10. The repository is public. Never write a person's name, an email address, a computer or account name, a home
+   folder path or a secret into a tracked file, a commit message or a pull request. Write "the owner" and "the
+   reference machine", and placeholders such as `machines/<HOST>.yaml` and `C:\Users\<owner>`. Values that differ per
+   machine are set during install and stay in the local profile or `.env`. `tests/test_personal_info.py` fails when
+   this machine's own names appear in a file git would publish; add other private words to `.personal-terms`.
 
 ## Everyday commands
 
