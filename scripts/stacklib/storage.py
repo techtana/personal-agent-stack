@@ -126,7 +126,7 @@ def _image_models(profile: dict, out: list[Entry]) -> None:
 
 def _hf_models(profile: dict, out: list[Entry], status: dict) -> None:
     from .dictation.models import REPOS
-    from .dictation.speak import KOKORO_REPO, ZH_REPO
+    from .dictation.speak import KOKORO_REPO, TH_REPO, ZH_REPO
 
     home = uninstall.hf_home(profile)
     anchor = Path(home.anchor) if home.anchor else None
@@ -148,6 +148,8 @@ def _hf_models(profile: dict, out: list[Entry], status: dict) -> None:
             name, note, level = "Kokoro-82M", "read aloud's voices and weights", "ok"
         elif repo == ZH_REPO:
             name, note, level = "Kokoro-82M v1.1-zh", "read aloud's Mandarin voices (Remove on the Features card)", "ok"
+        elif repo == TH_REPO:
+            name, note, level = "Kokoro Thai", "read aloud's Thai voices (Remove on the Features card)", "ok"
         elif repo in whisper:
             model = whisper[repo]
             name = f"Whisper {model}"

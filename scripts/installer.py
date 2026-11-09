@@ -212,7 +212,7 @@ class Installer:
         except Exception:  # noqa: BLE001 - the list is optional; Ollama may be off and its folder unreadable
             unused = []
         self.model_vars = {m.name: (tk.BooleanVar(value=False), m) for m in unused}
-        # More read aloud voices (Piper, Mandarin): ticked when the profile names them or they are downloaded already.
+        # More read aloud voices (Piper, Mandarin, Thai), ticked when the profile names them or they are downloaded already.
         from stacklib import dictation
         from stacklib.dictation import speak
 
@@ -398,7 +398,7 @@ class Installer:
                     combo.pack(side="left", padx=(0, 14))
                     self.option_boxes[(opt.section, opt.key)] = combo
                     self.option_owner[str(combo)] = feat.id
-            if feat.id == "read_aloud" and self.pack_vars:   # more languages: Piper and Mandarin voices, three a line
+            if feat.id == "read_aloud" and self.pack_vars:   # more languages (Piper, Mandarin, Thai), three a line
                 from stacklib.dictation import speak
 
                 r += 1
@@ -410,7 +410,7 @@ class Installer:
                 variant = chosen.get() if chosen is not None else str(
                     (self.profile.get("read_aloud") or {}).get("kokoro") or "fp32")
                 for i, (key, var) in enumerate(self.pack_vars.items()):
-                    mark = ("†" if key == speak.ZH_PACK else
+                    mark = ("†" if key == speak.ZH_PACK else "‡" if key == speak.TH_PACK else
                             "*" if (speak.PIPER_VOICES.get(key) or {}).get("lessac_base") else "")
                     box = ttk.Checkbutton(grid, text=f"{speak.pack_title(key)} ({speak.pack_disk_mb(key, variant):.0f} "
                                                      f"MB){mark}", variable=var, command=self.packs_changed)
@@ -420,10 +420,14 @@ class Installer:
                 zh = (" † Kokoro v1.1-zh (Apache-2.0), trained on Mandarin recordings LongMaoData granted for it and on "
                       "synthetic English; it adds misaki (Mandarin text to phonemes) to read aloud's environment and "
                       "runs on the GPU or the CPU like Kokoro." if speak.ZH_PACK in self.pack_vars else "")
+                th = (" ‡ Kokoro Thai (Apache-2.0), trained on synthetic speech made with OmniVoice, a model licensed "
+                      "for non-commercial use only (CC BY-NC); it adds pythainlp and tltk (Thai text to phonemes) to read "
+                      "aloud's environment and runs on the GPU or the CPU like Kokoro."
+                      if speak.TH_PACK in self.pack_vars else "")
                 ttk.Label(table, style="Card.Muted.TLabel", wraplength=WRAP - 60, justify="left",
                           text="* Piper voices fine-tuned from a voice whose training data is licensed for research "
                                "only; their own recordings are open (CC0, CC BY or CC BY-SA). They run on this PC's "
-                               "CPU in read aloud's own environment." + zh).grid(
+                               "CPU in read aloud's own environment." + zh + th).grid(
                     row=r, column=0, columnspan=3 + len(COLUMNS), sticky="w", padx=(28, 0), pady=(0, 4))
             if feat.id == "models" and self.model_vars:   # downloaded models nothing uses: delete them?
                 r += 1

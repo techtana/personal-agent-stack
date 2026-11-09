@@ -465,11 +465,14 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
     if fid == "read_aloud":
         variant = str((profile.get("read_aloud") or {}).get("kokoro") or "fp32")
         name, disk, ram = KOKORO.get(variant, KOKORO["fp32"])
-        disk += _packs_gb(profile)   # the more voices chosen (Piper, Mandarin), on top of Kokoro
+        disk += _packs_gb(profile)   # the more voices chosen (Piper, Mandarin, Thai), on top of Kokoro
         zh = _zh_chosen(profile)     # the Mandarin voices load a second Kokoro model while they read
-        zh_ram = ZH_RAM.get(variant, ZH_RAM.get("fp32", 0.6)) if zh else 0.0
-        zh_note = (" With the Mandarin voices, a second model of the same size loads while they read Chinese."
-                   if zh else "")
+        th = _th_chosen(profile)     # and the Thai voices one more
+        zh_ram = (ZH_RAM.get(variant, ZH_RAM.get("fp32", 0.6)) if zh else 0.0) + (TH_RAM if th else 0.0)
+        zh_note = ((" With the Mandarin voices, a second model of the same size loads while they read Chinese."
+                    if zh else "")
+                   + (f" With the Thai voices, a Thai model ({TH_RAM:.1f} GB, or {TH_GPU_GB:.1f} GB on the GPU) loads "
+                      "while they read Thai." if th else ""))
         cached = _kokoro_cached(profile, variant)
         idle = float((profile.get("read_aloud") or {}).get("unload_after_min") or 0)
         if not name:
@@ -479,7 +482,7 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
         device = str((profile.get("read_aloud") or {}).get("device") or "auto")
         on_gpu = name == "fp32" and gpu and (device == "gpu" or (device == "auto" and hw.vram_gb > 0))
         if on_gpu:
-            vram = 1.0 + (ZH_GPU_GB if zh else 0.0)
+            vram = 1.0 + (ZH_GPU_GB if zh else 0.0) + (TH_GPU_GB if th else 0.0)
             return Estimate(
                 disk_gb=0.02 + disk + KOKORO_GPU_GB, todo_gb=(0.02 + KOKORO_GPU_GB) if cached else None, ram_gb=0.3,
                 vram_gb=vram, cpu_threads=1.0, gpu_short="~0.3 s per sentence",
@@ -542,11 +545,15 @@ KOKORO_GPU_GB = float(catalog.kokoro().get("gpu_libraries_gb") or 0.8)
 # The Mandarin voices' model (config/installer.yaml kokoro_zh): RAM GB per variant while loaded, GPU GB on the GPU.
 ZH_RAM = {name: float(v.get("ram_gb") or 0) for name, v in (catalog.section("kokoro_zh").get("variants") or {}).items()}
 ZH_GPU_GB = float(catalog.section("kokoro_zh").get("gpu_vram_gb") or 1.0)
+# The Thai voices' model (config/installer.yaml kokoro_th): one variant (fp32), whatever read_aloud.kokoro says.
+TH_RAM = max([float(v.get("ram_gb") or 0) for v in (catalog.section("kokoro_th").get("variants") or {}).values()]
+             or [0.8])
+TH_GPU_GB = float(catalog.section("kokoro_th").get("gpu_vram_gb") or 1.0)
 
 
 def _packs_gb(profile: dict) -> float:
-    """Disk taken by the voice sets read_aloud.packs names: Piper voices, and the Mandarin weights (read_aloud.kokoro's
-    variant), voices and misaki's packages."""
+    """Disk taken by the voice sets read_aloud.packs names: Piper voices, the Mandarin weights (read_aloud.kokoro's
+    variant), voices and misaki's packages, and the Thai model with pythainlp and tltk."""
     from .dictation.speak import PACK_KEYS, pack_disk_mb
 
     read = profile.get("read_aloud") or {}
@@ -558,6 +565,12 @@ def _zh_chosen(profile: dict) -> bool:
     from .dictation.speak import ZH_PACK
 
     return ZH_PACK in ((profile.get("read_aloud") or {}).get("packs") or [])
+
+
+def _th_chosen(profile: dict) -> bool:
+    from .dictation.speak import TH_PACK
+
+    return TH_PACK in ((profile.get("read_aloud") or {}).get("packs") or [])
 
 
 def _kokoro_cached(profile: dict, variant: str) -> bool:

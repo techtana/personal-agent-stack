@@ -193,14 +193,25 @@ def _kokoro_item(profile: dict) -> Item | None:
     return Item("Kokoro voices and weights", str(d), _gb(d), "hf") if d.exists() else None
 
 
+def _model_item(profile: dict, key: str) -> Item | None:
+    """A Kokoro set's folder in the Hugging Face cache (its weights and voices)."""
+    from .dictation.speak import model_pack
+
+    pack = model_pack(key)
+    if pack is None or not pack.repo:
+        return None
+    d = hf_repo_dir(profile, pack.repo)
+    return Item(f"{pack.what} ({pack.model})", str(d), _gb(d), "hf") if d.exists() else None
+
+
 def _zh_item(profile: dict) -> Item | None:
     """The Mandarin voices' folder in the Hugging Face cache (Kokoro v1.1-zh's weights, tokenizer and voices)."""
-    from .dictation.speak import ZH_REPO
+    return _model_item(profile, "kokoro-zh")
 
-    if not ZH_REPO:
-        return None
-    d = hf_repo_dir(profile, ZH_REPO)
-    return Item("Mandarin voices (Kokoro v1.1-zh)", str(d), _gb(d), "hf") if d.exists() else None
+
+def _th_item(profile: dict) -> Item | None:
+    """The Thai voices' folder in the Hugging Face cache (Kokoro Thai's graphs, vocabulary and styles)."""
+    return _model_item(profile, "kokoro-th")
 
 
 def _pack_items(profile: dict) -> list[Item]:
@@ -211,6 +222,8 @@ def _pack_items(profile: dict) -> list[Item]:
     folder = dictation.packs_dir(profile)
     items = []
     for key in dictation.installed_packs(profile):
+        if key not in PIPER_VOICES:
+            continue   # a Kokoro set: its folder is in the Hugging Face cache (_model_item)
         meta = PIPER_VOICES[key]
         names = " and ".join(str(who[0]) for who in (meta.get("speakers") or {}).values())
         items.append(Item(f"Read aloud voice {names} ({language_label(str(meta.get('language') or ''))})",
@@ -228,11 +241,11 @@ def _forget_packs(profile: dict) -> None:
 
 
 def remove_voice_pack(profile: dict, key: str, report=lambda *a: None) -> str:
-    """Delete one read aloud voice's folder and take it out of read_aloud.packs; for the Mandarin voices, their folder
-    in the Hugging Face cache and misaki's packages."""
+    """Delete one read aloud voice's folder and take it out of read_aloud.packs; for the Mandarin or Thai voices, their
+    folder in the Hugging Face cache and their front-end's packages."""
     from . import dictation
     from . import install
-    from .dictation.speak import ZH_PACK
+    from .dictation.speak import TH_PACK, ZH_PACK
 
     item = next((i for i in _pack_items(profile) if Path(i.path).name == key), None)
     have = list((profile.get("read_aloud") or {}).get("packs") or [])
@@ -240,6 +253,8 @@ def remove_voice_pack(profile: dict, key: str, report=lambda *a: None) -> str:
         install._set_packs(profile, [k for k in have if k != key])
     if key == ZH_PACK:
         return _remove_zh(profile, report)
+    if key == TH_PACK:
+        return _remove_th(profile, report)
     if item is None:
         return f"{key} was not downloaded"
     freed = _delete_item(item, profile, report)
@@ -249,26 +264,46 @@ def remove_voice_pack(profile: dict, key: str, report=lambda *a: None) -> str:
     return f"deleted {key} ({features_gb(freed / 1e9)})"
 
 
-def _remove_zh(profile: dict, report) -> str:
-    """The Mandarin voices: their folder in the Hugging Face cache is checked first, then misaki's packages come out
-    (a failure there leaves everything in place, so Remove can run again), then the folder goes."""
-    item = _zh_item(profile)
+def _remove_model(profile: dict, item: Item | None, remove_packages, what: str, report) -> str:
+    """A Kokoro set: its folder in the Hugging Face cache is checked first, then its packages come out (a failure there
+    leaves everything in place, so Remove can run again), then the folder goes."""
     if item is not None:
         _check(item, profile)
-    freed = _remove_zh_packages(profile, report)
+    freed = remove_packages(profile, report)
     if item is not None:
         freed += _delete_item(item, profile, report)
-    return f"deleted the Mandarin voices ({features_gb(freed / 1e9)})" if freed else "the Mandarin voices were not there"
+    return f"deleted the {what} ({features_gb(freed / 1e9)})" if freed else f"the {what} were not there"
+
+
+def _remove_zh(profile: dict, report) -> str:
+    return _remove_model(profile, _zh_item(profile), _remove_zh_packages, "Mandarin voices", report)
+
+
+def _remove_th(profile: dict, report) -> str:
+    return _remove_model(profile, _th_item(profile), _remove_th_packages, "Thai voices", report)
 
 
 def _remove_zh_packages(profile: dict, report) -> int:
-    """Take misaki and its dictionaries out of voice typing's environment, with the app stopped while files change
-    (Windows locks regex's compiled module once a Mandarin reading has loaded it), and started again after."""
+    """misaki and its dictionaries (Windows locks regex's compiled module once a Mandarin reading has loaded it)."""
+    from . import dictation
+
+    return _remove_env_packages(profile, dictation.zh_package_names(profile) if dictation.installed(profile) else [],
+                                "misaki's", report)
+
+
+def _remove_th_packages(profile: dict, report) -> int:
+    """pythainlp, tltk and tzdata."""
+    from . import dictation
+
+    return _remove_env_packages(profile, dictation.th_package_names(profile) if dictation.installed(profile) else [],
+                                "pythainlp's and tltk's", report)
+
+
+def _remove_env_packages(profile: dict, names: list[str], whose: str, report) -> int:
+    """Take these packages out of voice typing's environment, with the app stopped while files change, and started
+    again after; the bytes freed."""
     from . import dictation, services
 
-    if not dictation.installed(profile):
-        return 0
-    names = dictation.zh_package_names(profile)
     if not names:
         return 0
     python = dictation.env_python(profile)
@@ -276,7 +311,7 @@ def _remove_zh_packages(profile: dict, report) -> int:
     before = dir_bytes(site)
     was_up = bool(next((r for r in services.status(profile) if r["service"] == "dictation"), {}).get("healthy"))
     if was_up:
-        report("stopping voice typing while misaki's packages are taken out")
+        report(f"stopping voice typing while {whose} packages are taken out")
         services.stop(profile, ["dictation"])
     uv = which("uv") or "uv"
     report(f"uninstalling {', '.join(names)} from voice typing's environment")
@@ -384,7 +419,7 @@ def plan(profile: dict, fid: str, status: dict | None = None) -> Removal:
         r.deletes += _whisper_items(profile, fid, stays)
         if _installed(status, "read_aloud") or (profile.get("read_aloud") or {}).get("enabled"):
             r.also.append("read_aloud")
-            r.deletes += [i for i in (_kokoro_item(profile), _zh_item(profile)) if i]
+            r.deletes += [i for i in (_kokoro_item(profile), _zh_item(profile), _th_item(profile)) if i]
             r.deletes += _pack_items(profile)
         r.deletes.append(Item("The voice typing app's Python environment", str(venv), _gb(venv), "venv",
                               media=bool(m.get("root")) and _within(venv, Path(m["root"]))))
@@ -393,10 +428,11 @@ def plan(profile: dict, fid: str, status: dict | None = None) -> Removal:
     elif fid == "read_aloud":
         from . import dictation
 
-        r.deletes += [i for i in (_kokoro_item(profile), _zh_item(profile)) if i]
+        r.deletes += [i for i in (_kokoro_item(profile), _zh_item(profile), _th_item(profile)) if i]
         r.deletes += _pack_items(profile)
         misaki = ", misaki" if dictation.zh_package_names(profile) else ""
-        r.deletes.append(Item(f"espeak-ng, comtypes{misaki} and the GPU libraries in voice typing's environment",
+        thai = ", pythainlp, tltk" if dictation.th_package_names(profile) else ""
+        r.deletes.append(Item(f"espeak-ng, comtypes{misaki}{thai} and the GPU libraries in voice typing's environment",
                               kind="packages"))
         r.notes.append("Voice typing restarts (a few seconds).")
         r.keeps.append("Voice typing, and Windows' own voices.")
@@ -746,6 +782,7 @@ def _remove_read_aloud_packages(profile: dict, report) -> int:
     names = [p.split("==")[0] for p in dictation.READ_PACKAGES
              if (site / p.split("==")[0].replace("-", "_")).exists()]
     names += dictation.zh_package_names(profile)   # the Mandarin voices' misaki goes with read aloud
+    names += [n for n in dictation.th_package_names(profile) if n not in names]   # and the Thai voices' packages
     if gpu:
         names += [p.split("==")[0] for p in reversed(dictation.READ_GPU_PACKAGES)]   # cuDNN, then ONNX Runtime
     if not names:

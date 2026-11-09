@@ -55,6 +55,14 @@ READ_CHECK = ("import ctypes, comtypes, espeakng_loader, onnxruntime, numpy; "
 ZH_MODULES = ("misaki", "jieba", "pypinyin", "pypinyin_dict", "cn2an", "regex")
 ZH_CHECK = ("import regex._regex, jieba, pypinyin, pypinyin_dict, cn2an; from misaki import zh; "
             "g = zh.ZHG2P(version='1.1', unk='', en_callable=str); print('ok' if g('你好')[0] else 'empty')")
+# The Thai voices' packages (config/installer.yaml kokoro_th.packages: pythainlp, tltk and tzdata, pure Python). The
+# check loads tltk the way read aloud does (without its unused scikit-learn and pandas) and phonemizes a word.
+TH_MODULES = ("pythainlp", "tltk", "tzdata")
+TH_CHECK = ("from stacklib.dictation.thai.g2p import ThaiG2P, TONE_DIGIT_TO_TOKEN; "
+            "g = ThaiG2P(set('abcdefhijklmnopqrstuwxyzŋɔɛɤɯʔʰː ') | set(TONE_DIGIT_TO_TOKEN.values()), str); "
+            "print('ok' if g('สวัสดี') else 'empty')")
+# Each Kokoro set: (the modules that must be there, the check that they load, the name messages give its packages)
+PACK_SETUP = {"kokoro-zh": (ZH_MODULES, ZH_CHECK, "misaki"), "kokoro-th": (TH_MODULES, TH_CHECK, "pythainlp and tltk")}
 
 
 @dataclass
@@ -448,14 +456,17 @@ def packs_dir(profile: dict) -> Path:
 
 
 def installed_packs(profile: dict) -> list[str]:
-    """The voice sets on this PC, in the catalog's order: Piper voices in packs_dir, and the Mandarin voices
-    (kokoro-zh) when misaki is in voice typing's environment and their files are in the Hugging Face cache."""
-    from .speak import PACK_KEYS, PIPER_VOICES, ZH_PACK, pack_installed
+    """The voice sets on this PC, in the catalog's order: Piper voices in packs_dir, and the Mandarin (kokoro-zh) and
+    Thai (kokoro-th) voices when their packages are in voice typing's environment and their files in the Hugging Face
+    cache."""
+    from .speak import PACK_KEYS, PIPER_VOICES, TH_PACK, ZH_PACK, pack_installed
 
     folder = str(packs_dir(profile))
     have = {key for key in PIPER_VOICES if pack_installed(folder, key)}
     if ZH_PACK in PACK_KEYS and zh_installed(profile):
         have.add(ZH_PACK)
+    if TH_PACK in PACK_KEYS and th_installed(profile):
+        have.add(TH_PACK)
     return [key for key in PACK_KEYS if key in have]
 
 
@@ -471,9 +482,9 @@ def pack_url(key: str, name: str) -> str:
 
 
 def download_packs(profile: dict, keys, report=lambda *a: None) -> str:
-    """Download these voice sets: Piper voices into packs_dir (download_piper), the Mandarin voices with their packages
-    (install_zh). One already there is skipped. Reading never downloads."""
-    from .speak import PIPER_VOICES, ZH_PACK
+    """Download these voice sets: Piper voices into packs_dir (download_piper), the Mandarin and Thai voices with their
+    packages (install_zh, install_th). One already there is skipped. Reading never downloads."""
+    from .speak import PIPER_VOICES, TH_PACK, ZH_PACK
 
     keys = list(keys)
     notes = []
@@ -481,6 +492,8 @@ def download_packs(profile: dict, keys, report=lambda *a: None) -> str:
         notes.append(download_piper(profile, keys, report))
     if ZH_PACK in keys:
         notes.append(install_zh(profile, report))
+    if TH_PACK in keys:
+        notes.append(install_th(profile, report))
     return "; ".join(notes) or "voices: none chosen"
 
 
@@ -509,54 +522,61 @@ def download_piper(profile: dict, keys, report=lambda *a: None) -> str:
     return "voices: " + ("; ".join(parts) or "none chosen")
 
 
-# ---------------------------------------------------------------- Mandarin voices (Kokoro v1.1-zh, config/installer.yaml)
+# ---------------------------------------------------------------- Kokoro sets: Mandarin, Thai (config/installer.yaml)
 
-def zh_snapshot(profile: dict) -> Path:
-    """The pinned revision's folder of the Mandarin model in the Hugging Face cache."""
-    from .speak import ZH_REPO, ZH_REVISION
+def model_snapshot(profile: dict, key: str) -> Path:
+    """The pinned revision's folder of a Kokoro set's model in the Hugging Face cache."""
+    from .speak import model_pack
 
+    pack = model_pack(key)
     home = Path(hf_home(profile) or Path.home() / ".cache" / "huggingface")
-    return home / "hub" / f"models--{ZH_REPO.replace('/', '--')}" / "snapshots" / ZH_REVISION
+    return home / "hub" / f"models--{pack.repo.replace('/', '--')}" / "snapshots" / pack.revision
 
 
-def zh_variants(profile: dict) -> list[str]:
-    """The Mandarin weights downloaded with the tokenizer and every offered voice (fp32, int8)."""
-    from .speak import ZH_FILES, zh_files
+def model_variants(profile: dict, key: str) -> list[str]:
+    """A set's weights downloaded with every other file it needs (zh: fp32, int8; th: fp32)."""
+    from .speak import model_pack
 
-    snap = zh_snapshot(profile)
-    return [v for v in ZH_FILES if all((snap / name).is_file() for name in zh_files(v))] if snap.is_dir() else []
+    pack, snap = model_pack(key), model_snapshot(profile, key)
+    return [v for v in pack.weights if all((snap / name).is_file() for name in pack.files(v))] if snap.is_dir() else []
 
 
-def zh_packages_installed(profile: dict) -> bool:
+def model_packages_installed(profile: dict, key: str) -> bool:
     site = _site_packages(profile)
-    return all((site / module / "__init__.py").exists() for module in ZH_MODULES)
+    return all((site / module / "__init__.py").exists() for module in PACK_SETUP[key][0])
 
 
-def zh_installed(profile: dict) -> bool:
-    """The Mandarin voices can read: misaki and its dictionaries in voice typing's environment, a variant downloaded."""
-    return installed(profile) and zh_packages_installed(profile) and bool(zh_variants(profile))
+def model_installed(profile: dict, key: str) -> bool:
+    """A set can read: its front-end's packages in voice typing's environment, a variant downloaded."""
+    return installed(profile) and model_packages_installed(profile, key) and bool(model_variants(profile, key))
 
 
-def zh_package_names(profile: dict) -> list[str]:
-    """The Mandarin voices' packages present in voice typing's environment (what Remove uninstalls)."""
-    from .speak import ZH_PACKAGES
+def model_package_names(profile: dict, key: str) -> list[str]:
+    """A set's packages present in voice typing's environment (what its Remove uninstalls), less any another set that
+    is installed needs too."""
+    from .speak import MODEL_PACKS
 
     site = _site_packages(profile)
-    names = [p.split("==")[0] for p in ZH_PACKAGES]
-    return [n for n in names if (site / n.replace("-", "_")).exists()]
+    others = {p.split("==")[0] for k, pack in MODEL_PACKS.items() if k != key and model_packages_installed(profile, k)
+              for p in pack.packages}
+    names = [p.split("==")[0] for p in MODEL_PACKS[key].packages]
+    return [n for n in names if n not in others and (site / n.replace("-", "_")).exists()]
 
 
-def install_zh(profile: dict, report=lambda *a: None) -> str:
-    """The Mandarin voices: misaki[zh] and its dictionaries into voice typing's environment (the pinned versions in
-    config/installer.yaml kokoro_zh.packages, which loaded under Smart App Control), a check that they load, then the
-    weights read_aloud.kokoro names, the tokenizer and the voices into the Hugging Face cache (about 0.47 GB in all
-    with fp32). Voice typing keeps running: it finds the new voices within a minute."""
-    from .speak import ZH_PACKAGES, ZH_PACKAGES_MB
+def install_model(profile: dict, key: str, report=lambda *a: None) -> str:
+    """A Kokoro set: its front-end's packages into voice typing's environment (the pinned versions in
+    config/installer.yaml, which loaded under Smart App Control; with --no-deps where the catalog says so), a check
+    that they load, then the weights read_aloud.kokoro names, the shared files and the voices into the Hugging Face
+    cache. Voice typing keeps running: it finds the new voices within a minute."""
+    from .speak import Config as ReadConfig, model_pack
 
+    pack = model_pack(key)
+    _modules, check_code, front = PACK_SETUP[key]
     if not installed(profile):
-        raise RuntimeError("voice typing is not installed; the Mandarin voices run in its app (`stack.py dictate install`)")
+        raise RuntimeError(f"voice typing is not installed; the {pack.what} run in its app "
+                           "(`stack.py dictate install`)")
     if not (_site_packages(profile) / "espeakng_loader" / "__init__.py").exists():
-        raise RuntimeError("read aloud is not installed; the Mandarin voices are a part of it (`stack.py read-aloud "
+        raise RuntimeError(f"read aloud is not installed; the {pack.what} are a part of it (`stack.py read-aloud "
                            "install`)")
     uv = which("uv") or "uv"
     env = {**os.environ, "UV_LINK_MODE": "hardlink"}
@@ -565,30 +585,73 @@ def install_zh(profile: dict, report=lambda *a: None) -> str:
         env["UV_CACHE_DIR"] = m["uv_cache"]
     python = env_python(profile)
     notes = []
-    if zh_packages_installed(profile):
-        notes.append("misaki already installed")
+    if model_packages_installed(profile, key):
+        notes.append(f"{front} already installed")
     else:
-        report(f"installing misaki and its Mandarin dictionaries for read aloud (about {ZH_PACKAGES_MB} MB)")
-        _run([uv, "pip", "install", "--python", python, *ZH_PACKAGES], env=env)
-        notes.append("misaki installed")
-    report("checking that misaki loads (the first time takes a few seconds)")
-    check = subprocess.run([str(python), "-P", "-c", ZH_CHECK], capture_output=True, text=True, check=False,
+        report(f"installing {front} for read aloud's {pack.what} (about {pack.packages_mb} MB)")
+        _run([uv, "pip", "install", "--python", python, *(("--no-deps",) if pack.no_deps else ()), *pack.packages],
+             env=env)
+        notes.append(f"{front} installed")
+    report(f"checking that {front} {'load' if ' and ' in front else 'loads'} (the first time takes a few seconds)")
+    check = subprocess.run([str(python), "-P", "-c", check_code], capture_output=True, text=True, check=False,
                            env=app_env(profile, env))
     if check.returncode or "ok" not in check.stdout:
         tail = (check.stderr or check.stdout or "").strip().splitlines()[-1:] or ["no output"]
         refused = "Application Control" in tail[0] or "4551" in tail[0]
         hint = " Smart App Control refused a DLL; see CodeIntegrity event 3033 for the file." if refused else ""
-        raise RuntimeError(f"misaki's packages do not load ({tail[0]}).{hint}")
-    from .speak import ZH_FILES, Config as ReadConfig
-
-    chosen = ReadConfig.from_profile(profile).kokoro
-    if (chosen if chosen in ZH_FILES else "fp32") in zh_variants(profile):
-        notes.append("Mandarin voices already downloaded")
+        raise RuntimeError(f"{front}'s packages do not load ({tail[0]}).{hint}")
+    if pack.variant(ReadConfig.from_profile(profile).kokoro) in model_variants(profile, key):
+        notes.append(f"{pack.what} already downloaded")
     else:
-        report(f"downloading the Mandarin voices (Kokoro v1.1-zh) into {hf_home(profile) or 'the Hugging Face cache'}")
-        _run([python, "-P", "-m", "stacklib.dictation", "speak", "--download-zh"], env=app_env(profile, env))
-        notes.append("Mandarin voices downloaded")
-    return "Mandarin voices: " + "; ".join(notes)
+        report(f"downloading the {pack.what} ({pack.model}) into {hf_home(profile) or 'the Hugging Face cache'}")
+        flag = {"kokoro-zh": "--download-zh", "kokoro-th": "--download-th"}[key]
+        _run([python, "-P", "-m", "stacklib.dictation", "speak", flag], env=app_env(profile, env))
+        notes.append(f"{pack.what} downloaded")
+    return f"{pack.what}: " + "; ".join(notes)
+
+
+def zh_snapshot(profile: dict) -> Path:
+    return model_snapshot(profile, "kokoro-zh")
+
+
+def zh_variants(profile: dict) -> list[str]:
+    return model_variants(profile, "kokoro-zh")
+
+
+def zh_packages_installed(profile: dict) -> bool:
+    return model_packages_installed(profile, "kokoro-zh")
+
+
+def zh_installed(profile: dict) -> bool:
+    """The Mandarin voices can read: misaki and its dictionaries in voice typing's environment, a variant downloaded."""
+    return model_installed(profile, "kokoro-zh")
+
+
+def zh_package_names(profile: dict) -> list[str]:
+    return model_package_names(profile, "kokoro-zh")
+
+
+def install_zh(profile: dict, report=lambda *a: None) -> str:
+    """The Mandarin voices: misaki[zh] and its dictionaries, then Kokoro v1.1-zh (about 0.47 GB in all with fp32)."""
+    return install_model(profile, "kokoro-zh", report)
+
+
+def th_variants(profile: dict) -> list[str]:
+    return model_variants(profile, "kokoro-th")
+
+
+def th_installed(profile: dict) -> bool:
+    """The Thai voices can read: pythainlp and tltk in voice typing's environment, the model downloaded."""
+    return model_installed(profile, "kokoro-th")
+
+
+def th_package_names(profile: dict) -> list[str]:
+    return model_package_names(profile, "kokoro-th")
+
+
+def install_th(profile: dict, report=lambda *a: None) -> str:
+    """The Thai voices: pythainlp, tltk and tzdata (--no-deps), then Kokoro Thai (about 0.43 GB in all)."""
+    return install_model(profile, "kokoro-th", report)
 
 
 def save_setting(profile: dict, key: str, value, section: str = "dictation") -> None:

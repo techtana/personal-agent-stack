@@ -306,7 +306,7 @@ class Reader:
         try:
             audio = self._make(job, 0, voice, cfg)
         except Exception as e:  # noqa: BLE001 - SpeechError, or a COM or ONNX error
-            fallback = self._fallback(voice, voices) if voice.engine in ("kokoro", "kokoro-zh") else None
+            fallback = self._fallback(voice, voices) if speak.kokoro_engine(voice.engine) else None
             if fallback is None:
                 audio, failed = None, type(e).__name__
                 self.logline(f"[read] {voice.id}: {e}")

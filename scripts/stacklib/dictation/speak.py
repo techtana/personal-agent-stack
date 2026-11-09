@@ -10,6 +10,8 @@ Three kinds of voice speak, all on this machine; nothing leaves it:
     Portuguese and French), from config/installer.yaml voice_packs: optional downloads, run the same way.
   - Kokoro v1.1-zh for Mandarin Chinese (config/installer.yaml kokoro_zh), another optional download: a second Kokoro
     model whose phonemes come from misaki's Mandarin G2P instead of espeak-ng.
+  - Kokoro Thai (config/installer.yaml kokoro_th), one more: a Kokoro student fine-tuned on Thai, its phonemes from
+    pythainlp and tltk (stacklib/dictation/thai).
   - Windows' own voices (SAPI, and the OneCore voices Windows installs with a language's speech pack): instant and
     flatter, in every language that has one (Settings > Time & language > Speech > Add voices).
 
@@ -65,10 +67,10 @@ DEVICES = ("auto", "gpu", "cpu")   # where Kokoro runs: auto = the GPU when its 
 
 @dataclass(frozen=True)
 class Voice:
-    id: str           # af_heart, piper:<voice file>[:<speaker>], kokoro-zh:zf_001, or windows:<Name>
-    name: str         # what menus show: Heart, Zira, Voice 001
+    id: str           # af_heart, piper:<file>[:<speaker>], kokoro-zh:zf_001, kokoro-th:f_young_clear, windows:<Name>
+    name: str         # what menus show: Heart, Zira, Voice 001, "Young, clear"
     language: str     # en-us, en-gb, fr-fr, th-th, zh-cn, ...
-    engine: str       # kokoro | kokoro-zh | piper | windows
+    engine: str       # kokoro | kokoro-zh | kokoro-th | piper | windows
     gender: str = ""  # female | male | ""
     token: str = ""   # Windows: the SAPI token's registry path
 
@@ -185,94 +187,217 @@ def piper_ids(ps: str, id_map: dict[str, list[int]]) -> list[int]:
     return ids + list(id_map.get(PIPER_EOS, [2]))
 
 
-# ---------------------------------------------------------------- Mandarin: Kokoro v1.1-zh (installer catalog)
+# ---------------------------------------------------------------- Kokoro models for more languages (installer catalog)
 
-_ZH = catalog.section("kokoro_zh")
-ZH_PACK = str(_ZH.get("key") or "kokoro-zh")          # its entry in read_aloud.packs
-ZH_PREFIX = ZH_PACK + ":"                             # its voices: kokoro-zh:zf_001
-ZH_REPO = str(_ZH.get("repo") or "")
-ZH_REVISION = str(_ZH.get("revision") or "")
-ZH_LANGUAGE = str(_ZH.get("language") or "zh-cn")
-ZH_FILES = {name: str(v["file"]) for name, v in (_ZH.get("variants") or {}).items()}
-ZH_SIZES_MB = {name: int(v.get("download_mb") or 0) for name, v in (_ZH.get("variants") or {}).items()}
-ZH_SHA256 = {str(v["file"]): str(v.get("sha256") or "") for v in (_ZH.get("variants") or {}).values()}
-ZH_VOICE_MB = float(_ZH.get("voice_mb") or 0.52)
-ZH_VOICES: dict[str, str] = {str(k): str(v or "") for k, v in (_ZH.get("voices") or {}).items()}   # id -> gender
-ZH_PACKAGES = tuple(str(p) for p in _ZH.get("packages") or ())
-ZH_PACKAGES_MB = int(_ZH.get("packages_mb") or 0)
+@dataclass(frozen=True)
+class ModelPack:
+    """A Kokoro model for one more language with a text front-end of its own (config/installer.yaml kokoro_zh for
+    Mandarin, kokoro_th for Thai), downloaded on request like a Piper voice: its files go to the Hugging Face cache at
+    a pinned revision, its front-end's packages into voice typing's environment. Reading never downloads either."""
+    key: str                       # read_aloud.packs entry, its voices' engine and id prefix (kokoro-zh:zf_003)
+    model: str                     # 'Kokoro v1.1-zh': what confirmations and notes call the model
+    usage: str                     # 'kokoro-82m-v1.1-zh': its name in the Usage tab and on the GPU card
+    what: str                      # 'Mandarin voices'
+    front_end: str                 # 'misaki': its packages, as the notes name them
+    note: str                      # the tray's line under its row: what it is and the data it learned from
+    repo: str
+    revision: str
+    language: str
+    licence: str
+    weights: dict                  # variant -> its weight files
+    shared: tuple                  # files every variant needs
+    sizes_mb: dict                 # variant -> download MB (the voices' own files aside)
+    sha256: dict                   # file -> sha256 to check after a download ('' when not pinned)
+    voices: dict                   # id -> (gender, name, speaker number in a shared style file or -1)
+    voice_file: str                # each voice's own file ('voices/{id}.bin'), '' when the voices share one
+    voice_mb: float
+    packages: tuple
+    packages_mb: int
+    no_deps: bool                  # install the packages with --no-deps (their declared dependencies are not used)
+    ram_gb: dict                   # variant -> RAM GB while loaded and reading on the CPU
+    gpu_vram_gb: float
+
+    @property
+    def prefix(self) -> str:
+        return self.key + ":"
+
+    def variant(self, chosen: str) -> str:
+        """The variant to download for read_aloud.kokoro: the one named when the model has it, else its first."""
+        return chosen if chosen in self.weights else next(iter(self.weights), "")
+
+    def files(self, variant: str) -> list[str]:
+        """The files of this set in its pinned repository: one variant's weights, the shared files and the voices."""
+        return [*self.weights[variant], *self.shared,
+                *((self.voice_file.format(id=v) for v in self.voices) if self.voice_file else ())]
+
+    def size_mb(self, variant: str = "fp32") -> float:
+        mb = self.sizes_mb.get(variant, self.sizes_mb.get(next(iter(self.sizes_mb), ""), 0))
+        return mb + self.voice_mb * len(self.voices)
+
+
+def _model_pack(section: str, key: str, **text) -> ModelPack:
+    """A ModelPack from its catalog section. A variant names one weights file (file, sha256) or several (files:
+    name -> sha256); a voice is its gender, or [gender, name, speaker number]."""
+    raw = catalog.section(section)
+    weights, sizes, sha, ram = {}, {}, {}, {}
+    for name, v in (raw.get("variants") or {}).items():
+        files = dict(v.get("files") or {}) or ({str(v["file"]): v.get("sha256") or ""} if v.get("file") else {})
+        weights[str(name)] = tuple(str(f) for f in files)
+        sha.update({str(f): str(s or "") for f, s in files.items()})
+        sizes[str(name)] = float(v.get("download_mb") or 0)
+        ram[str(name)] = float(v.get("ram_gb") or 0)
+    shared = raw.get("shared") or {}
+    if isinstance(shared, dict):
+        sha.update({str(f): str(s or "") for f, s in shared.items()})
+    voices = {}
+    for vid, v in (raw.get("voices") or {}).items():
+        gender, name, speaker = (list(v) + ["", "", -1])[:3] if isinstance(v, (list, tuple)) else (v, "", -1)
+        vid = str(vid)
+        gender = str(gender or "") or {"f": "female", "m": "male"}.get(vid[1:2], "")   # zf_003: Mandarin's own
+        voices[vid] = (gender, str(name or f"Voice {vid.split('_', 1)[-1]}"), int(speaker))
+    return ModelPack(
+        key=str(raw.get("key") or key), repo=str(raw.get("repo") or ""), revision=str(raw.get("revision") or ""),
+        language=str(raw.get("language") or ""), licence=str(raw.get("licence") or "Apache-2.0"),
+        weights=weights, shared=tuple(str(f) for f in shared), sizes_mb=sizes, sha256=sha, voices=voices,
+        voice_file=str(text.pop("voice_file", "")), voice_mb=float(raw.get("voice_mb") or 0),
+        packages=tuple(str(p) for p in raw.get("packages") or ()), packages_mb=int(raw.get("packages_mb") or 0),
+        no_deps=bool(raw.get("no_deps")), ram_gb=ram, gpu_vram_gb=float(raw.get("gpu_vram_gb") or 1.0), **text)
+
+
+ZH = _model_pack("kokoro_zh", "kokoro-zh", model="Kokoro v1.1-zh", usage="kokoro-82m-v1.1-zh", what="Mandarin voices",
+                 front_end="misaki", voice_file="voices/{id}.bin",
+                 note="Kokoro v1.1-zh, {licence}  ·  data granted by LongMaoData, synthetic English  ·  adds misaki")
+TH = _model_pack("kokoro_th", "kokoro-th", model="Kokoro Thai", usage="wayu-kokoro-thai-v1", what="Thai voices",
+                 front_end="pythainlp and tltk",
+                 note="Kokoro Thai, {licence}  ·  synthetic speech from a CC-BY-NC model  ·  adds pythainlp and tltk")
+# The sets the catalog offers, in its order (a section without a repository or voices offers nothing)
+MODEL_PACKS: dict[str, ModelPack] = {p.key: p for p in (ZH, TH) if p.repo and p.voices}
+
+# Mandarin under the names the rest of read aloud used before Thai came
+ZH_PACK, ZH_PREFIX, ZH_REPO, ZH_REVISION, ZH_LANGUAGE = ZH.key, ZH.prefix, ZH.repo, ZH.revision, ZH.language or "zh-cn"
+ZH_FILES = {name: files[0] for name, files in ZH.weights.items()}
+ZH_SIZES_MB = {name: int(mb) for name, mb in ZH.sizes_mb.items()}
+ZH_SHA256 = {f: s for f, s in ZH.sha256.items() if f in ZH_FILES.values()}
+ZH_VOICE_MB = ZH.voice_mb or 0.52
+ZH_VOICES: dict[str, str] = {vid: v[0] for vid, v in ZH.voices.items()}   # id -> gender
+ZH_PACKAGES, ZH_PACKAGES_MB = ZH.packages, ZH.packages_mb
+TH_PACK, TH_PREFIX, TH_REPO, TH_REVISION = TH.key, TH.prefix, TH.repo, TH.revision
+TH_SPEAKERS = {vid: v[2] for vid, v in TH.voices.items()}   # id -> speaker number in onnx/styles.npz
+
+
+def model_pack(key: str) -> ModelPack | None:
+    return MODEL_PACKS.get(key)
+
+
+def pack_voice(vid: str) -> Voice | None:
+    """'kokoro-zh:zf_003' -> Voice 003 (Chinese, Mandarin, female), 'kokoro-th:f_young_clear' -> Young, clear (Thai,
+    female); None for an id no set offers."""
+    pack = next((p for p in MODEL_PACKS.values() if vid.startswith(p.prefix)), None)
+    short = vid[len(pack.prefix):] if pack else ""
+    if pack is None or short not in pack.voices:
+        return None
+    gender, name, _speaker = pack.voices[short]
+    return Voice(vid, name, pack.language, pack.key, gender)
+
+
+def model_voices(key: str) -> list[Voice]:
+    pack = MODEL_PACKS.get(key)
+    return [v for v in (pack_voice(pack.prefix + k) for k in pack.voices) if v] if pack else []
 
 
 def zh_voice(vid: str) -> Voice | None:
-    """'kokoro-zh:zf_001' -> Voice 001 (Chinese, Mandarin, female), or None for an id the catalog does not offer. The
-    Mandarin voices have numbers, not names."""
-    short = vid[len(ZH_PREFIX):] if vid.startswith(ZH_PREFIX) else ""
-    if short not in ZH_VOICES:
-        return None
-    gender = ZH_VOICES[short] or {"f": "female", "m": "male"}.get(short[1:2], "")
-    return Voice(vid, f"Voice {short.split('_', 1)[-1]}", ZH_LANGUAGE, "kokoro-zh", gender)
+    """A Mandarin voice by its id ('kokoro-zh:zf_003'), or None. The Mandarin voices have numbers, not names."""
+    return pack_voice(vid) if vid.startswith(ZH_PREFIX) else None
 
 
 def zh_voices() -> list[Voice]:
-    return [v for v in (zh_voice(ZH_PREFIX + k) for k in ZH_VOICES) if v]
+    return model_voices(ZH_PACK)
+
+
+def th_voice(vid: str) -> Voice | None:
+    """A Thai voice by its id ('kokoro-th:f_young_clear'), or None."""
+    return pack_voice(vid) if vid.startswith(TH_PREFIX) else None
+
+
+def th_voices() -> list[Voice]:
+    return model_voices(TH_PACK)
 
 
 def zh_files(variant: str) -> list[str]:
     """The files of the Mandarin set in its pinned repository: the weights of one variant, the tokenizer (its
     vocabulary differs from Kokoro v1.0's) and the voices offered."""
-    return [ZH_FILES[variant], "tokenizer.json", *(f"voices/{v}.bin" for v in ZH_VOICES)]
+    return ZH.files(variant)
+
+
+def th_files(variant: str = "fp32") -> list[str]:
+    """The Thai set's files: the three graphs, the vocabulary, the harmonic source's weights, the voices' styles."""
+    return TH.files(variant)
+
+
+def model_variant(key: str, chosen: str, have) -> str:
+    """The weights of a set to load: read_aloud.kokoro's when they are downloaded, else another variant that is, else
+    ''."""
+    have, pack = set(have), MODEL_PACKS.get(key)
+    return chosen if chosen in have else next((v for v in (pack.weights if pack else ()) if v in have), "")
 
 
 def zh_variant(chosen: str, have) -> str:
-    """The Mandarin weights to load: read_aloud.kokoro's when they are downloaded, else the other variant that is,
-    else ''."""
-    have = set(have)
-    return chosen if chosen in have else next((v for v in ZH_FILES if v in have), "")
+    return model_variant(ZH_PACK, chosen, have)
 
 
 def known_voice(vid: str) -> Voice | None:
-    """A Kokoro voice (English and the other espeak-ng languages, or Mandarin) by its id, installed or not."""
-    return kokoro_voice(vid) or zh_voice(vid)
+    """A Kokoro voice (English and the other espeak-ng languages, Mandarin or Thai) by its id, installed or not."""
+    return kokoro_voice(vid) or pack_voice(vid)
 
 
-if ZH_VOICES:
-    DEFAULT_FOR_LANGUAGE["zh"] = ZH_PREFIX + next(iter(ZH_VOICES))   # the catalog lists the best voice first
+def kokoro_engine(engine: str) -> bool:
+    """A Kokoro model reads with this engine (Kokoro v1.0 or a set's own model), not Piper or Windows."""
+    return engine == "kokoro" or engine in MODEL_PACKS
 
 
-# ---------------------------------------------------------------- voice sets to download (Piper voices and Mandarin)
+for _pack in MODEL_PACKS.values():   # the catalog lists each set's best voice first
+    DEFAULT_FOR_LANGUAGE[family(_pack.language)] = _pack.prefix + next(iter(_pack.voices))
 
-PACK_KEYS: tuple[str, ...] = (*PIPER_VOICES, *((ZH_PACK,) if ZH_REPO and ZH_VOICES else ()))
+
+# ---------------------------------------------------------------- voice sets to download (Piper voices, Kokoro models)
+
+PACK_KEYS: tuple[str, ...] = (*PIPER_VOICES, *MODEL_PACKS)
 
 
 def pack_language(key: str) -> str:
-    return ZH_LANGUAGE if key == ZH_PACK else str((PIPER_VOICES.get(key) or {}).get("language") or "")
+    pack = MODEL_PACKS.get(key)
+    return pack.language if pack else str((PIPER_VOICES.get(key) or {}).get("language") or "")
 
 
 def pack_size_mb(key: str, variant: str = "fp32") -> float:
-    """Download size: a Piper voice's files, or the Mandarin weights (read_aloud.kokoro's variant) and voices."""
-    if key == ZH_PACK:
-        return ZH_SIZES_MB.get(variant, ZH_SIZES_MB.get("fp32", 0)) + ZH_VOICE_MB * len(ZH_VOICES)
+    """Download size: a Piper voice's files, or a Kokoro model's weights (read_aloud.kokoro's variant) and voices."""
+    pack = MODEL_PACKS.get(key)
+    if pack:
+        return pack.size_mb(variant)
     return float((PIPER_VOICES.get(key) or {}).get("size_mb") or 0)
 
 
 def pack_disk_mb(key: str, variant: str = "fp32") -> float:
-    """Disk a voice set takes: its download, and for the Mandarin voices misaki's packages too."""
-    return pack_size_mb(key, variant) + (ZH_PACKAGES_MB if key == ZH_PACK else 0)
+    """Disk a voice set takes: its download, and for a Kokoro model its front-end's packages too."""
+    pack = MODEL_PACKS.get(key)
+    return pack_size_mb(key, variant) + (pack.packages_mb if pack else 0)
 
 
 def pack_title(key: str) -> str:
-    """'German: Thorsten', 'Chinese, Mandarin: 8 Kokoro voices'."""
+    """'German: Thorsten', 'Chinese, Mandarin: 8 Kokoro voices', 'Thai: 12 Kokoro voices'."""
     lang = language_label(pack_language(key))
-    if key == ZH_PACK:
-        return f"{lang}: {len(ZH_VOICES)} Kokoro voices"
+    pack = MODEL_PACKS.get(key)
+    if pack:
+        return f"{lang}: {len(pack.voices)} Kokoro voices"
     who = " and ".join(str(x[0]) for x in ((PIPER_VOICES.get(key) or {}).get("speakers") or {}).values())
     return f"{lang}: {who}"
 
 
 def pack_note(key: str) -> str:
     """The line under a voice set's name: what it is, and the licence of the data it learned from."""
-    if key == ZH_PACK:
-        return (f"Kokoro v1.1-zh, {_ZH.get('licence', 'Apache-2.0')}  ·  data granted by LongMaoData, synthetic "
-                "English  ·  adds misaki")
+    pack = MODEL_PACKS.get(key)
+    if pack:
+        return pack.note.format(licence=pack.licence)
     meta = PIPER_VOICES.get(key) or {}
     mark = "fine-tuned from a research-only base voice" if meta.get("lessac_base") else ""
     return "  ·  ".join(x for x in ("Piper voice", f"own data {meta.get('data_licence')}", mark) if x)
@@ -300,7 +425,7 @@ class Config:
     break_ms: int = 1500
     unload_after_min: float = 30.0
     voices: dict = field(default_factory=dict)   # language family -> voice id, for auto_language
-    packs: list = field(default_factory=list)    # voice sets chosen to download (voice_packs keys, kokoro-zh)
+    packs: list = field(default_factory=list)    # voice sets chosen to download (voice_packs keys, kokoro-zh/-th)
     packs_dir: str = ""                          # where they go; "" = <media.root>\voices or <data_dir>\voices
 
     @classmethod
@@ -321,8 +446,8 @@ class Config:
                         raise TypeError("expected a list of voice files")
                     unknown = [str(k) for k in value if str(k) not in PACK_KEYS]
                     if unknown:
-                        warn(f"read_aloud.packs: {', '.join(unknown)} not in config/installer.yaml voice_packs or "
-                             "kokoro_zh; ignored")
+                        warn(f"read_aloud.packs: {', '.join(unknown)} not in config/installer.yaml voice_packs, "
+                             "kokoro_zh or kokoro_th; ignored")
                     value = [str(k) for k in value if str(k) in PACK_KEYS]
                 elif f.type in ("int", int):
                     value = int(value)
@@ -436,11 +561,11 @@ def windows_voices() -> list[Voice]:
 
 
 def voice_choices(installed_windows: list[Voice] | None = None, packs_dir: str = "",
-                  zh: bool = False) -> list[tuple[str, str]]:
-    """(id, label) of every voice the menus and the tray offer: Kokoro's, the Mandarin ones when downloaded (zh), the
-    Piper voices downloaded to packs_dir, then this PC's Windows voices."""
+                  zh: bool = False, th: bool = False) -> list[tuple[str, str]]:
+    """(id, label) of every voice the menus and the tray offer: Kokoro's, the Mandarin (zh) and Thai (th) ones when
+    downloaded, the Piper voices downloaded to packs_dir, then this PC's Windows voices."""
     win = windows_voices() if installed_windows is None else installed_windows
-    return [(v.id, v.label) for v in [*kokoro_voices(), *(zh_voices() if zh else ()),
+    return [(v.id, v.label) for v in [*kokoro_voices(), *(zh_voices() if zh else ()), *(th_voices() if th else ()),
                                       *installed_piper_voices(packs_dir), *win]]
 
 
@@ -782,7 +907,7 @@ def pick_voice(cfg: Config, text: str, voices: list[Voice]) -> tuple[Voice | Non
         named = find_voice(cfg.voices.get(lang, ""), voices) or find_voice(DEFAULT_FOR_LANGUAGE.get(lang, ""), voices)
         same = [v for v in voices if v.family == lang]
         if named is None and same:
-            kokoro = [v for v in same if v.engine in ("kokoro", "kokoro-zh")]
+            kokoro = [v for v in same if kokoro_engine(v.engine)]
             named = (kokoro or same)[0]
         if named is not None:
             return named, f"The text is in {LANGUAGE_NAMES.get(lang, lang)}, so {named.name} reads it."

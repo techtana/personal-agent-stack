@@ -223,14 +223,14 @@ EFFECT_TEXT = {
 
 
 def refresh_voice_choices(profile: dict) -> None:
-    """The read aloud voice picker's list, again: Kokoro's, the Mandarin and Piper voices downloaded to this PC
+    """The read aloud voice picker's list, again: Kokoro's, the Mandarin, Thai and Piper voices downloaded to this PC
     (Download and Remove on the tray's Features card change them), and the Windows voices."""
     from . import dictation
     from .dictation.speak import Config as ReadConfig, voice_choices
 
     try:
         choices = voice_choices(packs_dir=ReadConfig.from_profile(profile).packs_dir,
-                                zh=dictation.zh_installed(profile))
+                                zh=dictation.zh_installed(profile), th=dictation.th_installed(profile))
     except OSError:
         return
     for s in SETTINGS:
