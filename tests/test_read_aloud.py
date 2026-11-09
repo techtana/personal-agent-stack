@@ -76,7 +76,10 @@ class Configuration(unittest.TestCase):
         self.assertEqual(speak.kokoro_voice("af_heart").label, "Heart (US English, female)")
         self.assertEqual(speak.kokoro_voice("ff_siwis").language, "fr-fr")
         self.assertIsNone(speak.kokoro_voice("jf_alpha"))   # Japanese needs Kokoro's own G2P, not espeak-ng
-        self.assertTrue(set(speak.DEFAULT_FOR_LANGUAGE.values()) <= set(speak.KOKORO_VOICE_IDS))
+        self.assertIsNone(speak.kokoro_voice("zf_xiaobei"))   # Mandarin comes from Kokoro v1.1-zh, not v1.0
+        self.assertTrue(set(speak.DEFAULT_FOR_LANGUAGE.values()) - {speak.DEFAULT_FOR_LANGUAGE["zh"]}
+                        <= set(speak.KOKORO_VOICE_IDS))
+        self.assertIsNotNone(speak.zh_voice(speak.DEFAULT_FOR_LANGUAGE["zh"]))
         self.assertEqual(ZIRA.label, "Zira (US English, female, Windows)")
 
     def test_voice_choices_list_kokoro_then_windows(self):

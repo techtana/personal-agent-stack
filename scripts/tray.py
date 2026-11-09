@@ -1484,8 +1484,9 @@ class TrayApp:
         self.features_note.configure(text=f"{self.installer_note}  {note}" if self.installer_note else note)
 
     def _render_packs(self) -> None:
-        """The rows under Read aloud: Piper voices for more languages (config/installer.yaml voice_packs), each with
-        Download or Remove; shown while read aloud is installed, since they run in its environment."""
+        """The rows under Read aloud: Piper voices for more languages (config/installer.yaml voice_packs) and the
+        Mandarin voices (kokoro_zh), each with Download or Remove; shown while read aloud is installed, since they run
+        in its environment."""
         from stacklib.dictation import speak
 
         w = self.feature_widgets.get("read_aloud")
@@ -1494,25 +1495,22 @@ class TrayApp:
         s = self.feature_status.get("read_aloud")
         show = bool(s and s.installed and not s.unknown)
         installed = set(self.installed_packs)
-        shape = (show, tuple(sorted(installed)))
+        variant = str((self.profile.get("read_aloud") or {}).get("kokoro") or "fp32")
+        shape = (show, tuple(sorted(installed)), variant)
         card = self.features_card
         if shape != self.pack_shown:
             for widget in self.pack_widgets:
                 widget.destroy()
             self.pack_widgets, self.pack_buttons = [], {}
-            for i, (key, meta) in enumerate(speak.PIPER_VOICES.items() if show else ()):
+            for i, key in enumerate(speak.PACK_KEYS if show else ()):
                 r = w["base"] + 2 + i
                 top = GAP_S if i == 0 else GAP_XS
                 names = ttk.Frame(card, style="Card.TFrame")
                 names.grid(row=r, column=1, sticky="nw", padx=(GAP_L, 0), pady=(top, 0))
-                who = " and ".join(str(x[0]) for x in (meta.get("speakers") or {}).values())
-                ttk.Label(names, text=f"{speak.language_label(str(meta.get('language') or ''))}: {who}",
-                          style="Card.TLabel").pack(anchor="w")
-                mark = "fine-tuned from a research-only base voice" if meta.get("lessac_base") else ""
-                line = "  ·  ".join(x for x in ("Piper voice", f"own data {meta.get('data_licence')}", mark) if x)
-                ttk.Label(names, text=line, style="Card.Muted.TLabel").pack(anchor="w")
+                ttk.Label(names, text=speak.pack_title(key), style="Card.TLabel").pack(anchor="w")
+                ttk.Label(names, text=speak.pack_note(key), style="Card.Muted.TLabel").pack(anchor="w")
                 done = key in installed
-                size = ttk.Label(card, text=f"{meta.get('size_mb')} MB" + ("" if done else " download"),
+                size = ttk.Label(card, text=f"{speak.pack_disk_mb(key, variant):.0f} MB" + ("" if done else " download"),
                                  style="Card.Sub.TLabel")
                 size.grid(row=r, column=2, sticky="nw", padx=GAP_M, pady=(top, 0))
                 btn = ttk.Button(card, text="Remove" if done else "Download", width=BTN_B,
@@ -1532,26 +1530,36 @@ class TrayApp:
 
         if self._setup_running() or self.feature_starting:
             return
-        meta = speak.PIPER_VOICES[key]
-        who = " and ".join(str(x[0]) for x in (meta.get("speakers") or {}).values())
-        lang = speak.language_label(str(meta.get("language") or ""))
+        variant = str((self.profile.get("read_aloud") or {}).get("kokoro") or "fp32")
+        mb = speak.pack_disk_mb(key, variant)
+        lang = speak.language_label(speak.pack_language(key))
+        zh = key == speak.ZH_PACK
+        who = "the Mandarin voices" if zh else " and ".join(
+            str(x[0]) for x in (speak.PIPER_VOICES[key].get("speakers") or {}).values())
+        def start(**kw):
+            return lambda: install.start_voice_packs(self.profile, **kw)
+
         if installed:
-            self._confirm(f"Delete the voice {who}?",
-                          f"This deletes the {lang} voice {who} ({meta.get('size_mb')} MB) from "
-                          f"{uninstall.short_path(dictation.packs_dir(self.profile))}. Read aloud then uses another "
-                          "voice for that language, or a Windows voice. You can download it again from this list.",
-                          "Delete voice", lambda: self._start_setup(
-                              "read_aloud", "Removing", lambda: install.start_voice_packs(self.profile, remove=[key])),
-                          cancel="Keep it")
+            text = (f"This deletes Kokoro v1.1-zh and its {len(speak.ZH_VOICES)} voices from "
+                    f"{uninstall.short_path(uninstall.hf_home(self.profile))} and takes misaki out of voice typing's "
+                    f"environment ({mb:.0f} MB in all; voice typing restarts if it runs). Chinese text is then read "
+                    "by a Windows voice for Chinese, if one is installed. You can download them again from this list."
+                    if zh else
+                    f"This deletes the {lang} voice {who} ({mb:.0f} MB) from "
+                    f"{uninstall.short_path(dictation.packs_dir(self.profile))}. Read aloud then uses another "
+                    "voice for that language, or a Windows voice. You can download it again from this list.")
+            self._confirm(f"Delete {who}?" if zh else f"Delete the voice {who}?", text,
+                          "Delete voices" if zh else "Delete voice",
+                          lambda: self._start_setup("read_aloud", "Removing", start(remove=[key])), cancel="Keep it")
             return
-        folder = dictation.packs_dir(self.profile)
+        folder = uninstall.hf_home(self.profile) if zh else dictation.packs_dir(self.profile)
         free = storage.free_bytes(storage.drive_of(folder))
-        if free is not None and free / 1e6 < float(meta.get("size_mb") or 0) + 100:
+        if free is not None and free / 1e6 < mb + 100:
             self._notice(f"Not enough space for {who}",
-                         f"The voice needs about {meta.get('size_mb')} MB, and {storage.drive_of(folder)} has "
-                         f"{storage.size_text(free)} free.")
+                         f"{'They need' if zh else 'The voice needs'} about {mb:.0f} MB, and {storage.drive_of(folder)} "
+                         f"has {storage.size_text(free)} free.")
             return
-        self._start_setup("read_aloud", "Downloading", lambda: install.start_voice_packs(self.profile, download=[key]))
+        self._start_setup("read_aloud", "Downloading", start(download=[key]))
 
     def _render_models(self) -> None:
         """The rows under Local models: every model in the catalog and any other Ollama has, with Download or Remove.

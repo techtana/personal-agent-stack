@@ -1,7 +1,8 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-08 (blocked sites for Open WebUI's web reading, and audit checks for Claude; open item 38). Before
-that, the same day (the installer's catalog in config/installer.yaml, install and remove from the tray and the
+Updated: 2026-11-08 (Mandarin voices for read aloud, Kokoro v1.1-zh; open item 39). Before that, the same day
+(blocked sites for Open WebUI's web reading, and audit checks for Claude; open item 38). Before that, the same
+day (the installer's catalog in config/installer.yaml, install and remove from the tray and the
 installer, the tray's Overview and Settings reworked; open item 37). Before that, the same day (read aloud of selected
 text, an optional part of voice typing; open item 36). Before that,
 the same day (voice typing history kept for dictation.keep_minutes; open item 35). Before that, the same day (the installer makes an app apart from the repository; open item 32). Before that, the same day (the installer asks which features to install, with their load on this PC, and the tray's Features card; open item 30). Before that, 2026-11-08 (voice typing's cleanup prompt is a setting; open item 23). Before that, 2026-11-07 night (PAS-<Name> process names; open item 29). Before that, the same night (privacy cleanup, machine profiles local; open item 28). Before that, the same night (refine selected text in every app; open item 27). Before that, the same night (Open WebUI's microphone on voice typing's Whisper; open item 26). Before that, 2026-11-07 late evening (the Usage tab counts every model the stack runs; open item 25). Before that, 2026-11-07 (Claude security audit skill and standing identity rule; open item 24). Before that, the same day (voice typing in every app; open item 23). Before that, 2026-11-03 (tray Hugging Face / OpenClaw rows, OpenClaw gateway setup; open item 17). Before that, 2026-10-26 evening (B-S0 spike and B2b supervisor; Phoenix blocked by Smart App Control). Before that, 2026-10-25
@@ -751,6 +752,45 @@ once across a session restart.
    import into Chrome.
    After merging: rerun install.cmd from the main checkout (the setup step downloads the lists), then consider
    protective DNS for this PC.
+39. Mandarin voices for read aloud (2026-11-08, branch claude/jovial-hodgkin-d60cf7, on top of the Piper voices in
+   item 37). Kokoro v1.1-zh (onnx-community/Kokoro-82M-v1.1-zh-ONNX at 6cc0f0d, Apache-2.0) is the voice set
+   `kokoro-zh` in read_aloud.packs, beside the Piper voices: More voices in the installer, Download / Remove on the
+   Features card (setup worker steps voice_packs / remove_voices). Download installs misaki[zh] 0.9.4 and its
+   dictionaries (jieba, pypinyin, pypinyin-dict, cn2an, proces, ordered-set, addict, regex 2026.9.29; 131 MB) into
+   voice typing's environment, checks that they load, then fetches the weights read_aloud.kokoro names (fp32 339 MB,
+   int8 127 MB, sha256 checked), the tokenizer and 8 voices into the HF cache. Remove uninstalls the packages (voice
+   typing stopped and started around it), then deletes the cache folder. tts.KokoroZh is a second Kokoro engine
+   (same GPU, fallback and idle unload); misaki loads in a thread beside the ONNX session. Voices: kokoro-zh:zf_003
+   (default for Chinese), zf_092, zf_088, zf_006, zm_031, zm_037, zm_013, zm_061, shown as "Voice 003 (Chinese,
+   Mandarin, female)".
+   - Smart App Control: misaki[zh] installed from wheels (jieba is source only; uv built its pure-Python wheel) in a
+     throwaway python.org 3.14 venv and imported; regex's `_regex.pyd` loaded (2026.11.8, published that day, and
+     2026.9.29, the pinned one). misaki declares Python <3.13; uv ignores that bound.
+   - On this PC, with the owner's OK (2026-11-08): the misaki packages are installed in C:\media\dictation\.venv, and
+     the model (fp32 and int8) with all 103 voices is in D:\huggingface (497 MB; the stack uses 8 voices). The machine
+     profile was not changed (read_aloud.packs does not name kokoro-zh); the tray shows the set as installed.
+   - Voices chosen by a Whisper large-v3-turbo round trip of all 100 Mandarin voices: 4 plain sentences (all 100
+     right, 97 with no pinyin syllable wrong), then 6 harder ones (tongue twister, polyphones, long sentences: 45 with
+     no syllable wrong); ranked by syllable errors, character errors, then Whisper's log-probability. zf_001,
+     upstream's sample voice, came last of the female voices. Every voice read 上调 as shàng diào (a pypinyin
+     reading, not the voice).
+   - Measured through read aloud's own code (tts.Speech, 22.8 s of speech in 4 pieces, one at a time): load 2.1 s on
+     the CPU, 2.2 s on the GPU (4.0 and 3.6 s before misaki loaded in parallel); fp32 3.2x real time on 6 CPU threads,
+     int8 the same; GPU 10x (0.46-0.56 s per sentence after the first); working set +0.87 GB (fp32) / +0.69 GB (int8)
+     with misaki's dictionaries; +658 MiB of GPU memory. First cold load right after the install: misaki took 10 s
+     (Smart App Control checking the new files), 1.3 s after that.
+   - Verified: unit tests (tests/test_kokoro_zh.py: 31 here, 3 engine tests in voice typing's environment); a test
+     copy of the voice typing app (port 8797, machines/zhtest.yaml, speech into a WAV) read a Chinese selection from
+     a Win32 EDIT window: auto-language took Voice 003 over the chosen af_heart, 72 characters in 3 pieces, 16.8 s of
+     speech made in 2.4 s on the GPU after a 3.9 s load; `stack.py dictate transcribe ... --style verbatim --mode
+     live --device cpu` gave the text back word for word except 新芽 as its homophone 心牙, and "Python" inside
+     Chinese came back as 派分. Renders of the tray's Features card (the Mandarin row, its Remove confirmation) and of
+     the installer's More voices, with every write and setup patched out.
+   - Not verified: Download and Remove through the setup worker for real (the packages and files were put in place by
+     hand, so the worker's install_zh and the removal ran only in unit tests); the live tray and app (they run the
+     installed app's code); Traditional Chinese text; a listener's ear.
+   - After merging: rerun install.cmd from the main checkout (it updates the app), then restart voice typing.
+
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:
    (USB SSD) was not connected, so OLLAMA_MODELS=D:\ollama\models broke every pull. Verified with unit tests, a render

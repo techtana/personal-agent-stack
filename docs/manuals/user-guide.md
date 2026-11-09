@@ -488,6 +488,30 @@ Voices:
   (CC0, CC BY or CC BY-SA), and the tray and the installer say so on each row. Not offered: Arabic and Indonesian
   Piper voices (their recordings carry no clear licence) and every Piper voice trained on non-commercial data
   (Japanese, Chinese, Korean, Thai, Hindi). Versions and files are pinned in `config/installer.yaml` (`voice_packs`).
+- **Mandarin Chinese** (Kokoro v1.1-zh, Apache-2.0, an optional download since 2026-11-08): eight voices, four female
+  and four male, listed as *Voice 003 (Chinese, Mandarin, female)* and so on, because the model's 100 voices have
+  numbers, not names. Tick **Chinese, Mandarin** under **Read aloud > More voices** in the installer, or use
+  **Download** on its row under Read aloud on the tray's Features card. That installs misaki, the open text-to-phonemes
+  front-end Kokoro was trained with (with jieba, pypinyin and cn2an, about 131 MB, into voice typing's environment), and
+  downloads the model with the weights **Kokoro weights** names (fp32 339 MB, int8 127 MB) and the eight voices into
+  the Hugging Face cache: about 0.47 GB in all with fp32. Voice typing keeps running and finds the new voices within a
+  minute. **Remove** on the same row deletes the model and takes misaki out again (voice typing restarts for that).
+  - It runs where Kokoro runs (**Runs on**): on the reference machine about 0.5 s per sentence on the RTX 3060 (10
+    times faster than real time, 0.7 GB of GPU memory) or 3 times faster than real time on the CPU (0.9 GB of RAM
+    with fp32, 0.7 GB with int8). It is a second model: the first Chinese reading loads it (about 2 s) and it is freed
+    after the same idle minutes as Kokoro.
+  - Numbers and dates are read out in Chinese (2026年11月8日 becomes 二零二六年十一月八日), full-width digits included.
+    English words inside Chinese text are read through espeak-ng, with an accent. Long Chinese sentences are cut at
+    their commas (，、；：), so the first piece still starts quickly.
+  - The eight were chosen with Whisper standing in for a listener: each of the 100 voices read ten sentences (plain
+    ones, a tongue twister, words with two readings, long sentences), and Whisper transcribed them back. All 100 read
+    the plain sentences right; the eight offered got every syllable right and Whisper was surest of them. The
+    front-end sometimes picks the wrong reading of a character with two (上调, "raise", came out as shàng diào).
+  - About its data: the Mandarin recordings were "freely and permissively granted" for it by LongMaoData, a dataset
+    company (no public licence text; nothing non-commercial or research-only is stated), and 3 hours of crowdsourced
+    synthetic English joined the training, the same kind of data as in Kokoro v1.0. The installer's footnote and the
+    tray's row say so. Pinned in `config/installer.yaml` (`kokoro_zh`): the repository revision, both weights'
+    sha256 (checked after a download), the voices and the package versions that load under Smart App Control.
 - **Windows voices** (David, Zira and Mark on an English Windows; any voice added in Windows Settings > Time & language
   > Speech) start at once and sound flatter. They cover the languages neither Kokoro nor the more voices do (Windows
   is closed source, but these come with it; the stack installs nothing for them).
@@ -495,13 +519,16 @@ Voices:
 Choosing a voice in the button's menu (a search list) plays a short sample in it and saves the choice
 (`read_aloud.voice`). With **Other languages get their own voice** on, text that is clearly in another language is
 read by a voice for that language: Kokoro's when it has one, else a downloaded Piper voice, else an installed Windows
-voice; the bubble says which.
-Thai, Russian, Japanese and other scripts are recognised by their letters; Latin-script languages by common words, so
-a short phrase keeps your chosen voice. Pick per-language voices in the machine file:
+voice; the bubble says which. When none is installed for that language and one can be downloaded (German, Chinese and
+the others above), the bubble says where to get it.
+Thai, Russian, Japanese, Chinese and other scripts are recognised by their letters (a Chinese character counts as
+three letters, so Chinese text with an English name in it still reads as Chinese; Japanese is told apart by its kana);
+Latin-script languages by common words, so a short phrase keeps your chosen voice. Pick per-language voices in the
+machine file:
 
 ```yaml
 read_aloud:
-  voices: {fr: ff_siwis, de: 'windows:Microsoft Katja'}
+  voices: {fr: ff_siwis, de: 'windows:Microsoft Katja', zh: 'kokoro-zh:zm_031'}
 ```
 
 `uv run scripts/stack.py read-aloud voices` lists every voice id; `read-aloud speak "Some text" --voice bf_emma` says

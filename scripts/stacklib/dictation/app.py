@@ -1105,7 +1105,7 @@ class App:
 
     def _voice(self, cfg: speak.Config | None = None) -> speak.Voice | None:
         cfg = cfg or self.scfg
-        return speak.find_voice(cfg.voice, self.speech.voices(cfg)) or speak.kokoro_voice(cfg.voice)
+        return speak.find_voice(cfg.voice, self.speech.voices(cfg)) or speak.known_voice(cfg.voice)
 
     def read_summary(self) -> str:
         cfg = self._read_cfg()

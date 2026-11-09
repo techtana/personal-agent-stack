@@ -465,7 +465,11 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
     if fid == "read_aloud":
         variant = str((profile.get("read_aloud") or {}).get("kokoro") or "fp32")
         name, disk, ram = KOKORO.get(variant, KOKORO["fp32"])
-        disk += _packs_gb(profile)   # the more voices chosen (Piper), on top of Kokoro
+        disk += _packs_gb(profile)   # the more voices chosen (Piper, Mandarin), on top of Kokoro
+        zh = _zh_chosen(profile)     # the Mandarin voices load a second Kokoro model while they read
+        zh_ram = ZH_RAM.get(variant, ZH_RAM.get("fp32", 0.6)) if zh else 0.0
+        zh_note = (" With the Mandarin voices, a second model of the same size loads while they read Chinese."
+                   if zh else "")
         cached = _kokoro_cached(profile, variant)
         idle = float((profile.get("read_aloud") or {}).get("unload_after_min") or 0)
         if not name:
@@ -475,25 +479,28 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
         device = str((profile.get("read_aloud") or {}).get("device") or "auto")
         on_gpu = name == "fp32" and gpu and (device == "gpu" or (device == "auto" and hw.vram_gb > 0))
         if on_gpu:
+            vram = 1.0 + (ZH_GPU_GB if zh else 0.0)
             return Estimate(
                 disk_gb=0.02 + disk + KOKORO_GPU_GB, todo_gb=(0.02 + KOKORO_GPU_GB) if cached else None, ram_gb=0.3,
-                vram_gb=1.0, cpu_threads=1.0, gpu_short="~0.3 s per sentence",
-                gpu="about 0.3 s per sentence of speech on the GPU (12-20x faster than real time), 1.0 GB held while loaded",
+                vram_gb=vram, cpu_threads=1.0, gpu_short="~0.3 s per sentence",
+                gpu=f"about 0.3 s per sentence of speech on the GPU (12-20x faster than real time), {vram:.1f} GB held "
+                    "while loaded",
                 cpu=f"{_cpu(1.0, hw)} logical processors while it prepares speech",
                 held="Kokoro loads on its first reading (about 2 s)" + (f" and is freed after {idle:.0f} idle minutes"
                                                                            if idle else ""),
                 basis="Measured on the reference PC's RTX 3060: 1.0 GB of GPU memory, 18.6 s of speech in 0.9 s, with "
-                      "onnxruntime-gpu 1.31 (CUDA 13) and cuDNN 9; the GPU libraries add about 0.8 GB on disk.",
+                      "onnxruntime-gpu 1.31 (CUDA 13) and cuDNN 9; the GPU libraries add about 0.8 GB on disk."
+                      + zh_note,
                 note="Falls back to the CPU when the GPU is full (ComfyUI working) or its libraries are missing.")
         return Estimate(
-            disk_gb=0.02 + disk, todo_gb=0.02 if cached else None, ram_gb=ram, cpu_threads=hw.threads / 2,
+            disk_gb=0.02 + disk, todo_gb=0.02 if cached else None, ram_gb=ram + zh_ram, cpu_threads=hw.threads / 2,
             cpu_bursts=True,
             gpu_short="none (CPU)", gpu="none: Kokoro runs on the CPU, about 3x faster than real time",
             cpu=f"{_cpu(hw.threads / 2, hw)} logical processors while it prepares speech; none while it waits",
             held="Kokoro loads on its first reading (about 2 s)" + (f" and is freed after {idle:.0f} idle minutes"
                                                                        if idle else ""),
             basis=f"Measured on the reference PC's 6-core Ryzen 5 5500: {ram:.1f} GB of RAM with the {name} weights, "
-                  "a short sentence ready in 0.8 s, 17 s of speech in 5 s. Faster or slower CPUs scale it.",
+                  "a short sentence ready in 0.8 s, 17 s of speech in 5 s. Faster or slower CPUs scale it." + zh_note,
             note="Windows' own voices (any language with a Windows voice installed) work too, at once.")
     if fid == "web_filter":
         from . import webfilter
@@ -532,14 +539,25 @@ KOKORO = {**{name: (name, float(v.get("download_gb") or 0), float(v.get("ram_gb"
           "off": ("", 0.0, 0.0)}
 # onnxruntime-gpu (0.23 GB) and cuDNN 9 for CUDA 13 (0.58 GB), measured 2026-11-08
 KOKORO_GPU_GB = float(catalog.kokoro().get("gpu_libraries_gb") or 0.8)
+# The Mandarin voices' model (config/installer.yaml kokoro_zh): RAM GB per variant while loaded, GPU GB on the GPU.
+ZH_RAM = {name: float(v.get("ram_gb") or 0) for name, v in (catalog.section("kokoro_zh").get("variants") or {}).items()}
+ZH_GPU_GB = float(catalog.section("kokoro_zh").get("gpu_vram_gb") or 1.0)
 
 
 def _packs_gb(profile: dict) -> float:
-    """Download size of the Piper voices read_aloud.packs names."""
-    from .dictation.speak import PIPER_VOICES
+    """Disk taken by the voice sets read_aloud.packs names: Piper voices, and the Mandarin weights (read_aloud.kokoro's
+    variant), voices and misaki's packages."""
+    from .dictation.speak import PACK_KEYS, pack_disk_mb
 
-    chosen = (profile.get("read_aloud") or {}).get("packs") or []
-    return sum(float((PIPER_VOICES.get(str(k)) or {}).get("size_mb") or 0) for k in chosen) / 1000
+    read = profile.get("read_aloud") or {}
+    variant = str(read.get("kokoro") or "fp32")
+    return sum(pack_disk_mb(str(k), variant) for k in read.get("packs") or [] if str(k) in PACK_KEYS) / 1000
+
+
+def _zh_chosen(profile: dict) -> bool:
+    from .dictation.speak import ZH_PACK
+
+    return ZH_PACK in ((profile.get("read_aloud") or {}).get("packs") or [])
 
 
 def _kokoro_cached(profile: dict, variant: str) -> bool:
@@ -910,10 +928,10 @@ def _status_read_aloud(profile: dict, **_) -> Status:
     from . import dictation
     from .dictation.hotkey import label
 
-    from .dictation.speak import PIPER_VOICES, language_label
+    from .dictation.speak import language_label, pack_language
 
     key = (profile.get("read_aloud") or {}).get("hotkey") or "ctrl+alt+s"
-    more = [language_label(str(PIPER_VOICES[k].get("language") or "")) for k in dictation.installed_packs(profile)]
+    more = [language_label(pack_language(k)) for k in dictation.installed_packs(profile)]
     extra = f" More voices: {', '.join(dict.fromkeys(more))}." if more else ""
     return _switch(dictation.read_aloud_installed(profile), switch_on("read_aloud", profile), "Read aloud",
                    f"Select text, then press {label(str(key))} or click the speaker button.{extra}", "Read aloud")

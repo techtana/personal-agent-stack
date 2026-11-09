@@ -1,7 +1,8 @@
-"""The voices behind read aloud: Kokoro-82M through ONNX Runtime on the GPU (CUDA) or the CPU, Piper voices for more
-languages through the same ONNX Runtime on the CPU, and Windows' own voices through SAPI. Runs in the voice typing app's
-environment (numpy, onnxruntime or onnxruntime-gpu, espeakng-loader, comtypes); speak.py holds the parts the project's
-tests cover without it.
+"""The voices behind read aloud: Kokoro-82M through ONNX Runtime on the GPU (CUDA) or the CPU, Kokoro v1.1-zh for
+Mandarin the same way (phonemes from misaki instead of espeak-ng), Piper voices for more languages through the same ONNX
+Runtime on the CPU, and Windows' own voices through SAPI. Runs in the voice typing app's environment (numpy,
+onnxruntime or onnxruntime-gpu, espeakng-loader, comtypes; misaki[zh] with the Mandarin voices); speak.py holds the
+parts the project's tests cover without it.
 
 Measured on the reference machine (2026-11-08):
   - CPU (Ryzen 5 5500, 6 of 12 threads): Kokoro loads in 1.2 s and speaks about 3.3x faster than real time with one
@@ -9,6 +10,9 @@ Measured on the reference machine (2026-11-08):
   - GPU (RTX 3060, onnxruntime-gpu 1.31.1 on CUDA 13, cuDNN 9.28): about 0.3-0.4 s per sentence, 12-20x real time,
     1.0 GB of GPU memory; fp32 only (int8 runs slower there). DirectML failed on Kokoro's ConvTranspose layers.
   - Whisper transcribed Kokoro's output back word for word. A Windows voice makes 6 s of speech in 0.02-0.05 s.
+  - Kokoro v1.1-zh (Mandarin): about 3.2x real time on the CPU (one piece at a time) with fp32 and int8 alike, 10x on
+    the GPU (0.5 s per sentence once warm); loading takes about 2 s, misaki's dictionaries (1.3 s; 10 s on the first
+    run after an install, while Smart App Control checks them) beside the ONNX session.
 
 Every reading is one usage record (source read-aloud, kind speech) for the tray's Usage tab: seconds of speech, the
 time the voice worked, phoneme tokens, the voice; never the text.
@@ -97,19 +101,39 @@ def resample(audio: np.ndarray, src: int, dst: int = SAMPLE_RATE) -> np.ndarray:
 
 # ---------------------------------------------------------------- Kokoro
 
-def kokoro_file(name: str, download: bool = True) -> Path:
-    """A file of the pinned Kokoro repository from the Hugging Face cache; downloaded only when it is not there yet
+def hf_file(repo: str, revision: str, name: str, download: bool = True) -> Path:
+    """A file of a pinned repository from the Hugging Face cache; downloaded only when it is not there yet
     (huggingface_hub would otherwise ask huggingface.co for the newest revision every time)."""
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
     from huggingface_hub import hf_hub_download
 
     try:
-        return Path(hf_hub_download(speak.KOKORO_REPO, name, revision=speak.KOKORO_REVISION, local_files_only=True))
+        return Path(hf_hub_download(repo, name, revision=revision, local_files_only=True))
     except Exception:  # noqa: BLE001 - LocalEntryNotFoundError and friends: not cached yet
         if not download:
             raise
-    return Path(hf_hub_download(speak.KOKORO_REPO, name, revision=speak.KOKORO_REVISION))
+    return Path(hf_hub_download(repo, name, revision=revision))
+
+
+def kokoro_file(name: str, download: bool = True) -> Path:
+    """A file of the pinned Kokoro v1.0 repository (config/installer.yaml kokoro)."""
+    return hf_file(speak.KOKORO_REPO, speak.KOKORO_REVISION, name, download)
+
+
+def zh_file(name: str, download: bool = False) -> Path:
+    """A file of the pinned Kokoro v1.1-zh repository (config/installer.yaml kokoro_zh); reading never downloads."""
+    return hf_file(speak.ZH_REPO, speak.ZH_REVISION, name, download)
+
+
+def zh_cached(variant: str) -> bool:
+    """The Mandarin weights of this variant, the tokenizer and every offered voice are in the Hugging Face cache."""
+    try:
+        for name in speak.zh_files(variant):
+            zh_file(name)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def kokoro_cached(variant: str, voices: tuple[str, ...] = ("af_heart",)) -> bool:
@@ -127,6 +151,7 @@ class Kokoro:
     session's threads (two at once made 4.3x real time against 3.3x one at a time on the reference machine)."""
 
     CPU_THREADS = max(1, (os.cpu_count() or 4) // 2)   # half the logical processors: the rest of the PC keeps headroom
+    LABEL = "Kokoro"
 
     def __init__(self, log=print) -> None:
         self.log = log
@@ -173,6 +198,22 @@ class Kokoro:
         so.intra_op_num_threads = self.CPU_THREADS
         return ort.InferenceSession(path, so, providers=["CPUExecutionProvider"])
 
+    # The model's files and the text front-end: KokoroZh (Mandarin) has its own.
+    def _file(self, name: str) -> Path:
+        return kokoro_file(name, download=False)
+
+    def _weights(self, variant: str) -> Path:
+        return self._file(speak.KOKORO_FILES[variant])
+
+    def _voice_file(self, voice_id: str) -> Path:
+        return kokoro_file(f"voices/{voice_id}.bin")
+
+    def _prepare(self) -> None:
+        """Start loading what the phonemes need besides espeak-ng, while the session loads (nothing for Kokoro v1.0)."""
+
+    def _prepared(self) -> None:
+        """Wait for what _prepare started; raise when it failed."""
+
     def load(self, variant: str, device: str = "auto") -> float:
         """Load (or switch to) the weights on the device asked for; returns the seconds it took, 0 when they were
         loaded already. "auto" and "gpu" use CUDA when onnxruntime-gpu and its libraries are there, else the CPU,
@@ -192,10 +233,11 @@ class Kokoro:
             try:
                 from . import gpu
 
+                self._prepare()
                 self.espeak = self.espeak or shared_espeak()
-                tokenizer = json.loads(kokoro_file("tokenizer.json", download=False).read_text(encoding="utf-8"))
+                tokenizer = json.loads(self._file("tokenizer.json").read_text(encoding="utf-8"))
                 self.vocab = dict(tokenizer["model"]["vocab"])
-                path = str(kokoro_file(speak.KOKORO_FILES[variant], download=False))
+                path = str(self._weights(variant))
                 use_gpu = device != "cpu" and not self.force_cpu
                 if use_gpu and variant != "fp32":
                     note, use_gpu = "the int8 weights are slower on the GPU than on the CPU", False
@@ -205,7 +247,8 @@ class Kokoro:
                 elif use_gpu and not gpu.add_kokoro_cuda_dlls():
                     note, use_gpu = "cuDNN 9 or Ollama's CUDA 13 libraries were not found", False
                 elif self.force_cpu:
-                    note = "the GPU failed earlier (out of memory?), so Kokoro stays on the CPU until voice typing restarts"
+                    note = (f"the GPU failed earlier (out of memory?), so {self.LABEL} stays on the CPU until voice "
+                            "typing restarts")
                 session = None
                 if use_gpu:
                     try:
@@ -216,8 +259,9 @@ class Kokoro:
                         note, session = f"CUDA did not start: {_short(e)}", None
                 self.session = session or self._session(path, False)
                 self.device = "cuda" if session is not None else "cpu"
+                self._prepared()
             except Exception as e:  # noqa: BLE001 - shown in the bubble; Windows voices still work
-                self.state, self.note = "failed", f"Kokoro could not load: {_short(e)}"
+                self.state, self.note = "failed", f"{self.LABEL} could not load: {_short(e)}"
                 self.session = None
                 self.log(f"[read] {self.note}")
                 raise SpeechError(self.note) from e
@@ -226,7 +270,7 @@ class Kokoro:
             self.load_seconds = time.monotonic() - t0
             self.last_used = time.monotonic()
             where = "the GPU" if self.device == "cuda" else f"the CPU ({self.CPU_THREADS} threads)"
-            self.log(f"[read] Kokoro ({variant}) ready on {where} in {self.load_seconds:.1f} s, espeak-ng "
+            self.log(f"[read] {self.LABEL} ({variant}) ready on {where} in {self.load_seconds:.1f} s, espeak-ng "
                      f"{self.espeak.version}{f'; {note}' if note else ''}")
             return self.load_seconds
 
@@ -239,7 +283,7 @@ class Kokoro:
             self.state = "unloaded"
         gc.collect()
         if not quiet:
-            self.log("[read] Kokoro unloaded (idle); the next reading loads it again")
+            self.log(f"[read] {self.LABEL} unloaded (idle); the next reading loads it again")
 
     def unload_if_idle(self, minutes: float) -> None:
         if minutes and self.state == "ready" and not self.running and time.monotonic() - self.last_used > minutes * 60:
@@ -249,7 +293,7 @@ class Kokoro:
         with self.lock:
             table = self.styles.get(voice_id)
             if table is None:
-                table = np.fromfile(kokoro_file(f"voices/{voice_id}.bin"), dtype=np.float32).reshape(-1, 1, 256)
+                table = np.fromfile(self._voice_file(voice_id), dtype=np.float32).reshape(-1, 1, 256)
                 self.styles[voice_id] = table
             return table
 
@@ -280,7 +324,7 @@ class Kokoro:
                 except Exception as e:  # noqa: BLE001 - the GPU ran out of memory (ComfyUI took it), or a driver hiccup
                     if self.device != "cuda":
                         raise
-                    self.log(f"[read] GPU run failed ({_short(e)}); Kokoro moves to the CPU")
+                    self.log(f"[read] GPU run failed ({_short(e)}); {self.LABEL} moves to the CPU")
                     self.force_cpu = True
                     with self.lock:
                         self.running -= 1
@@ -300,6 +344,76 @@ class Kokoro:
                 self.running -= 1
         audio = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)
         return Audio(_pcm16(audio), len(audio) / SAMPLE_RATE, tokens, run_s, load_s)
+
+
+def zh_g2p(english):
+    """misaki's Mandarin G2P, version 1.1 (the phonemes Kokoro v1.1-zh was trained on): jieba cuts the words, pypinyin
+    and misaki's tone rules give zhuyin-like phonemes and tone digits, cn2an reads numbers out; `english` phonemizes
+    the English words found inside Chinese text."""
+    import logging
+
+    import jieba
+    from misaki import zh
+
+    jieba.setLogLevel(logging.WARNING)   # no "Building prefix dict" lines in the app's log
+    return zh.ZHG2P(version="1.1", unk="", en_callable=english)
+
+
+class KokoroZh(Kokoro):
+    """Kokoro v1.1-zh for Mandarin (config/installer.yaml kokoro_zh): its own weights, tokenizer and voices from the
+    Hugging Face cache, never downloaded while reading, and misaki's Mandarin G2P instead of espeak-ng (espeak-ng still
+    reads the English words inside Chinese text). Loads on first use like Kokoro, misaki's dictionaries with it, on the
+    GPU or the CPU, and is freed after the same idle minutes."""
+
+    LABEL = "Kokoro zh"
+
+    def __init__(self, log=print) -> None:
+        super().__init__(log)
+        self.g2p = None
+        self.g2p_lock = threading.Lock()   # jieba and misaki keep module state: one sentence at a time (1-5 ms each)
+        self._g2p_thread: threading.Thread | None = None
+        self._g2p_error = ""
+
+    def _file(self, name: str) -> Path:
+        return zh_file(name)
+
+    def _weights(self, variant: str) -> Path:
+        return zh_file(speak.ZH_FILES[variant])
+
+    def _voice_file(self, voice_id: str) -> Path:
+        return zh_file(f"voices/{voice_id.removeprefix(speak.ZH_PREFIX)}.bin")
+
+    def _make_g2p(self) -> None:
+        try:
+            g2p = zh_g2p(self._english)
+            with self.g2p_lock:
+                g2p("你好。")             # jieba builds its word index on the first sentence: here, not in a reading
+            self.g2p = g2p
+        except Exception as e:  # noqa: BLE001 - reported by _prepared, in the load's own error
+            self._g2p_error = f"misaki did not load: {_short(e)}"
+
+    def _prepare(self) -> None:
+        """misaki's dictionaries (about 1.3 s, and jieba's index) load in a thread of their own while the ONNX session
+        loads, so the first Mandarin reading waits for the slower of the two, not both."""
+        if self.g2p is None and not (self._g2p_thread and self._g2p_thread.is_alive()):
+            self._g2p_error = ""
+            self._g2p_thread = threading.Thread(target=self._make_g2p, name="read-aloud-zh-g2p", daemon=True)
+            self._g2p_thread.start()
+
+    def _prepared(self) -> None:
+        if self._g2p_thread is not None:
+            self._g2p_thread.join()
+        if self.g2p is None:
+            raise SpeechError(self._g2p_error or "misaki did not load")
+
+    def _english(self, text: str) -> str:
+        """espeak-ng's US English phonemes for the English words in Chinese text, as Kokoro reads English."""
+        return speak.tidy_phonemes(self.espeak.phonemes(text, "en-us"), "en-us")
+
+    def phonemes(self, text: str, language: str) -> str:
+        with self.g2p_lock:
+            ps, _ = self.g2p(speak.for_zh(text))
+        return ps
 
 
 # ---------------------------------------------------------------- Piper voices
@@ -446,20 +560,47 @@ class Speech:
     def __init__(self, log=print) -> None:
         self.log = log
         self.kokoro = Kokoro(log)
+        self.kokoro_zh = KokoroZh(log)
         self.piper = Piper(log)
         self._piper_voices: tuple[float, str, list[Voice]] = (-1e9, "", [])
         self.windows = WindowsVoices()
         self._win_voices: tuple[float, list[Voice]] = (-1e9, [])
         self._cached: dict[str, tuple[float, bool]] = {}   # Kokoro variant -> (checked at, files on disk)
-        self._modules: dict[str, bool] = {}
+        self._zh_cached: tuple[float, list[str]] = (-1e9, [])   # Mandarin variants downloaded, and when checked
+        self._modules: dict[str, tuple[float, bool]] = {}
 
     def _has(self, module: str) -> bool:
-        """A package of read aloud is in this environment (the installer's Read aloud feature adds them)."""
-        if module not in self._modules:
+        """A package of read aloud is in this environment (the installer's Read aloud feature adds them). A package that
+        was missing is looked for again after a minute: the Mandarin voices' Download adds misaki while the app runs."""
+        at, found = self._modules.get(module, (-1e9, False))
+        if not found and time.monotonic() - at > 60:
+            import importlib
             import importlib.util
 
-            self._modules[module] = importlib.util.find_spec(module) is not None
-        return self._modules[module]
+            importlib.invalidate_caches()
+            found = importlib.util.find_spec(module) is not None
+            self._modules[module] = (time.monotonic(), found)
+        return found
+
+    def _engine(self, voice: Voice) -> Kokoro | None:
+        return {"kokoro": self.kokoro, "kokoro-zh": self.kokoro_zh}.get(voice.engine)
+
+    def zh_variants(self) -> list[str]:
+        """The Mandarin weights downloaded with all their files (checked once a minute)."""
+        at, have = self._zh_cached
+        if time.monotonic() - at > 60:
+            have = [v for v in speak.ZH_FILES if zh_cached(v)]
+            self._zh_cached = (time.monotonic(), have)
+        return have
+
+    def zh_installed(self) -> bool:
+        """The Mandarin voices can speak: misaki and jieba are in this environment, Kokoro's espeak-ng and ONNX Runtime
+        too, and a variant of the weights is downloaded."""
+        return (bool(speak.ZH_VOICES) and self.kokoro_installed() and self._has("misaki") and self._has("jieba")
+                and bool(self.zh_variants()))
+
+    def zh_variant(self, cfg: speak.Config) -> str:
+        return speak.zh_variant(cfg.kokoro, self.zh_variants())
 
     def kokoro_installed(self) -> bool:
         """espeak-ng and ONNX Runtime are in this environment (the weights may still be missing)."""
@@ -492,13 +633,15 @@ class Speech:
         return ""
 
     def voices(self, cfg: speak.Config) -> list[Voice]:
-        """Kokoro's voices (when installed, downloaded and not turned off or broken), the Piper voices downloaded to
-        read_aloud.packs_dir, then this PC's Windows voices (both lists re-read once a minute, so a voice added since
-        shows up; Windows voices need comtypes)."""
+        """Kokoro's voices (when installed, downloaded and not turned off or broken), the Mandarin ones when their set
+        is downloaded, the Piper voices downloaded to read_aloud.packs_dir, then this PC's Windows voices (the lists
+        are re-read once a minute, so a voice added since shows up; Windows voices need comtypes)."""
         out: list[Voice] = []
         kokoro = cfg.kokoro != "off" and self.kokoro_installed() and self.kokoro.state != "failed"
         if kokoro and self.kokoro_downloaded(cfg.kokoro):
             out += speak.kokoro_voices()
+        if cfg.kokoro != "off" and self.kokoro_zh.state != "failed" and self.zh_installed():
+            out += speak.zh_voices()
         if self.kokoro_installed():   # Piper needs the same espeak-ng and ONNX Runtime
             at, where, cached = self._piper_voices
             if time.monotonic() - at > 60 or where != cfg.packs_dir:
@@ -517,11 +660,23 @@ class Speech:
         return out + cached
 
     def ready(self, voice: Voice, cfg: speak.Config) -> bool:
+        if voice.engine == "kokoro-zh":
+            return self.kokoro_zh.ready(self.zh_variant(cfg), cfg.device)
         return voice.engine != "kokoro" or self.kokoro.ready(cfg.kokoro, cfg.device)
 
     def warm(self, cfg: speak.Config) -> None:
         """Load Kokoro now when the chosen voice is one of its own (a click is coming: the pointer is on the speaker
-        button, or a reading is copying the selection), so the first sentence does not wait for the load."""
+        button, or a reading is copying the selection), so the first sentence does not wait for the load. The same for
+        the Mandarin model when a Mandarin voice is the chosen one."""
+        if cfg.kokoro != "off" and speak.zh_voice(cfg.voice):
+            variant = self.zh_variant(cfg)
+            if variant and self.kokoro_zh.state != "loading" and not self.kokoro_zh.ready(variant, cfg.device) \
+                    and self.zh_installed():
+                try:
+                    self.kokoro_zh.load(variant, cfg.device)
+                except SpeechError:
+                    pass   # the reading reports it
+            return
         if cfg.kokoro == "off" or not speak.kokoro_voice(cfg.voice) or self.kokoro.ready(cfg.kokoro, cfg.device):
             return
         if self.kokoro.state == "loading" or not self.kokoro_installed() or not self.kokoro_downloaded(cfg.kokoro):
@@ -534,12 +689,14 @@ class Speech:
     def workers(self, voice: Voice) -> int:
         """Pieces made at once: two on the CPU, which share Kokoro's threads (about 30% more speech per second, and no
         more processors than one run uses); one on the GPU (fast enough), for Piper (fast on the CPU) and for Windows
-        voices (instant)."""
-        return 2 if voice.engine == "kokoro" and self.kokoro.device != "cuda" else 1
+        voices (instant). The Mandarin model is a Kokoro too."""
+        engine = self._engine(voice)
+        return 2 if engine is not None and engine.device != "cuda" else 1
 
     def lookahead_s(self, voice: Voice) -> float:
         """Seconds of speech to prepare ahead of what plays: more on the GPU, where it costs little."""
-        return 60.0 if voice.engine != "kokoro" or self.kokoro.device == "cuda" else 30.0
+        engine = self._engine(voice)
+        return 60.0 if engine is None or engine.device == "cuda" else 30.0
 
     def synth(self, text: str, voice: Voice, speed: float, cfg: speak.Config) -> Audio:
         """One piece of speech, its own silence trimmed (trim), so the pauses between pieces are the configured ones."""
@@ -547,6 +704,14 @@ class Speech:
             if cfg.kokoro == "off":
                 raise SpeechError("Kokoro is off (read_aloud.kokoro)")
             audio = self.kokoro.synth(text, voice, speed, cfg.kokoro, cfg.device)
+        elif voice.engine == "kokoro-zh":
+            if cfg.kokoro == "off":
+                raise SpeechError("Kokoro is off (read_aloud.kokoro)")
+            variant = self.zh_variant(cfg)
+            if not variant:
+                raise SpeechError("the Mandarin voices are not downloaded; Download them under Read aloud on the tray's "
+                                  "Features card")
+            audio = self.kokoro_zh.synth(text, voice, speed, variant, cfg.device)
         elif voice.engine == "piper":
             audio = self.piper.synth(text, voice, speed, cfg.packs_dir)
         else:
@@ -558,6 +723,9 @@ class Speech:
     def model_name(self, voice: Voice, cfg: speak.Config) -> str:
         if voice.engine == "kokoro":
             return "kokoro-82m" + ("" if cfg.kokoro == "fp32" else f"-{cfg.kokoro}")
+        if voice.engine == "kokoro-zh":
+            variant = self.kokoro_zh.variant or self.zh_variant(cfg)
+            return "kokoro-82m-v1.1-zh" + ("" if variant in ("fp32", "") else f"-{variant}")
         if voice.engine == "piper":
             return f"piper {speak.piper_key(voice.id)[0]}"
         return f"windows {voice.name}"
@@ -571,20 +739,24 @@ class Speech:
                 status="failure" if failed else "success", error=failed, latency_ms=wall_s * 1000,
                 load_ms=load_s * 1000 if load_s else None, run_ms=run_s * 1000, input_tokens=tokens, audio_s=audio_s,
                 detail={k: v for k, v in (("engine", voice.engine), ("voice", voice.id), ("language", voice.language),
-                                          ("device", self.kokoro.device if voice.engine == "kokoro" else "cpu"),
+                                          ("device", (self._engine(voice).device or "cpu") if self._engine(voice)
+                                           else "cpu"),
                                           ("speed", cfg.speed), ("stopped", stopped)) if v})
         except Exception as e:  # noqa: BLE001 - a usage record must never break reading
             self.log(f"[read] usage record failed: {_short(e)}")
 
     def unload_if_idle(self, minutes: float) -> None:
         self.kokoro.unload_if_idle(minutes)
+        self.kokoro_zh.unload_if_idle(minutes)
         self.piper.unload_if_idle(minutes)
 
     def health(self) -> dict:
-        k = self.kokoro
+        k, z = self.kokoro, self.kokoro_zh
         return {"engine": k.state, "model": f"kokoro-82m {k.variant}".strip() if k.variant else "",
                 "device": k.device or "", "note": k.note, "idle_s": round(time.monotonic() - k.last_used),
-                "gpu_installed": k.gpu_available(), "piper": sorted(self.piper.loaded)}
+                "gpu_installed": k.gpu_available(), "piper": sorted(self.piper.loaded),
+                "zh": {"engine": z.state, "model": f"kokoro-82m-v1.1-zh {z.variant}".strip() if z.variant else "",
+                       "device": z.device or "", "note": z.note, "idle_s": round(time.monotonic() - z.last_used)}}
 
 
 def download(profile: dict, report=lambda *a: None) -> str:
@@ -608,3 +780,39 @@ def download(profile: dict, report=lambda *a: None) -> str:
     for name in missing:
         kokoro_file(name)
     return f"downloaded Kokoro {cfg.kokoro} and {len(speak.KOKORO_VOICE_IDS)} voices"
+
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1 << 20):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def download_zh(profile: dict, report=lambda *a: None) -> str:
+    """Fetch the Mandarin voices (config/installer.yaml kokoro_zh) into the Hugging Face cache: the weights
+    read_aloud.kokoro names (fp32 when it is off), the tokenizer and every offered voice, from the pinned revision; the
+    weights' sha256 is checked. Run by the setup worker in voice typing's environment (`python -m stacklib.dictation
+    speak --download-zh`), which has huggingface_hub."""
+    cfg = speak.Config.from_profile(profile)
+    variant = cfg.kokoro if cfg.kokoro in speak.ZH_FILES else "fp32"
+    missing = []
+    for name in (*speak.zh_files(variant), "config.json"):
+        try:
+            zh_file(name)
+        except Exception:  # noqa: BLE001 - not cached
+            missing.append(name)
+    if not missing:
+        return f"Kokoro v1.1-zh {variant} and its {len(speak.ZH_VOICES)} voices already downloaded"
+    report(f"downloading Kokoro v1.1-zh ({variant}, about {speak.ZH_SIZES_MB.get(variant, 0)} MB) and "
+           f"{len(speak.ZH_VOICES)} Mandarin voices into the Hugging Face cache")
+    for name in missing:
+        path = zh_file(name, download=True)
+        want = speak.ZH_SHA256.get(name)
+        if want and _sha256(path) != want:
+            raise SpeechError(f"{name} of Kokoro v1.1-zh does not match its pinned sha256; Remove the Mandarin voices "
+                              "on the tray's Features card and download them again")
+    return f"downloaded Kokoro v1.1-zh {variant} and {len(speak.ZH_VOICES)} Mandarin voices"

@@ -8,6 +8,8 @@ Three kinds of voice speak, all on this machine; nothing leaves it:
     Hindi, Italian and Brazilian Portuguese. espeak-ng turns the text into phonemes first, as kokoro-onnx does.
   - Piper (VITS) voices for more languages (German, Russian, Vietnamese, and more voices for Italian, Spanish,
     Portuguese and French), from config/installer.yaml voice_packs: optional downloads, run the same way.
+  - Kokoro v1.1-zh for Mandarin Chinese (config/installer.yaml kokoro_zh), another optional download: a second Kokoro
+    model whose phonemes come from misaki's Mandarin G2P instead of espeak-ng.
   - Windows' own voices (SAPI, and the OneCore voices Windows installs with a language's speech pack): instant and
     flatter, in every language that has one (Settings > Time & language > Speech > Add voices).
 
@@ -63,10 +65,10 @@ DEVICES = ("auto", "gpu", "cpu")   # where Kokoro runs: auto = the GPU when its 
 
 @dataclass(frozen=True)
 class Voice:
-    id: str           # af_heart, piper:<voice file>[:<speaker>], or windows:<Name> for a Windows voice
-    name: str         # what menus show: Heart, Zira
-    language: str     # en-us, en-gb, fr-fr, th-th, ...
-    engine: str       # kokoro | piper | windows
+    id: str           # af_heart, piper:<voice file>[:<speaker>], kokoro-zh:zf_001, or windows:<Name>
+    name: str         # what menus show: Heart, Zira, Voice 001
+    language: str     # en-us, en-gb, fr-fr, th-th, zh-cn, ...
+    engine: str       # kokoro | kokoro-zh | piper | windows
     gender: str = ""  # female | male | ""
     token: str = ""   # Windows: the SAPI token's registry path
 
@@ -88,7 +90,7 @@ def family(language: str) -> str:
     return (language or "").lower().split("-", 1)[0]
 
 
-REGIONAL = {"es-ar": "Spanish, Argentina", "pt-pt": "Portuguese, Portugal"}
+REGIONAL = {"es-ar": "Spanish, Argentina", "pt-pt": "Portuguese, Portugal", "zh-cn": "Chinese, Mandarin"}
 
 
 def language_label(language: str) -> str:
@@ -183,6 +185,99 @@ def piper_ids(ps: str, id_map: dict[str, list[int]]) -> list[int]:
     return ids + list(id_map.get(PIPER_EOS, [2]))
 
 
+# ---------------------------------------------------------------- Mandarin: Kokoro v1.1-zh (installer catalog)
+
+_ZH = catalog.section("kokoro_zh")
+ZH_PACK = str(_ZH.get("key") or "kokoro-zh")          # its entry in read_aloud.packs
+ZH_PREFIX = ZH_PACK + ":"                             # its voices: kokoro-zh:zf_001
+ZH_REPO = str(_ZH.get("repo") or "")
+ZH_REVISION = str(_ZH.get("revision") or "")
+ZH_LANGUAGE = str(_ZH.get("language") or "zh-cn")
+ZH_FILES = {name: str(v["file"]) for name, v in (_ZH.get("variants") or {}).items()}
+ZH_SIZES_MB = {name: int(v.get("download_mb") or 0) for name, v in (_ZH.get("variants") or {}).items()}
+ZH_SHA256 = {str(v["file"]): str(v.get("sha256") or "") for v in (_ZH.get("variants") or {}).values()}
+ZH_VOICE_MB = float(_ZH.get("voice_mb") or 0.52)
+ZH_VOICES: dict[str, str] = {str(k): str(v or "") for k, v in (_ZH.get("voices") or {}).items()}   # id -> gender
+ZH_PACKAGES = tuple(str(p) for p in _ZH.get("packages") or ())
+ZH_PACKAGES_MB = int(_ZH.get("packages_mb") or 0)
+
+
+def zh_voice(vid: str) -> Voice | None:
+    """'kokoro-zh:zf_001' -> Voice 001 (Chinese, Mandarin, female), or None for an id the catalog does not offer. The
+    Mandarin voices have numbers, not names."""
+    short = vid[len(ZH_PREFIX):] if vid.startswith(ZH_PREFIX) else ""
+    if short not in ZH_VOICES:
+        return None
+    gender = ZH_VOICES[short] or {"f": "female", "m": "male"}.get(short[1:2], "")
+    return Voice(vid, f"Voice {short.split('_', 1)[-1]}", ZH_LANGUAGE, "kokoro-zh", gender)
+
+
+def zh_voices() -> list[Voice]:
+    return [v for v in (zh_voice(ZH_PREFIX + k) for k in ZH_VOICES) if v]
+
+
+def zh_files(variant: str) -> list[str]:
+    """The files of the Mandarin set in its pinned repository: the weights of one variant, the tokenizer (its
+    vocabulary differs from Kokoro v1.0's) and the voices offered."""
+    return [ZH_FILES[variant], "tokenizer.json", *(f"voices/{v}.bin" for v in ZH_VOICES)]
+
+
+def zh_variant(chosen: str, have) -> str:
+    """The Mandarin weights to load: read_aloud.kokoro's when they are downloaded, else the other variant that is,
+    else ''."""
+    have = set(have)
+    return chosen if chosen in have else next((v for v in ZH_FILES if v in have), "")
+
+
+def known_voice(vid: str) -> Voice | None:
+    """A Kokoro voice (English and the other espeak-ng languages, or Mandarin) by its id, installed or not."""
+    return kokoro_voice(vid) or zh_voice(vid)
+
+
+if ZH_VOICES:
+    DEFAULT_FOR_LANGUAGE["zh"] = ZH_PREFIX + next(iter(ZH_VOICES))   # the catalog lists the best voice first
+
+
+# ---------------------------------------------------------------- voice sets to download (Piper voices and Mandarin)
+
+PACK_KEYS: tuple[str, ...] = (*PIPER_VOICES, *((ZH_PACK,) if ZH_REPO and ZH_VOICES else ()))
+
+
+def pack_language(key: str) -> str:
+    return ZH_LANGUAGE if key == ZH_PACK else str((PIPER_VOICES.get(key) or {}).get("language") or "")
+
+
+def pack_size_mb(key: str, variant: str = "fp32") -> float:
+    """Download size: a Piper voice's files, or the Mandarin weights (read_aloud.kokoro's variant) and voices."""
+    if key == ZH_PACK:
+        return ZH_SIZES_MB.get(variant, ZH_SIZES_MB.get("fp32", 0)) + ZH_VOICE_MB * len(ZH_VOICES)
+    return float((PIPER_VOICES.get(key) or {}).get("size_mb") or 0)
+
+
+def pack_disk_mb(key: str, variant: str = "fp32") -> float:
+    """Disk a voice set takes: its download, and for the Mandarin voices misaki's packages too."""
+    return pack_size_mb(key, variant) + (ZH_PACKAGES_MB if key == ZH_PACK else 0)
+
+
+def pack_title(key: str) -> str:
+    """'German: Thorsten', 'Chinese, Mandarin: 8 Kokoro voices'."""
+    lang = language_label(pack_language(key))
+    if key == ZH_PACK:
+        return f"{lang}: {len(ZH_VOICES)} Kokoro voices"
+    who = " and ".join(str(x[0]) for x in ((PIPER_VOICES.get(key) or {}).get("speakers") or {}).values())
+    return f"{lang}: {who}"
+
+
+def pack_note(key: str) -> str:
+    """The line under a voice set's name: what it is, and the licence of the data it learned from."""
+    if key == ZH_PACK:
+        return (f"Kokoro v1.1-zh, {_ZH.get('licence', 'Apache-2.0')}  ·  data granted by LongMaoData, synthetic "
+                "English  ·  adds misaki")
+    meta = PIPER_VOICES.get(key) or {}
+    mark = "fine-tuned from a research-only base voice" if meta.get("lessac_base") else ""
+    return "  ·  ".join(x for x in ("Piper voice", f"own data {meta.get('data_licence')}", mark) if x)
+
+
 # ---------------------------------------------------------------- settings
 
 @dataclass
@@ -205,7 +300,7 @@ class Config:
     break_ms: int = 1500
     unload_after_min: float = 30.0
     voices: dict = field(default_factory=dict)   # language family -> voice id, for auto_language
-    packs: list = field(default_factory=list)    # Piper voices chosen to download (config/installer.yaml voice_packs)
+    packs: list = field(default_factory=list)    # voice sets chosen to download (voice_packs keys, kokoro-zh)
     packs_dir: str = ""                          # where they go; "" = <media.root>\voices or <data_dir>\voices
 
     @classmethod
@@ -224,10 +319,11 @@ class Config:
                 elif f.name == "packs":
                     if not isinstance(value, (list, tuple)):
                         raise TypeError("expected a list of voice files")
-                    unknown = [str(k) for k in value if str(k) not in PIPER_VOICES]
+                    unknown = [str(k) for k in value if str(k) not in PACK_KEYS]
                     if unknown:
-                        warn(f"read_aloud.packs: {', '.join(unknown)} not in config/installer.yaml voice_packs; ignored")
-                    value = [str(k) for k in value if str(k) in PIPER_VOICES]
+                        warn(f"read_aloud.packs: {', '.join(unknown)} not in config/installer.yaml voice_packs or "
+                             "kokoro_zh; ignored")
+                    value = [str(k) for k in value if str(k) in PACK_KEYS]
                 elif f.type in ("int", int):
                     value = int(value)
                 elif f.type in ("float", float):
@@ -339,11 +435,13 @@ def windows_voices() -> list[Voice]:
     return out
 
 
-def voice_choices(installed_windows: list[Voice] | None = None, packs_dir: str = "") -> list[tuple[str, str]]:
-    """(id, label) of every voice the menus and the tray offer: Kokoro's, the Piper voices downloaded to packs_dir,
-    then this PC's Windows voices."""
+def voice_choices(installed_windows: list[Voice] | None = None, packs_dir: str = "",
+                  zh: bool = False) -> list[tuple[str, str]]:
+    """(id, label) of every voice the menus and the tray offer: Kokoro's, the Mandarin ones when downloaded (zh), the
+    Piper voices downloaded to packs_dir, then this PC's Windows voices."""
     win = windows_voices() if installed_windows is None else installed_windows
-    return [(v.id, v.label) for v in [*kokoro_voices(), *installed_piper_voices(packs_dir), *win]]
+    return [(v.id, v.label) for v in [*kokoro_voices(), *(zh_voices() if zh else ()),
+                                      *installed_piper_voices(packs_dir), *win]]
 
 
 def find_voice(vid: str, voices: list[Voice]) -> Voice | None:
@@ -374,7 +472,7 @@ _EMPHASIS = (
     re.compile(r"`([^`\n]+)`"),                                       # `code`
 )
 _HTML_TAG = re.compile(r"</?[a-zA-Z][^<>\n]{0,200}>")
-_ENDS_SENTENCE = re.compile(r"[.!?…:;,。！？]['\"”’)\]]*$")
+_ENDS_SENTENCE = re.compile(r"[.!?…:;,。！？，；：、]['\"”’)\]」』）]*$")
 
 
 def _host(m: re.Match) -> str:
@@ -455,9 +553,33 @@ ABBREVIATIONS = {"mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc",
                  "nov", "dec", "cf", "al", "ca", "dept", "est", "vol", "p", "pp", "ed", "eds", "rev", "gen", "gov",
                  "sgt", "capt", "lt", "col", "cmdr", "adm", "hon", "u.s", "u.k", "a.m", "p.m"}
 _END = re.compile(r"[.!?…]+[\"”’)\]]*(?=\s)|[。！？]+[」』”）]*")
-_CLAUSE = re.compile(r"(?<=[,;:—–])\s+|(?<=\))\s+")
+# Clause ends: a comma or the like and a space, or a CJK comma, enumeration comma, semicolon or colon (no space after).
+_CLAUSE = re.compile(r"(?<=[,;:—–])\s+|(?<=\))\s+|(?<=[，、；：])\s*")
+_CJK_CLAUSE_END = ("，", "、", "；", "：")
 FIRST_CHARS = 120    # the first piece: one short sentence or clause, so the voice starts quickly
 HARD_CHARS = 260     # longer sentences are split at commas, then between words
+# Characters spoken as a syllable each (Han, kana, Hangul): three letters' worth of speech in the limits above, so a
+# Chinese piece is about as long to say as a Latin one (and stays well inside Kokoro's 510 phoneme tokens).
+_WIDE_CHAR = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff]")
+
+
+def spoken_len(text: str) -> int:
+    """Length in letters' worth of speech: a Han, kana or Hangul character counts three."""
+    return len(text) + 2 * len(_WIDE_CHAR.findall(text))
+
+
+def _cut_at(part: str, limit: int) -> int:
+    """Where to cut a clause longer than `limit` (in spoken_len): the last space that keeps the head within it, else
+    the last character that does (CJK text has no spaces)."""
+    at, used = 0, 0
+    for i, ch in enumerate(part):
+        used += 3 if _WIDE_CHAR.match(ch) else 1
+        if used > limit:
+            break
+        at = i + 1
+    at = max(at, 1)
+    space = part.rfind(" ", 0, at)
+    return space if space > at // 3 else at
 CLAUSE_PAUSE_MS = 120   # between the parts of a sentence split at a comma
 ENDS = ("clause", "sentence", "item", "paragraph")
 
@@ -495,23 +617,25 @@ def sentences(paragraph: str) -> list[str]:
 
 
 def _split_long(sentence: str, limit: int) -> list[str]:
-    if len(sentence) <= limit:
+    if spoken_len(sentence) <= limit:
         return [sentence]
     parts: list[str] = []
     current = ""
     for clause in _CLAUSE.split(sentence):
-        if current and len(current) + 1 + len(clause) > limit:
+        if not clause:
+            continue
+        if current and spoken_len(current) + 1 + spoken_len(clause) > limit:
             parts.append(current)
             current = clause
         else:
-            current = f"{current} {clause}".strip()
+            joint = "" if not current or current.endswith(_CJK_CLAUSE_END) else " "
+            current = f"{current}{joint}{clause}".strip()
     if current:
         parts.append(current)
     out: list[str] = []
     for part in parts:
-        while len(part) > limit:                       # one clause longer than the limit: cut between words
-            at = part.rfind(" ", 0, limit)
-            at = at if at > limit // 3 else limit
+        while spoken_len(part) > limit:                # one clause longer than the limit: cut between words
+            at = _cut_at(part, limit)
             out.append(part[:at].strip())
             part = part[at:].strip()
         if part:
@@ -587,6 +711,9 @@ MARKS = (("ñ¿¡", "es", 2.0), ("çœ", "fr", 2.0), ("êâîûëïÿ", "fr", 1.
 SCRIPT_LANGUAGES = {"DEVANAGARI": ["hi"], "THAI": ["th"], "CYRILLIC": ["ru", "uk", "bg"], "ARABIC": ["ar", "fa"],
                     "HEBREW": ["he"], "GREEK": ["el"], "HANGUL": ["ko"], "KANA": ["ja"], "HAN": ["zh", "ja"],
                     "TAMIL": ["ta"]}
+# A Han or Hangul character is a syllable and a kana a mora: weighed as that many letters, so Chinese text with an
+# English name or two in it ("我用Python写代码") still reads as Chinese.
+WIDE = {"HAN": 3, "HANGUL": 3, "KANA": 2}
 
 
 def _script(ch: str) -> str:
@@ -605,7 +732,7 @@ def detect_languages(text: str) -> list[str]:
     for ch in text or "":
         if ch.isalpha():
             s = _script(ch)
-            counts[s] = counts.get(s, 0) + 1
+            counts[s] = counts.get(s, 0) + WIDE.get(s, 1)
     letters = sum(counts.values())
     if not letters:
         return []
@@ -642,7 +769,7 @@ def pick_voice(cfg: Config, text: str, voices: list[Voice]) -> tuple[Voice | Non
     if chosen is None:
         if not voices:
             return None, ""
-        wanted = kokoro_voice(cfg.voice)
+        wanted = known_voice(cfg.voice)
         same = [v for v in voices if wanted and v.family == wanted.family]
         chosen = (same or voices)[0]
         note = f"{wanted.name if wanted else cfg.voice} is not available, so {chosen.name} reads it."
@@ -655,11 +782,14 @@ def pick_voice(cfg: Config, text: str, voices: list[Voice]) -> tuple[Voice | Non
         named = find_voice(cfg.voices.get(lang, ""), voices) or find_voice(DEFAULT_FOR_LANGUAGE.get(lang, ""), voices)
         same = [v for v in voices if v.family == lang]
         if named is None and same:
-            kokoro = [v for v in same if v.engine == "kokoro"]
+            kokoro = [v for v in same if v.engine in ("kokoro", "kokoro-zh")]
             named = (kokoro or same)[0]
         if named is not None:
             return named, f"The text is in {LANGUAGE_NAMES.get(lang, lang)}, so {named.name} reads it."
     lang = LANGUAGE_NAMES.get(langs[0], langs[0])
+    if langs[0] in {family(pack_language(k)) for k in PACK_KEYS}:
+        return chosen, (f"No {lang} voice is installed, so {chosen.name} reads it. Download one under Read aloud on the "
+                        "tray's Features card, or add a Windows voice in Settings > Time & language > Speech.")
     return chosen, (f"No {lang} voice is installed, so {chosen.name} reads it. Windows adds one in Settings > Time & "
                     "language > Speech.")
 
@@ -700,6 +830,17 @@ def for_phonemes(text: str, language: str) -> str:
         t = re.sub(r"\betc\.(?! [A-Z])", "etc", t, flags=re.I)
         t = re.sub(r"(?<=\d)-(?=\d)", " to ", t)
     return " ".join(t.split())
+
+
+_FULLWIDTH = {**{chr(c): chr(c - 0xFEE0) for c in range(0xFF10, 0xFF1A)},                 # ０-９
+              **{chr(c): chr(c - 0xFEE0) for c in (*range(0xFF21, 0xFF3B), *range(0xFF41, 0xFF5B))},   # Ａ-Ｚ ａ-ｚ
+              "％": "%", "＋": "+", "－": "-", "．": ".", "　": " ", "‘": "'", "’": "'"}
+
+
+def for_zh(text: str) -> str:
+    """Chinese text as misaki should see it: full-width digits, letters and signs as ASCII, so cn2an reads numbers out
+    and English words reach espeak-ng. Full-width punctuation stays: misaki maps it the way Kokoro v1.1-zh learned."""
+    return " ".join("".join(_FULLWIDTH.get(c, c) for c in text).split())
 
 
 def split_punctuation(text: str) -> list[tuple[bool, str]]:
