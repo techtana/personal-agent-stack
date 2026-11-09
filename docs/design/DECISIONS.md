@@ -9,7 +9,7 @@ entry stays and gets a "Done <date>" note.
 
 ## 2026-11-08
 
-- **Pending: Thai for read aloud through Kokoro Thai (kunato/wayu-kokoro-thai-v1), an optional voice set, though its
+- **Done 2026-11-08 (PR #64): Thai for read aloud through Kokoro Thai (kunato/wayu-kokoro-thai-v1), an optional voice set, though its
   training speech comes from a non-commercial model.** Asked for by the owner; offered beside the Mandarin set
   (read_aloud.packs `kokoro-th`; Download and Remove in the installer's More voices and on the tray's Features card).
   - Licence: the bundle is Apache-2.0, but its own code shows how it was made: a Kokoro-82M student distilled from
