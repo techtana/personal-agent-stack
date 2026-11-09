@@ -21,6 +21,8 @@ Commands
   bench         measure tok/s and GPU/CPU split for the primary (or --model) via Ollama
   smoke         end-to-end checks through LiteLLM and the orchestrator MCP
   claude-env    print the env for Claude Code profile B (--shell powershell|bash)
+  claude-access whether Claude may use the stack with its own keys: status | on | off | connect (give Claude Code in
+                this checkout and its worktrees its own keys instead of the stack's)
   why-routed    show recent gateway routing decisions
   retro         run scripts/retro.py (arguments pass through)
   skills-sync   copy new or changed personal skills into skills/ (--dry-run; rules in skills/sync.yaml)
@@ -150,6 +152,13 @@ def cmd_deploy(a):
     except (ValueError, RuntimeError) as e:
         die(str(e))
     info(f"app ready in {app}")
+    from stacklib import claude_access
+
+    try:   # Claude Code here (and in this checkout's worktrees) uses Claude's own keys, which the tray can switch off
+        for path, result in claude_access.connect(env_file=app / ".env"):
+            (warn if result.startswith("failed") else info)(f"Claude Code's settings {path}: {result}")
+    except Exception as e:  # noqa: BLE001 - the install goes on; `stack.py claude-access connect` can redo this
+        warn(f"could not give Claude Code its own keys: {e}")
     if getattr(a, "launch", False):
         deploy.run_in_app(app, ["scripts/installer.py"], detached=True, env={"AGENT_STACK_HIDE_CONSOLE": "1"})
         info("the installer window opens from the app folder")
@@ -463,6 +472,38 @@ def cmd_claude_env(a):
     p = prof.resolve_profile()
     claude_env.write_local_profile_settings(p)
     print(claude_env.render(claude_env.local_profile_env(p), a.shell))
+
+
+def cmd_claude_access(a):
+    """Claude's own keys and the switch that lets Claude use the gateway and the agent tools (stacklib/claude_access.py)."""
+    from stacklib import claude_access, deploy
+    from stacklib import settings as cfg
+
+    app = None if a.here or deploy.is_app() else deploy.installed_app()
+    if app and a.action in ("status", "on", "off"):
+        # The installed app runs the services, keeps the profile and the switch file.
+        info(f"claude-access: using the installed app in {app} (--here acts on this checkout's own stack)")
+        raise SystemExit(deploy.run_in_app(app, ["claude-access", a.action]))
+    p = prof.resolve_profile()
+    if a.action in ("on", "off"):
+        cfg.apply(p, {"claude_access.enabled": a.action == "on"}, log=info)
+        p = prof.resolve_profile(p["name"])
+    if a.action == "connect":
+        before = claude_access.status(p)["keys"]
+        for path, result in claude_access.connect():
+            (warn if result.startswith("failed") else info)(f"{path}: {result}")
+        info("Claude Code sessions pick up the new keys when they start again.")
+        if not before:
+            info("The gateway and the agent tools learn Claude's new keys when they start again (tray: Stop and Start).")
+    st = claude_access.status(p)
+    ports = p["ports"]
+    info(f"Claude may use the stack: {'yes' if st['enabled'] else 'no'} (gateway port {ports['litellm']}, agent tools "
+         f"port {ports['orchestrator']}; switch file {claude_access.switch_path(p)})")
+    info(f"Claude's own keys in {claude_access.stack_env_file()}: {'set' if st['keys'] else 'missing (connect adds them)'}")
+    info(f"Claude Code settings with Claude's own keys: {len(st['claude'])} of {st['checkouts']} checkout(s)")
+    for path in st["stack"]:
+        warn(f"{path} still gives Claude Code the stack's own keys; `stack.py claude-access connect` replaces them")
+    info("Not covered: a program that reads the stack's own keys from .env, and Ollama and ComfyUI, which take no key.")
 
 
 def cmd_why_routed(a):
@@ -814,6 +855,10 @@ def main(argv=None):
     s.set_defaults(f=cmd_read_aloud)
     s = sub.add_parser("whisper", help="take the old recordings server out of Claude Desktop's config (no longer set up)")
     s.add_argument("action", choices=["unregister"]); s.set_defaults(f=cmd_whisper)
+    s = sub.add_parser("claude-access", help="whether Claude may use the gateway and the agent tools with its own keys")
+    s.add_argument("action", nargs="?", default="status", choices=["status", "on", "off", "connect"])
+    s.add_argument("--here", action="store_true", help="act on this checkout's own stack even when the app is installed")
+    s.set_defaults(f=cmd_claude_access)
     s = sub.add_parser("web-filter", help="blocked sites in Open WebUI: status, refresh (download the lists), sync, "
                                           "check <site>, export (the audit's list, Claude Code rules, Chrome policy)")
     s.add_argument("action", nargs="?", default="status", choices=["status", "refresh", "sync", "check", "export"])

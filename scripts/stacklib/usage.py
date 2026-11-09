@@ -198,8 +198,11 @@ _CLIENTS = (
 
 
 def client_of(row: dict) -> str:
-    """Friendly name of the program that sent a gateway request, from its User-Agent header."""
+    """Friendly name of the program that sent a gateway request, from its User-Agent header. A request made with
+    Claude's own key (key alias "claude", claude_access.py) is Claude's whatever name it sends."""
     ua = str(row.get("user_agent") or "").lower()
+    if row.get("key_alias") == "claude":
+        return "Claude Code" if "claude-cli" in ua or "claude-code" in ua else "Claude"
     if not ua:
         return "Unknown"
     if ua.startswith("agent-stack-"):

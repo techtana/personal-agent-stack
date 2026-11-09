@@ -27,8 +27,9 @@ is in `memory/state.md`; durable lessons in `memory/lessons.md`; the design in `
    --write-profile`) writes it on each machine, git ignores it, and a worktree uses the main checkout's. Never commit it.
 3. Never pass `temperature`, `top_p` or `top_k` to Anthropic models (HTTP 400 since 2026-10-21). Local
    deployments may set them under `local:` in the agent YAML.
-4. Secrets live only in `.env` (gitignored) and `.claude/settings.local.json`; `.mcp.json` reads
-   `${ORCHESTRATOR_BEARER}` (a name Claude Code does not blank).
+4. Secrets live only in `.env` (gitignored) and `.claude/settings.local.json`. Claude Code gets keys of its own
+   (`LITELLM_CLAUDE_KEY`, `ORCHESTRATOR_CLAUDE_BEARER`; `.mcp.json` reads the latter, a name Claude Code does not
+   blank), never the stack's; the tray's Claude switch refuses them (`scripts/stacklib/claude_access.py`).
 5. Work in bounded tasks with human checkpoints. Say `ESCALATE: <reason>` when stuck twice.
 6. Append lessons as dated bullets to `memory/lessons.md` (or via the orchestrator `record_lesson` tool);
    never rewrite earlier bullets. Record measurements and open items in `memory/state.md`.
