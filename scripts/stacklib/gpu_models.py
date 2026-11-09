@@ -5,7 +5,7 @@ Whisper and ComfyUI's image models. Each comes from its own service, because no 
 - voice typing: GET /health on its control port (model, device, idle time). faster-whisper does not report its
   memory, so the size is the figure measured for that model (features.WHISPER, 1.2 GB for large-v3-turbo). The same
   answer says when read aloud's Kokoro is loaded, on the GPU (1.0 GB measured) or the CPU (no GPU memory), and its
-  Mandarin model too (0.7 GB measured);
+  Mandarin model (0.7 GB measured) and its Thai model (1.0 GB measured) too;
 - ComfyUI: GET /system_stats, whose torch_vram_total is the GPU memory ComfyUI's own torch holds (models plus cache).
 
 The recordings server for Claude Desktop runs its own Whisper inside Claude Desktop's process tree and has no port to
@@ -24,8 +24,9 @@ GIB = 2**30
 COMFY_MIN_BYTES = 256 * 2**20   # below this ComfyUI holds only its CUDA context, not a model
 # GB read aloud's Kokoro holds on the GPU (measured 2026-11-08 on an RTX 3060; config/installer.yaml kokoro.gpu_vram_gb)
 KOKORO_GPU = float(catalog.kokoro().get("gpu_vram_gb") or 1.0)
-# and its Mandarin model, Kokoro v1.1-zh (config/installer.yaml kokoro_zh.gpu_vram_gb)
+# and its Mandarin model, Kokoro v1.1-zh (config/installer.yaml kokoro_zh.gpu_vram_gb), and its Thai model (kokoro_th)
 KOKORO_ZH_GPU = float(catalog.section("kokoro_zh").get("gpu_vram_gb") or 0.7)
+KOKORO_TH_GPU = float(catalog.section("kokoro_th").get("gpu_vram_gb") or 1.0)
 
 
 def _unloads_ollama(expires_at: str | None, now: datetime) -> str:
@@ -81,16 +82,25 @@ def _kokoro_row(health: dict | None) -> dict | None:
             "estimate": True, "gpu": "100%" if on_gpu else "CPU", "context": 0, "unloads": _unloads_after(read)}
 
 
-def _kokoro_zh_row(health: dict | None) -> dict | None:
-    """Read aloud's Mandarin model (Kokoro v1.1-zh) while it is loaded; it unloads after the same idle minutes."""
+def _kokoro_set_row(health: dict | None, lang: str, default_name: str, gpu_gb: float) -> dict | None:
+    """One of read aloud's other Kokoro models (Mandarin under "zh", Thai under "th") while it is loaded; it unloads
+    after the same idle minutes."""
     read = health.get("read_aloud") if isinstance(health, dict) else None
-    zh = read.get("zh") if isinstance(read, dict) else None
-    if not isinstance(zh, dict) or zh.get("engine") != "ready":
+    model = read.get(lang) if isinstance(read, dict) else None
+    if not isinstance(model, dict) or model.get("engine") != "ready":
         return None
-    on_gpu = zh.get("device") == "cuda"
-    return {"name": str(zh.get("model") or "kokoro-82m-v1.1-zh"), "by": "Read aloud",
-            "bytes": int(KOKORO_ZH_GPU * GIB) if on_gpu else 0, "estimate": True, "gpu": "100%" if on_gpu else "CPU",
-            "context": 0, "unloads": _unloads_after({**zh, "unload_after_min": read.get("unload_after_min")})}
+    on_gpu = model.get("device") == "cuda"
+    return {"name": str(model.get("model") or default_name), "by": "Read aloud",
+            "bytes": int(gpu_gb * GIB) if on_gpu else 0, "estimate": True, "gpu": "100%" if on_gpu else "CPU",
+            "context": 0, "unloads": _unloads_after({**model, "unload_after_min": read.get("unload_after_min")})}
+
+
+def _kokoro_zh_row(health: dict | None) -> dict | None:
+    return _kokoro_set_row(health, "zh", "kokoro-82m-v1.1-zh", KOKORO_ZH_GPU)
+
+
+def _kokoro_th_row(health: dict | None) -> dict | None:
+    return _kokoro_set_row(health, "th", "wayu-kokoro-thai-v1", KOKORO_TH_GPU)
 
 
 def _comfy_row(stats: dict | None, label: str = "") -> dict | None:
@@ -114,7 +124,7 @@ def rows(ollama_ps: list[dict], dictation_health: dict | None = None, comfy_stat
     none) and unloads ("in 12 min", "never", "on Chat", "-")."""
     out = _ollama_rows(ollama_ps, now or datetime.now(timezone.utc))
     for extra in (_whisper_row(dictation_health), _kokoro_row(dictation_health), _kokoro_zh_row(dictation_health),
-                  _comfy_row(comfy_stats, comfy_label)):
+                  _kokoro_th_row(dictation_health), _comfy_row(comfy_stats, comfy_label)):
         if extra:
             out.append(extra)
     return out

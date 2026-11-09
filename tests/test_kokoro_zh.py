@@ -89,7 +89,7 @@ class Voices(unittest.TestCase):
         self.assertLess(ids.index("af_heart"), ids.index(speak.DEFAULT_FOR_LANGUAGE["zh"]))
 
     def test_a_voice_set_beside_the_piper_voices(self):
-        self.assertEqual(speak.PACK_KEYS[-1], "kokoro-zh")
+        self.assertEqual(speak.PACK_KEYS[-2:], ("kokoro-zh", "kokoro-th"))   # after the Piper voices; Thai last
         self.assertEqual(speak.pack_language("kokoro-zh"), "zh-cn")
         self.assertEqual(speak.pack_title("kokoro-zh"), f"Chinese, Mandarin: {len(speak.ZH_VOICES)} Kokoro voices")
         self.assertEqual(speak.pack_title("de_DE-thorsten-high"), "German: Thorsten")

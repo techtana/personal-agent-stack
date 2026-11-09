@@ -512,6 +512,28 @@ Voices:
     synthetic English joined the training, the same kind of data as in Kokoro v1.0. The installer's footnote and the
     tray's row say so. Pinned in `config/installer.yaml` (`kokoro_zh`): the repository revision, both weights'
     sha256 (checked after a download), the voices and the package versions that load under Smart App Control.
+- **Thai** (Kokoro Thai, kunato/wayu-kokoro-thai-v1, Apache-2.0, an optional download since 2026-11-08): twelve
+  voices, eight female and four male, named by age and timbre: *Young, clear (Thai, female)* is the default, then
+  *Middle-aged, warm*, *Elderly, low* and so on. Tick **Thai** under **Read aloud > More voices** in the installer, or
+  use **Download** on its row under Read aloud on the tray's Features card. That installs pythainlp and tltk, the open
+  Thai text tools its front-end needs (about 101 MB, into voice typing's environment), and downloads the model (326 MB)
+  into the Hugging Face cache: about 0.43 GB in all. Voice typing keeps running and finds the new voices within a
+  minute. **Remove** on the same row deletes the model and takes the packages out again (voice typing restarts for
+  that).
+  - It runs where Kokoro runs (**Runs on**): on the reference machine about 0.3 s per sentence on the RTX 3060 (11-13
+    times faster than real time, 1.0 GB of GPU memory) or 3 times faster than real time on the CPU (0.8 GB of RAM). It
+    is one more model: the first Thai reading loads it (2.5-4 s) and it is freed after the same idle minutes as Kokoro.
+  - Numbers, dates, money and abbreviations are read out in Thai first (35 บาท, 8 พ.ย. as พฤศจิกายน, ๆ repeats the word
+    before it). English words inside Thai text are read through espeak-ng, the way Kokoro reads English. Thai text has
+    no full stops, so long passages are cut at spaces.
+  - Checked with Whisper standing in for a listener: each voice read eight sentences, and Whisper wrote back the same
+    text with 3-5% of the characters different, mostly its own tone marks; mixed sentences such as "วันนี้ผมจะสอนการใช้
+    Python กับ machine learning บน Google Cloud" came back with the English words right.
+  - About its data: the model's training speech is synthetic, made with OmniVoice, a model licensed for
+    non-commercial use only (CC BY-NC) because of the recordings it learned from. The model itself is published under
+    Apache-2.0, but keep its voices to personal use. The installer's footnote and the tray's row say so. Pinned in
+    `config/installer.yaml` (`kokoro_th`): the repository revision, every file's sha256, the voices and the package
+    versions.
 - **Windows voices** (David, Zira and Mark on an English Windows; any voice added in Windows Settings > Time & language
   > Speech) start at once and sound flatter. They cover the languages neither Kokoro nor the more voices do (Windows
   is closed source, but these come with it; the stack installs nothing for them).
@@ -528,7 +550,7 @@ machine file:
 
 ```yaml
 read_aloud:
-  voices: {fr: ff_siwis, de: 'windows:Microsoft Katja', zh: 'kokoro-zh:zm_031'}
+  voices: {fr: ff_siwis, de: 'windows:Microsoft Katja', zh: 'kokoro-zh:zm_031', th: 'kokoro-th:m_mid_warm'}
 ```
 
 `uv run scripts/stack.py read-aloud voices` lists every voice id; `read-aloud speak "Some text" --voice bf_emma` says

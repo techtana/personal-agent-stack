@@ -9,6 +9,40 @@ entry stays and gets a "Done <date>" note.
 
 ## 2026-11-08
 
+- **Pending: Thai for read aloud through Kokoro Thai (kunato/wayu-kokoro-thai-v1), an optional voice set, though its
+  training speech comes from a non-commercial model.** Asked for by the owner; offered beside the Mandarin set
+  (read_aloud.packs `kokoro-th`; Download and Remove in the installer's More voices and on the tray's Features card).
+  - Licence: the bundle is Apache-2.0, but its own code shows how it was made: a Kokoro-82M student distilled from
+    OmniVoice (k2-fsa), whose weights are CC-BY-NC because of their training data (Emilia), with 12 voices designed
+    from text descriptions. That is the kind of data the Piper entry below leaves out. The owner chose, when asked, to
+    offer it marked, as with the lessac-based Piper voices: the catalog, the installer's footnote (‡) and the tray's
+    row say "synthetic speech from a CC-BY-NC model".
+  - Model: the bundle's ONNX export only, three graphs (prosody, curves, decoder) with the harmonic source computed in
+    numpy between them (float64 phase, as upstream). 326 MB in the Hugging Face cache at the pinned revision, every
+    file's sha256 checked. fp32 only (upstream found fp16 slower and worse; there is no int8 export), whatever
+    read_aloud.kokoro says.
+  - Front-end: carried into the repo (stacklib/dictation/thai, Apache-2.0, each file says what changed), so it is
+    reviewed code under the project's tests and no code runs from a model download. pythainlp normalises the text
+    (upstream's normalize.py unchanged); tltk's th2ipa gives IPA with tone digits (four tones on Kokoro's Mandarin
+    arrows, the low tone on one new token). English words go through read aloud's espeak-ng.
+  - tltk 1.11 declares scikit-learn ~=1.2 (no wheels for Python 3.14), gensim, nltk and sklearn-crfsuite, used only by
+    its taggers and parsers. It is installed with --no-deps, and tltk/nlp.py loads with stand-ins for those imports
+    and without tltk/__init__ (its corpus module needs gensim). It gave the same th2ipa as the full install (Python
+    3.11 with all its dependencies) on 4,004 dictionary words and sentences. Everything installed is pure Python, so
+    Smart App Control has nothing to judge.
+  - tltk recompiled its few thousand syllable patterns on every word (re's cache holds 512): 0.3-1.2 s a sentence, more
+    than the model takes on the GPU. It gets its own `re` with an unbounded compile cache: 30-100 ms, the same output
+    on the 4,004 inputs.
+  - All 12 speakers offered (3.1-4.9% character errors in a Whisper round trip of 8 sentences each, most of it
+    Whisper's own tone marks); women first, then men, each by that score; f_young_clear is the default for Thai.
+  - A third Kokoro engine (tts.KokoroTh) on one base with KokoroZh: the same GPU, fallback and idle unload, the
+    front-end loading in a thread beside the sessions. The Mandarin-only code became one description of a Kokoro set
+    (speak.ModelPack); the zh_* names stay as wrappers. Fixed on the way: a removal plan for read aloud raised KeyError
+    on a PC with the Mandarin voices installed (uninstall._pack_items looked every set up among the Piper voices).
+  - Turned down: Piper's Thai voice (trained on non-commercial data, so no cleaner than this one); the bundle's 438 MB PyTorch checkpoint and its training code; importing the front-end from the download;
+    upstream's misaki-en for English words (spaCy and a pinned en_core_web_sm); tltk with its full dependencies (no
+    scikit-learn wheels for Python 3.14); tltk's standalone tltk/th2ipa.py (a stale 1.3.8 copy that looks for data
+    files 1.11 no longer ships).
 - **Pending: Mandarin Chinese for read aloud through Kokoro v1.1-zh, an optional voice set.** The "next" of the Piper
   entry below: Mandarin's cleanest model, offered like the Piper voices (read_aloud.packs `kokoro-zh`; Download and
   Remove in the installer's More voices and on the tray's Features card).

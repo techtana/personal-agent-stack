@@ -1,6 +1,7 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-08 (Mandarin voices for read aloud, Kokoro v1.1-zh; open item 39). Before that, the same day
+Updated: 2026-11-08 (Thai voices for read aloud, Kokoro Thai; open item 40). Before that, the same day (Mandarin
+voices for read aloud, Kokoro v1.1-zh; open item 39). Before that, the same day
 (blocked sites for Open WebUI's web reading, and audit checks for Claude; open item 38). Before that, the same
 day (the installer's catalog in config/installer.yaml, install and remove from the tray and the
 installer, the tray's Overview and Settings reworked; open item 37). Before that, the same day (read aloud of selected
@@ -789,6 +790,33 @@ once across a session restart.
    - Not verified: Download and Remove through the setup worker for real (the packages and files were put in place by
      hand, so the worker's install_zh and the removal ran only in unit tests); the live tray and app (they run the
      installed app's code); Traditional Chinese text; a listener's ear.
+   - After merging: rerun install.cmd from the main checkout (it updates the app), then restart voice typing.
+40. Thai voices for read aloud (2026-11-08, branch claude/kokoro-thai, on top of item 39). kunato/wayu-kokoro-thai-v1
+   at abf63dc (Apache-2.0; training speech distilled from OmniVoice, CC-BY-NC, offered marked at the owner's choice)
+   is the voice set `kokoro-th`. Download installs pythainlp 5.4.0, tltk 1.11 and tzdata 2026.6 with --no-deps
+   (101 MB, pure Python) into voice typing's environment, checks the Thai front-end loads, then fetches the three ONNX
+   graphs, onnx_manifest.json, source_params.npz and styles.npz (326 MB, every sha256 checked) into the HF cache.
+   tts.KokoroTh (on a shared OwnFrontEnd base with KokoroZh) runs the graphs with the harmonic source in numpy
+   (thai/model.py); the front-end is stacklib/dictation/thai (adapted from the bundle, Apache-2.0). speak.ModelPack
+   now describes both Kokoro sets; the zh_* names are wrappers.
+   - On this PC (2026-11-08, through dictation.install_th, the worker's own path): the packages are in
+     C:\media\dictation\.venv and the model is in D:\huggingface. The machine profile was not changed
+     (read_aloud.packs does not name kokoro-th); installed_packs reports kokoro-zh and kokoro-th.
+   - Measured through tts.Speech (2026-11-08, 8 pieces, 2 voices): CPU load 2.5 s, 3.2-3.5x real time on 6 threads, working set
+     +0.75 GiB; GPU load 2.6-4.0 s, 11-13x real time (0.24-0.36 s a sentence), +1,055 MiB of GPU memory. Before the
+     regex cache, tltk took 0.3-1.2 s a sentence (2.3x CPU, 5.5x GPU end to end); after, 30-105 ms.
+   - Whisper large-v3-turbo round trip (2026-11-08): 12 voices x 8 plain sentences, 3.1-4.9% character errors (prototype in a
+     throwaway python.org 3.14 venv with Smart App Control on); mixed Thai-English sentences and numbers through the
+     real engine read right (Whisper writes digits where the front-end says Thai number words, so their CER is not 0).
+   - tltk loaded without its dependencies gives the same th2ipa as the full tltk (Python 3.11, scikit-learn 1.2.2,
+     numpy<2, pandas 2.2) on 4,004 inputs, before and after the regex cache.
+   - Verified: unit tests (tests/test_kokoro_th.py: 31 here, 7 more in voice typing's environment, where the Mandarin
+     engine tests and test_read_aloud also pass: 161); `python -m stacklib.dictation speak --list` lists the 12
+     voices, and `speak --voice kokoro-th:m_mid_warm --out` read a mixed sentence on the GPU; a render of the
+     installer's More voices row and footnote.
+   - Not verified: Remove for real (unit tests only); the tray's Features card and its Remove confirmation rendered
+     (they use the tested pack_title/pack_note/ModelPack fields); the live tray and app (they run the installed app's
+     code); a reading through the speaker button; a Thai listener's ear; text with rare names or Pali/Sanskrit words.
    - After merging: rerun install.cmd from the main checkout (it updates the app), then restart voice typing.
 
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models

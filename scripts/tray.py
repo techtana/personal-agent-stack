@@ -1485,8 +1485,8 @@ class TrayApp:
 
     def _render_packs(self) -> None:
         """The rows under Read aloud: Piper voices for more languages (config/installer.yaml voice_packs) and the
-        Mandarin voices (kokoro_zh), each with Download or Remove; shown while read aloud is installed, since they run
-        in its environment."""
+        Mandarin and Thai voices (kokoro_zh, kokoro_th), each with Download or Remove; shown while read aloud is
+        installed, since they run in its environment."""
         from stacklib.dictation import speak
 
         w = self.feature_widgets.get("read_aloud")
@@ -1533,30 +1533,32 @@ class TrayApp:
         variant = str((self.profile.get("read_aloud") or {}).get("kokoro") or "fp32")
         mb = speak.pack_disk_mb(key, variant)
         lang = speak.language_label(speak.pack_language(key))
-        zh = key == speak.ZH_PACK
-        who = "the Mandarin voices" if zh else " and ".join(
+        pack = speak.model_pack(key)   # the Mandarin or Thai voices: a Kokoro model of their own
+        who = f"the {pack.what}" if pack else " and ".join(
             str(x[0]) for x in (speak.PIPER_VOICES[key].get("speakers") or {}).values())
         def start(**kw):
             return lambda: install.start_voice_packs(self.profile, **kw)
 
         if installed:
-            text = (f"This deletes Kokoro v1.1-zh and its {len(speak.ZH_VOICES)} voices from "
-                    f"{uninstall.short_path(uninstall.hf_home(self.profile))} and takes misaki out of voice typing's "
-                    f"environment ({mb:.0f} MB in all; voice typing restarts if it runs). Chinese text is then read "
-                    "by a Windows voice for Chinese, if one is installed. You can download them again from this list."
-                    if zh else
+            text = (f"This deletes {pack.model} and its {len(pack.voices)} voices from "
+                    f"{uninstall.short_path(uninstall.hf_home(self.profile))} and takes {pack.front_end} out of voice "
+                    f"typing's environment ({mb:.0f} MB in all; voice typing restarts if it runs). "
+                    f"{(name := speak.LANGUAGE_NAMES.get(speak.family(pack.language), lang))} text is then read by a "
+                    f"Windows voice for {name}, if one is installed. You can download them again from this list."
+                    if pack else
                     f"This deletes the {lang} voice {who} ({mb:.0f} MB) from "
                     f"{uninstall.short_path(dictation.packs_dir(self.profile))}. Read aloud then uses another "
                     "voice for that language, or a Windows voice. You can download it again from this list.")
-            self._confirm(f"Delete {who}?" if zh else f"Delete the voice {who}?", text,
-                          "Delete voices" if zh else "Delete voice",
+            self._confirm(f"Delete {who}?" if pack else f"Delete the voice {who}?", text,
+                          "Delete voices" if pack else "Delete voice",
                           lambda: self._start_setup("read_aloud", "Removing", start(remove=[key])), cancel="Keep it")
             return
-        folder = uninstall.hf_home(self.profile) if zh else dictation.packs_dir(self.profile)
+        folder = uninstall.hf_home(self.profile) if pack else dictation.packs_dir(self.profile)
         free = storage.free_bytes(storage.drive_of(folder))
         if free is not None and free / 1e6 < mb + 100:
             self._notice(f"Not enough space for {who}",
-                         f"{'They need' if zh else 'The voice needs'} about {mb:.0f} MB, and {storage.drive_of(folder)} "
+                         f"{'They need' if pack else 'The voice needs'} about {mb:.0f} MB, and "
+                         f"{storage.drive_of(folder)} "
                          f"has {storage.size_text(free)} free.")
             return
         self._start_setup("read_aloud", "Downloading", start(download=[key]))

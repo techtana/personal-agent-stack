@@ -5,7 +5,7 @@
     python -m stacklib.dictation check                imports, GPU, model, microphones, hotkey
     python -m stacklib.dictation speak "TEXT"         read aloud's voices: speak text (--out F.wav, --voice, --speed),
                                                       --list the voices, --download Kokoro's files (the installer),
-                                                      --download-zh the Mandarin voices' files
+                                                      --download-zh / --download-th the Mandarin or Thai voices' files
 """
 from __future__ import annotations
 
@@ -140,6 +140,9 @@ def cmd_speak(a, profile: dict) -> int:
     if a.download_zh:
         print(tts.download_zh(profile, note))
         return 0
+    if a.download_th:
+        print(tts.download_th(profile, note))
+        return 0
     cfg = speak.Config.from_profile(profile, warn=note)
     cfg.voice = a.voice or cfg.voice
     cfg.speed = a.speed or cfg.speed
@@ -248,6 +251,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--download", action="store_true", help="fetch Kokoro's weights and voices into the HF cache")
     s.add_argument("--download-zh", action="store_true",
                    help="fetch the Mandarin voices (Kokoro v1.1-zh) into the HF cache")
+    s.add_argument("--download-th", action="store_true",
+                   help="fetch the Thai voices (Kokoro Thai) into the HF cache")
     a = ap.parse_args(argv)
     profile = prof.resolve_profile()
     if usage_log.ENV not in os.environ:  # started by hand, not by stack.py or the tray: follow the profile's switch
