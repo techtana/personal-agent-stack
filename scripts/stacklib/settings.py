@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 
 import yaml
 
-from . import agents_build, catalog, litellm_build, ollama, services, winget_build
+from . import agents_build, catalog, claude_access, litellm_build, ollama, services, winget_build
 from . import profile as prof
 from .yamledit import dump_scalar as _dump_scalar, set_key  # noqa: F401 - set_key is imported from here by install.py
 
@@ -168,6 +168,10 @@ SETTINGS = [
             "fp32: the full model (326 MB). int8: smaller (92 MB) and as fast on this kind of CPU. off: Windows voices "
             "only. A change downloads the new weights at the next reading.", "read_aloud", list(KOKORO_CHOICES),
             advanced=True),
+    Setting("claude_access", "enabled", "Let Claude use the stack", "bool",
+            "Claude Code reaches the gateway and the agent tools with keys of its own. Off: both refuse those keys from "
+            "the next request, without a restart. It cannot stop a program that reads the stack's own keys in .env or "
+            "turns the switch back on, and Ollama and ComfyUI take no key at all.", "claude"),
     Setting("web_filter", "enabled", "Block unsafe sites", "bool",
             "Keeps Open WebUI's web search and page fetches away from the sites below: results from them are dropped "
             "and their pages are not opened. Claude Desktop and Claude Code are outside the stack; the Claude security "
@@ -219,6 +223,7 @@ EFFECT_TEXT = {
     "refine": "nothing to restart (voice typing reads it at the next refine)",
     "read_aloud": "nothing to restart (voice typing reads it at the next reading)",
     "web_filter": "update the blocked sites (Open WebUI restarts when its page-fetch list changes)",
+    "claude": "nothing to restart (the gateway and the agent tools check it at the next request)",
 }
 
 
@@ -277,6 +282,7 @@ def current_values(profile: dict) -> dict[str, object]:
         "refine": profile.get("refine") or {},
         "read_aloud": profile.get("read_aloud") or {},
         "web_filter": profile.get("web_filter") or {},
+        "claude_access": {"enabled": claude_access.enabled(profile)},   # on unless the profile says false
     }
     out: dict[str, object] = {}
     for s in SETTINGS:
@@ -408,6 +414,10 @@ def apply(old_profile: dict, edits: dict[str, object], log=print) -> dict:
         log("No changes.")
         return profile
     log(f"Saved {len(todo)} setting(s) to machines/{profile['name']}.yaml")
+    if "claude" in effects:   # first, so a later step that fails cannot leave Claude allowed after "off"
+        claude_access.write_switch(profile)
+        log("Claude can use the stack again" if claude_access.enabled(profile)
+            else "The gateway and the agent tools refuse Claude's keys from the next request")
     supervised = services._task_managed()
     if effects & {"gateway", "phoenix"}:
         rebuild(profile)

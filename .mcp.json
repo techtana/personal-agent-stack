@@ -4,7 +4,7 @@
       "type": "http",
       "url": "http://127.0.0.1:8765/mcp",
       "headers": {
-        "Authorization": "Bearer ${ORCHESTRATOR_BEARER}"
+        "Authorization": "Bearer ${ORCHESTRATOR_CLAUDE_BEARER}"
       },
       "timeout": 120000
     }
