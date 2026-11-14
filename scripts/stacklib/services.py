@@ -11,7 +11,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from . import IS_WINDOWS, LITELLM_DIR, REPO, TRACES_DIR, catalog, env_value, info, load_dotenv, procname, warn, which
+from . import IS_WINDOWS, LITELLM_DIR, REPO, TRACES_DIR, catalog, claude_access, env_value, info, load_dotenv, procname, warn, which
 from . import webfilter
 
 # Media services (ComfyUI, Kokoro) start before Open WebUI, which points its image and speech settings at them.
@@ -171,6 +171,9 @@ def commands(profile: dict) -> dict[str, dict]:
         }
     litellm_env = {**base_env, "LITELLM_MASTER_KEY": master, "TRACES_DIR": str(TRACES_DIR / "litellm"), "LITELLM_LOG": "INFO"}
     litellm_env.update(gateway_label_env(profile))
+    # Claude's own gateway key and the switch that lets it work (infrastructure/litellm/custom_auth.py)
+    litellm_env.update({claude_access.GATEWAY_KEY: env_value(claude_access.GATEWAY_KEY, dotenv),
+                        **claude_access.service_env(profile)})
     if profile["observability"].get("phoenix"):
         litellm_env.update({"OTEL_EXPORTER": "otlp_http", "OTEL_ENDPOINT": f"http://127.0.0.1:{p['phoenix']}/v1/traces", "OTEL_SERVICE_NAME": "litellm"})
     out["litellm"] = {
@@ -187,6 +190,9 @@ def commands(profile: dict) -> dict[str, dict]:
         "env": {
             **base_env,
             "ORCHESTRATOR_BEARER": env_value("ORCHESTRATOR_BEARER", dotenv),
+            # Claude's own bearer and the switch that lets it work (orchestrator/access.py)
+            claude_access.TOOLS_KEY: env_value(claude_access.TOOLS_KEY, dotenv),
+            **claude_access.service_env(profile),
             "ORCHESTRATOR_PORT": str(p["orchestrator"]),
             "LITELLM_BASE_URL": f"http://127.0.0.1:{p['litellm']}",
             "LITELLM_MASTER_KEY": master,
@@ -458,7 +464,13 @@ def start(profile: dict, services: list[str] | None = None) -> dict[str, str]:
     cmds = commands(profile)
     managed = _task_managed()
     problems: dict[str, str] = {}
-    for svc in services or [s for s in SERVICE_ORDER if s in cmds]:
+    todo = services or [s for s in SERVICE_ORDER if s in cmds]
+    if {"litellm", "orchestrator"} & set(todo):
+        try:   # the services read Claude's switch from this file on each request; write it from the profile first
+            claude_access.write_switch(profile)
+        except OSError as e:
+            warn(f"Claude's switch file: {e}; the services use the profile's value from their start")
+    for svc in todo:
         if svc not in cmds:
             problems[svc] = "not configured on this profile"
             warn(f"{svc}: {problems[svc]}")

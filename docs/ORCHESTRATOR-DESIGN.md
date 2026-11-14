@@ -131,10 +131,11 @@ orchestrator and Open WebUI workspace models carry them per request, promptfoo c
 - **Profile A (default)**: Claude Code talks to Anthropic on the Max subscription. Departments are subagents
   with `model: haiku|sonnet|opus` aliases, `memory: project`, `maxTurns`, `effort`; skills `/retro`,
   `/harden`, `/brainstorm`, `/why-routed`; hooks `Stop`, `SubagentStop`, `PostToolUse(Bash)` -> `traces/claude/`;
-  the orchestrator via `.mcp.json` (`${ORCHESTRATOR_BEARER}`; credential-looking names read as empty).
+  the orchestrator via `.mcp.json` (`${ORCHESTRATOR_CLAUDE_BEARER}`, Claude's own bearer, refused while the tray's
+  Claude switch is off; credential-looking names read as empty).
   `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` so the gateway sees request classes when profile B is used.
 - **Profile B** (`scripts/claude-local.ps1|sh`): `CLAUDE_CONFIG_DIR=~/.claude-local`, `ANTHROPIC_BASE_URL` ->
-  gateway, `ANTHROPIC_AUTH_TOKEN` = LiteLLM master key (this replaces subscription billing for that process by
+  gateway, `ANTHROPIC_AUTH_TOKEN` = Claude's own gateway key `LITELLM_CLAUDE_KEY`, not the master key (this replaces subscription billing for that process by
   design), `ANTHROPIC_MODEL=local-primary`, `ANTHROPIC_DEFAULT_{HAIKU,SONNET,OPUS}_MODEL` -> local aliases,
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS`/`MAX_OUTPUT_TOKENS`/`AUTO_COMPACT_WINDOW` sized to the local `num_ctx`,
   `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`. Mixed local/cloud in one process = set

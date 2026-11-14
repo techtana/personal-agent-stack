@@ -26,7 +26,7 @@ from pathlib import Path
 import yaml
 
 from . import ENV_FILE, IS_WINDOWS, REPO, info, load_dotenv, warn, which
-from . import agents_build, catalog, claude_env, clients, disks, features, litellm_build, media, ollama, procname, services, winget_build
+from . import agents_build, catalog, claude_access, claude_env, clients, disks, features, litellm_build, media, ollama, procname, services, winget_build
 from . import profile as prof
 
 INSTALL_DIR = REPO / ".run" / "install"   # under the repository, not data_dir: it must not move while setup runs
@@ -543,6 +543,8 @@ def ensure_env_file() -> dict[str, str]:
         ("ORCHESTRATOR_BEARER", lambda: secrets.token_urlsafe(32)),
         ("WEBUI_SECRET_KEY", lambda: secrets.token_hex(32)),
         ("DICTATION_BEARER", lambda: secrets.token_urlsafe(32)),  # Open WebUI's microphone -> voice typing
+        # Claude Code's own keys for the gateway and the agent tools (claude_access.py), never the stack's
+        *((k, lambda k=k: claude_access.new_key(k)) for k in claude_access.CLAUDE_KEYS),
     )
     for k, gen in generators:
         if not env.get(k):
@@ -991,6 +993,12 @@ def step_build(plan: Plan, profile: dict, report) -> str:
     litellm_build.build(profile)
     winget_build.build()
     claude_env.write_settings_local(profile)
+    # Claude Code in the checkout (and its worktrees) gets Claude's own keys instead of the stack's; the switch file
+    # follows the profile before the services start.
+    for path, result in claude_access.connect():
+        if result.startswith("failed"):
+            warn(f"{path}: {result}")
+    claude_access.write_switch(profile)
     return f"primary model {profile['models'].get('primary')}, external models {'on' if profile['policy']['external']['enabled'] else 'off'}"
 
 

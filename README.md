@@ -115,9 +115,9 @@ Then:
 | `policy/privacy.yaml` | private-first policy: deployment location, `external.enabled` (off; the build refuses `true` until the privacy gate exists) |
 | `agents/<id>.yaml` | one department: prompt, tools, Claude Code model alias, routing tiers, evals |
 | `agents/_common.md` | working agreements appended to every department prompt |
-| `.env` | `LITELLM_MASTER_KEY`, `ORCHESTRATOR_BEARER`, `WEBUI_SECRET_KEY`, `ANTHROPIC_API_KEY` (unused until external models exist) |
+| `.env` | `LITELLM_MASTER_KEY`, `ORCHESTRATOR_BEARER`, `WEBUI_SECRET_KEY`, Claude Code's own `LITELLM_CLAUDE_KEY` and `ORCHESTRATOR_CLAUDE_BEARER`, `ANTHROPIC_API_KEY` (unused until external models exist) |
 | `.claude/settings.json` | hooks (trace capture), permissions, gateway hint headers |
-| `.claude/settings.local.json` | per-machine: MCP bearer env, `autoMemoryDirectory` -> `memory/claude/` |
+| `.claude/settings.local.json` | per-machine: Claude Code's own keys (never the stack's), `autoMemoryDirectory` -> `memory/claude/` |
 
 After any change: `uv run scripts/stack.py build` (and `up`/`down` to restart the gateway).
 

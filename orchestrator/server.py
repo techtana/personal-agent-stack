@@ -1,7 +1,8 @@
 """Streamable-HTTP MCP server exposing the department agents to Claude Code, OpenCode and Open WebUI.
 
 Tools: list_departments, delegate, get_job, cancel_job, record_lesson.
-Auth: static bearer from ORCHESTRATOR_BEARER (never name it *_TOKEN/*_API_KEY: Claude Code blanks those in .mcp.json).
+Auth: static bearers: ORCHESTRATOR_BEARER (the stack's) and ORCHESTRATOR_CLAUDE_BEARER (Claude Code's, refused while the
+tray's Claude switch is off; orchestrator/access.py). Never name them *_TOKEN/*_API_KEY: Claude Code blanks those in .mcp.json.
 Run: `uv run python -m orchestrator.server` (stack.py up does this).
 """
 from __future__ import annotations
@@ -12,18 +13,19 @@ from datetime import date
 from typing import Literal
 
 from fastmcp import FastMCP
-from fastmcp.server.auth import StaticTokenVerifier
 from mcp.types import ToolAnnotations
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from orchestrator.access import StackTokenVerifier
 from orchestrator.jobs import REPO, JobStore, load_departments
 
 BEARER = os.environ.get("ORCHESTRATOR_BEARER", "")
+CLAUDE_BEARER = os.environ.get("ORCHESTRATOR_CLAUDE_BEARER", "")
 PORT = int(os.environ.get("ORCHESTRATOR_PORT", "8765"))
 HOST = os.environ.get("ORCHESTRATOR_HOST", "127.0.0.1")
 
-auth = StaticTokenVerifier(tokens={BEARER: {"client_id": "local-stack", "scopes": ["orchestrate"]}}, required_scopes=["orchestrate"]) if BEARER else None
+auth = StackTokenVerifier(BEARER, CLAUDE_BEARER) if BEARER else None
 if auth is None:
     print("WARNING: ORCHESTRATOR_BEARER is empty; the MCP server is unauthenticated (bind stays on 127.0.0.1).")
 

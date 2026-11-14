@@ -1,7 +1,8 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-09 (speech models beside Whisper, and the installer's system check; open item 41). Before that,
-2026-11-08 (Thai voices for read aloud, Kokoro Thai; open item 40). Before that, the same day (Mandarin
+Updated: 2026-11-09 (speech models beside Whisper, and the installer's system check; open item 42). Before that,
+the same day (Claude's own keys and the tray's Claude switch; open item 41; recordings removed from this PC,
+item 37). Before that, 2026-11-08 (Thai voices for read aloud, Kokoro Thai; open item 40). Before that, the same day (Mandarin
 voices for read aloud, Kokoro v1.1-zh; open item 39). Before that, the same day
 (blocked sites for Open WebUI's web reading, and audit checks for Claude; open item 38). Before that, the same
 day (the installer's catalog in config/installer.yaml, install and remove from the tray and the
@@ -688,8 +689,10 @@ once across a session restart.
    - Recordings for Claude Desktop retired the same day, at the owner's word ("this app should not have any dependency
      with non-open source software like claude"): no installer step, option, Services row or re-registration; the
      Features card and the installer list it only while an old install is here, with Remove; `stack.py whisper` keeps
-     only `unregister`. This PC still has it (Linked, 2.4 GB in C:\media\whisper): Remove it from the tray after
-     merging, with Claude Desktop closed. Open question for the owner: the Claude Code tooling around the repository
+     only `unregister`. Removed from this PC on 2026-11-09 with the owner's OK (uninstall.remove from the installed
+     app): local-whisper is out of Claude Desktop's config (backup `.bak-20261109-020115`, unity-mcp kept),
+     C:\media\whisper is gone (2.4 GB), large-v3-turbo stays for voice typing. Claude Desktop lists the server until it
+     restarts. Open question for the owner: the Claude Code tooling around the repository
      (profile B, .claude/agents, the security audit skill) is not part of the installed app and was left as it is.
    - Read aloud in more languages, the same day, at the owner's request ("installation options for best models for
      key languages that kokoro does not cover"). A research subagent compared open text-to-speech models per
@@ -819,8 +822,51 @@ once across a session restart.
      (they use the tested pack_title/pack_note/ModelPack fields); the live tray and app (they run the installed app's
      code); a reading through the speaker button; a Thai listener's ear; text with rare names or Pali/Sanskrit words.
    - After merging: rerun install.cmd from the main checkout (it updates the app), then restart voice typing.
+41. Claude's own keys and the tray's Claude switch (2026-11-09, branch claude/desktop-capability-assessment-7f5baf).
+   Claude Code reached the gateway (profile B) and the agent tools (.mcp.json) with the stack's own keys: the master
+   key and ORCHESTRATOR_BEARER were in profile B and in `.claude/settings.local.json`, so every session here had both
+   in its environment. Now (scripts/stacklib/claude_access.py):
+   - `.env` holds Claude's own LITELLM_CLAUDE_KEY (sk-claude-...) and ORCHESTRATOR_CLAUDE_BEARER; setup makes them,
+     and `.mcp.json` reads the bearer. Claude Code's settings files get Claude's keys and lose the stack's: the
+     checkout does it when it installs the app (stack.py deploy), or `stack.py claude-access connect`. The installed
+     app keeps no path back to its checkout (tests/test_deploy.py), so its tray cannot see Claude Code's settings.
+   - The gateway checks Claude's key in a LiteLLM custom auth hook (infrastructure/litellm/custom_auth.py, config
+     `general_settings.custom_auth`): an explicit list of model routes only (LiteLLM's own "LLM route" test also
+     admits pass-through, trace, RAG and file routes), refused while `claude_access.enabled` is false; every other
+     key returns None and goes on to LiteLLM's master key check (litellm-enterprise passes None on). The config also
+     sets `custom_auth_run_common_checks: true`, because a custom_auth alone makes LiteLLM skip its common checks for
+     every key, the master key included. The orchestrator
+     checks Claude's bearer in orchestrator/access.py. Both read `<data_dir>/claude-access.json` again whenever it
+     changes; the tray writes it (Overview > Claude: Block Claude / Allow Claude; Settings > Claude), so no restart.
+   - Traces record key_alias "claude"; the Usage tab names those requests Claude Code (or Claude) whatever User-Agent
+     they send.
+   - Not covered, and said on the card: Claude Code can read `.env` and use the stack's keys, or turn the switch back
+     on (`stack.py claude-access on`, the switch file, the profile); Ollama and ComfyUI take no key. A switch file
+     that goes away after a service saw it counts as off; unclear profile values (0, "off") count as off.
+   Verified: unit tests (tests/test_claude_access.py, 800 passed in the full suite); a throwaway gateway (port 4010)
+   and orchestrator (port 8797) from the worktree with made-up keys, 26 of 26 checks: master and Claude keys list 17
+   models; Claude's key refused (403) on /model/info, /health, /key/generate, /config/yaml, /v1/traces, /rag/query and
+   /anthropic/v1/messages; /v1/messages and /v1/chat/completions with Claude's key and a chat completion with the
+   master key answered (common checks on), and the traces carried key_alias claude; switch off refused Claude's key at
+   the next request (0.01 s) on both services while the stack's keys kept working; switch on let it back. A request
+   with no key gets 500 from LiteLLM itself (its error handler imports prisma, which this install lacks; refused
+   either way, not caused by the hook). The tray card was built in a hidden window in both themes and its three
+   buttons driven with the stack stubbed. A read-only security review (subagent) found no critical or high issues;
+   fixed from it: the explicit route list, the common checks, the switch reading unclear values and a vanished file
+   as off, the switch written right after the profile in settings.apply, settings files replaced whole (temporary
+   file, re-read before the rename) and stack keys found anywhere in them reported. Left: limiting Claude's key to
+   private aliases (every alias is private today), refusing to start the orchestrator without ORCHESTRATOR_BEARER
+   (already so before), and worktree scripts no longer finding the master key in Claude Code's environment (stack
+   scripts read .env; a worktree has none). Not verified: the live tray and services (they run the installed app's
+   code), a Claude Code session through profile B or .mcp.json with the new keys.
+   Side effect on this PC (2026-11-09 02:47): a `stack.py claude-env` run from the worktree, before it was made read
+   only, appended LITELLM_CLAUDE_KEY and ORCHESTRATOR_CLAUDE_BEARER to the installed app's .env; nothing else there
+   changed, and the app's current code ignores them.
+   After merging: rerun install.cmd from the main checkout. Its deploy step adds Claude's keys to the app's .env and
+   puts them into Claude Code's settings in the checkout and its worktrees; setup then restarts the services with them.
+   Start Claude Code sessions again (they read settings.local.json at start), then check `stack.py claude-access`.
 
-41. Speech models beside Whisper, and the system check (2026-11-09, branch claude/install-system-check-stt-models-176891).
+42. Speech models beside Whisper, and the system check (2026-11-09, branch claude/install-system-check-stt-models-176891).
    - Speech models: config/installer.yaml `speech_to_text` lists every model voice typing offers, each with its engine.
      NVIDIA Parakeet TDT 0.6B v3 runs through onnx-asr 0.12.0 on ONNX Runtime, on the CPU by default; NVIDIA
      Canary-Qwen 2.5B through transcribe.cpp 0.4.1 (prebuilt CPU and Vulkan wheel) on the GPU through Vulkan; Whisper

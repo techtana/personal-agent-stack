@@ -93,7 +93,7 @@ from stacklib import IS_WINDOWS, clients, media, ollama, process_metrics, procna
 from stacklib.icon import COLORS, make_icon  # noqa: E402
 from stacklib import settings as cfg  # noqa: E402
 from stacklib import comfy_usage, features, gpu_models, install, modules, startup, storage, uninstall  # noqa: E402
-from stacklib import syscheck, usage, usage_log, webfilter  # noqa: E402
+from stacklib import claude_access, syscheck, usage, usage_log, webfilter  # noqa: E402
 from stacklib import theme  # noqa: E402
 from stacklib.theme import FONT, THEMES, dark_title_bar, system_theme  # noqa: E402,F401
 
@@ -146,6 +146,8 @@ SETTING_GROUPS = [
     ("Voice typing", "dictation", "The mic button and the hotkey that type what you say into any app."),
     ("Refine selected text", "refine", "The pencil button and the hotkeys that rewrite the text you selected."),
     ("Read aloud", "read_aloud", "The speaker button and the hotkey that read the text you selected aloud."),
+    ("Claude", "claude_access", "Whether Claude Code may use the gateway and the agent tools with its own keys "
+     "(also on the Overview)."),
     ("Blocked sites", "web_filter", "Sites Open WebUI's web search and page fetches never use: request catchers, data "
      "brokers, phishing, and your own list."),
     ("Ollama runtime", "ollama_env", "Applying any of these restarts Ollama, which interrupts requests in progress."),
@@ -954,6 +956,7 @@ class TrayApp:
         holder.grid(row=0, column=0, sticky="nsew")
         body.columnconfigure(0, weight=1)
         self._build_services(body)
+        self._build_claude(body)
         self._build_gpu(body)
         self._build_features(body)
         self._build_storage(body)
@@ -1063,10 +1066,153 @@ class TrayApp:
             w.grid_remove()
         return names, name, detail, state, unload
 
+    def _build_claude(self, body) -> None:
+        """Claude's own keys for the gateway and the agent tools: whether the services accept them, one button that
+        allows or blocks them at once (no restart: the services read the switch file at the next request), and what
+        the switch cannot stop."""
+        t = self.t
+        card = self._card(body, "Claude", row=1, column=0, pady=(GAP_L, 0))
+        card.columnconfigure(1, weight=1)
+        self.claude_dot = tk.Label(card, text="●", font=(FONT, 12), bg=t["card"], fg=t["muted"])
+        self.claude_dot.grid(row=1, column=0, sticky="n", padx=(0, GAP_S))
+        names = ttk.Frame(card, style="Card.TFrame")
+        names.grid(row=1, column=1, sticky="nwe")
+        self.claude_state = ttk.Label(names, text="", style="Card.Name.TLabel")
+        self.claude_state.pack(anchor="w")
+        self.claude_detail = ttk.Label(names, text="", style="Card.Muted.TLabel", wraplength=540, justify="left")
+        self.claude_detail.pack(anchor="w")
+        actions = ttk.Frame(card, style="Card.TFrame")
+        actions.grid(row=1, column=2, sticky="ne", padx=(GAP_S, 0))
+        self.claude_btn = ttk.Button(actions, text="Block Claude", width=BTN_A, command=self.toggle_claude)
+        self.claude_btn.pack(side="top", fill="x", pady=(0, GAP_XS))
+        self.claude_keys_btn = ttk.Button(actions, text="Use own keys", width=BTN_A, command=self.connect_claude)
+        p = self.profile["ports"]
+        ttk.Label(card, text=(
+            "What the switch cannot stop: every program on this PC can reach every local port, and Claude Code runs "
+            "commands as you, so it could read the stack's own keys in .env and use them, or turn this switch back "
+            f"on. Ollama (port {p['ollama']}) and ComfyUI (port {p['comfyui']}) take no key at all."),
+            style="Card.Muted.TLabel", wraplength=640, justify="left").grid(
+            row=2, column=0, columnspan=3, sticky="w", pady=(GAP_S, 0))
+        self._render_claude()
+        self.check_claude()
+
+    def check_claude(self) -> None:
+        """Read which of Claude Code's settings files hold which keys (git and file reads, so off the Tk thread)."""
+        def run() -> None:
+            try:
+                found = claude_access.status(self.profile)
+            except Exception as e:  # noqa: BLE001 - shown on the card, never fatal
+                found = {"error": str(e)}
+            self.claude_info = found
+            self.ui_queue.put(self._render_claude)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def _render_claude(self) -> None:
+        if not self._window_built() or not getattr(self, "claude_state", None):
+            return
+        t, found = self.t, getattr(self, "claude_info", None) or {}
+        on = claude_access.enabled(self.profile)
+        note = getattr(self, "claude_note", "")
+        p = self.profile["ports"]
+        self.claude_dot.configure(fg=t["good"] if on else t["muted"])
+        self.claude_state.configure(text="Claude can use the stack" if on else "Claude is blocked")
+        lines = [f"The gateway (port {p['litellm']}) and the agent tools (port {p['orchestrator']}) "
+                 + ("accept Claude Code's own keys." if on else "refuse Claude Code's own keys.")]
+        fix = False
+        if found.get("error"):
+            lines.append(f"Could not check Claude Code's settings: {found['error']}")
+        elif found.get("stack"):
+            n = len(found["stack"])
+            lines.append(f"Claude Code still has the stack's own keys in {n} settings file{'s' if n > 1 else ''}, so "
+                         "the switch does not cover it there: Use own keys swaps them for Claude's.")
+            fix = True
+        elif found and not found.get("keys"):
+            lines.append("Claude Code has no keys of its own yet: Use own keys makes them.")
+            fix = True
+        if note:
+            lines.append(note)
+        self.claude_detail.configure(text="\n".join(lines))
+        working = bool(self.busy or getattr(self, "claude_working", False))
+        self.claude_btn.configure(text="Block Claude" if on else "Allow Claude", state="disabled" if working else "normal")
+        if fix:
+            self.claude_keys_btn.configure(state="disabled" if working else "normal")
+            self.claude_keys_btn.pack(side="top", fill="x")
+        else:
+            self.claude_keys_btn.pack_forget()
+
+    def toggle_claude(self) -> None:
+        """Allow or block Claude's keys: saved in the machine profile, and in the switch file the gateway and the agent
+        tools read at the next request."""
+        if self.busy or getattr(self, "claude_working", False):
+            return
+        want = not claude_access.enabled(self.profile)
+        sid = "claude_access.enabled"
+
+        def run() -> None:
+            try:
+                self.profile = cfg.apply(self.profile, {sid: want}, log=lambda m: print(f"[tray] claude: {m}"))
+                self.claude_note = "" if want else f"Blocked at {datetime.now():%H:%M}."
+            except Exception as e:  # noqa: BLE001 - shown on the card
+                self.claude_note = f"Could not change it: {e}"
+            finally:
+                self.claude_working = False
+
+                def ui() -> None:
+                    if sid in getattr(self, "setting_vars", {}):   # the Settings tab's box follows; other edits stay
+                        self.setting_vars[sid].set(claude_access.enabled(self.profile))
+                        self._settings_dirty()
+                    self._render_claude()
+
+                self.ui_queue.put(ui)
+
+        self.claude_working = True
+        self.claude_note = "Blocking Claude..." if not want else "Allowing Claude..."
+        self._render_claude()
+        threading.Thread(target=run, daemon=True).start()
+
+    def connect_claude(self) -> None:
+        """Give Claude Code its own keys (in .env if missing, and in its settings files instead of the stack's). New
+        keys reach the gateway and the agent tools when they start, so the ones running are restarted."""
+        if self.busy or getattr(self, "claude_working", False):
+            return
+
+        def run() -> None:
+            try:
+                had = claude_access.status(self.profile)["keys"]
+                results = claude_access.connect()
+                bad = [f"{path.name} in {path.parent.parent}: {r}" for path, r in results if r.startswith("failed")]
+                done = sum(r == "updated" for _, r in results)
+                restarted = []
+                if not had:
+                    running = {r["service"] for r in services.status(self.profile) if r["healthy"] and r["pid"]}
+                    for svc in ("litellm", "orchestrator"):
+                        if svc in running and svc in self.managed:
+                            services.stop(self.profile, [svc])
+                            services.start(self.profile, [svc])
+                            restarted.append(LABELS.get(svc, svc))
+                parts = bad or [f"Claude's own keys are in {done} settings file{'s' if done != 1 else ''}; Claude Code "
+                                "sessions use them once they start again."]
+                if restarted:
+                    parts.append(f"Restarted {' and '.join(restarted)} so "
+                                 f"{'it knows' if len(restarted) == 1 else 'they know'} the new keys.")
+                self.claude_note = " ".join(parts)
+            except Exception as e:  # noqa: BLE001 - shown on the card
+                self.claude_note = f"Could not give Claude Code its keys: {e}"
+            finally:
+                self.claude_working = False
+                self.check_claude()
+                self.refresh_soon()
+
+        self.claude_working = True
+        self.claude_note = "Giving Claude Code its own keys..."
+        self._render_claude()
+        threading.Thread(target=run, daemon=True).start()
+
     def _build_gpu(self, body) -> None:
         """One card for the GPU: every model loaded (Ollama, Whisper, ComfyUI), and the switch that hands the card to
         chat or to media (plan G1)."""
-        models = self._card(body, "GPU: loaded models", row=1, column=0, pady=(GAP_L, 0))
+        models = self._card(body, "GPU: loaded models", row=2, column=0, pady=(GAP_L, 0))
         models.columnconfigure(0, weight=1)
         self.loaded_frame = ttk.Frame(models, style="Card.TFrame")
         self.loaded_frame.grid(row=1, column=0, columnspan=2, sticky="we")
@@ -1083,7 +1229,7 @@ class TrayApp:
         """The installer's features: installed, on or off, linked to the stack, what each takes on this PC, and an
         Install, Repair or Remove button that runs the setup worker for that feature alone. Under Local models, every
         model in the installer's catalog (and any other Ollama has), with Download or Remove."""
-        card = self._card(body, "Features", row=2, column=0, pady=(GAP_L, 0))
+        card = self._card(body, "Features", row=3, column=0, pady=(GAP_L, 0))
         card.columnconfigure(1, weight=1)
         self.features_card = card
         self.feature_widgets: dict[str, dict] = {}
@@ -1135,7 +1281,7 @@ class TrayApp:
         """Storage: everything the stack keeps on disk, as a thin bar split into models, programs and data, a total
         per drive, and the breakdown below (stacklib/storage.py). Measured in a thread, on opening and on Refresh."""
         t = self.t
-        card = self._card(body, None, row=3, column=0, pady=(GAP_L, 0))
+        card = self._card(body, None, row=4, column=0, pady=(GAP_L, 0))
         card.columnconfigure(0, weight=1)
         head = ttk.Frame(card, style="Card.TFrame")
         head.grid(row=0, column=0, sticky="we")

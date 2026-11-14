@@ -338,7 +338,8 @@ gate runs with `npx promptfoo@0.125.0 eval -c evals/<id>/promptfooconfig.yaml --
 exists yet (the first `/retro` waits for a week of real traces, `memory/state.md` item 7); the weekly skills-sync task is also not created.
 
 **Orchestrator MCP.** `orchestrator/server.py` and `orchestrator/jobs.py`, registered in `.mcp.json` with
-`${ORCHESTRATOR_BEARER}` and run by `stack.py up`.
+`${ORCHESTRATOR_CLAUDE_BEARER}` (Claude Code's own bearer; Open WebUI uses the stack's `ORCHESTRATOR_BEARER`) and
+run by `stack.py up`.
 
 **What is simplified or going away** (`docs/plans/SHARED-COMPONENTS.md` section 5, package R, once the privacy-gate
 service runs):

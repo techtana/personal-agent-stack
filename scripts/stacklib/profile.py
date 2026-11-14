@@ -196,6 +196,8 @@ def resolve_profile(name: str | None = None) -> dict:
         "services": {**defaults["services"], **(m.get("services") or {})},
         "observability": {**defaults["observability"], **(m.get("observability") or {})},
         "claude_code": {**defaults["claude_code"], **(m.get("claude_code") or {})},
+        "claude_access": {**(defaults.get("claude_access") or {}),
+                          **{k: v for k, v in (m.get("claude_access") or {}).items() if v is not None}},
         "model_store": m.get("model_store") or "",
         "data_dir": data_dir,
         "catalog": _model_catalog(defaults),

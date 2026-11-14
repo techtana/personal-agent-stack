@@ -211,3 +211,9 @@ claude_code:
     sonnet_model: local-primary
     opus_model: local-primary      # private aliases only; the build refuses anything else
     max_output_tokens: 8192
+
+claude_access:
+  # Claude Code uses the gateway and the agent tools with keys of its own (LITELLM_CLAUDE_KEY,
+  # ORCHESTRATOR_CLAUDE_BEARER in .env), never the stack's. Off: both services refuse those keys from the next request
+  # (tray: Overview > Claude). It cannot stop a program that reads the stack's own keys from .env (scripts/stacklib/claude_access.py).
+  enabled: true

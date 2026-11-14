@@ -58,6 +58,10 @@ Resources.
   loaded runs in a runner process (`qwen3.5:9b · model runner · 32k context · 5.7 GB on the GPU`, `Loaded · pid N`)
   with **Unload** (the next request loads it again). Models that run inside their module's process (voice typing's
   Whisper, read aloud's Kokoro, ComfyUI's image models) share its pid; the GPU card lists them.
+- **Claude**: whether Claude Code may use the gateway and the agent tools with its own keys (`Claude can use the
+  stack` or `Claude is blocked`), with **Block Claude** or **Allow Claude**. It applies at the next request, without
+  a restart. **Use own keys** shows when Claude Code still holds the stack's own keys, or has none yet. The card
+  also says what the switch cannot stop. See [Claude's access to the stack](#claudes-access-to-the-stack).
 - **GPU: loaded models**: each model on the card with **Used by**, **Size**, **On GPU** (share of the model in VRAM),
   **Context** and **Unloads** (when it will be dropped), and the **Chat** and **Media** switch. "No model is loaded" is
   normal: the first request loads one.
@@ -170,6 +174,7 @@ control on the right.
 | Services and tracing | **Chat in the browser (Open WebUI)**, **Image generation (ComfyUI)**, **Voice typing** | Runs the module (off keeps it installed; **Remove** on the Features card takes it off this PC). |
 | Voice typing | **Voice typing hotkey**, **When to type**, **Cleanup**, **Stop after quiet**, **Language**, **Whisper model**, **Insert text by**, **Show the mic button** | See [Voice typing](#voice-typing). |
 | Voice typing, under **Show advanced** | **Cleanup prompt** | The instructions the local model follows when it cleans up a dictation. See [Your own cleanup instructions](#your-own-cleanup-instructions). |
+| Claude | **Let Claude use the stack** | The same switch as the Claude card on the Overview: off, the gateway and the agent tools refuse Claude Code's own keys from the next request. Nothing restarts. |
 | Ollama runtime | **Keep models loaded for**, **KV cache precision**, **Flash attention**, **Parallel requests per model** | Ollama's memory and speed options. |
 
 A changed row is marked **changed**. The bar at the bottom says what **Apply** will do. **Apply** saves the changed
@@ -709,6 +714,43 @@ The report names each skill as:
 
 Edit a skill at its source, not in `skills/`; the next sync overwrites the copy. The weekly task holds back any skill
 whose new content looks personal and names it in its report. To keep it out for good, add its name to `exclude`.
+
+## Claude's access to the stack
+
+Claude Code uses two services the stack runs. The stack starts and stops them; Claude Code only connects:
+
+- the **gateway** (port 4000), when you start Claude Code with `scripts/claude-local.ps1` (profile B, local models);
+- the **agent tools** (the orchestrator, port 8765), through `.mcp.json` in this repository.
+
+Claude Code connects with keys of its own: `LITELLM_CLAUDE_KEY` for the gateway and `ORCHESTRATOR_CLAUDE_BEARER` for
+the agent tools. They sit in the stack's `.env` and in `.claude/settings.local.json` of your checkout and its
+worktrees. Claude Code never gets the stack's own keys (`LITELLM_MASTER_KEY`, `ORCHESTRATOR_BEARER`), which Open
+WebUI, OpenClaw, voice typing and the stack's scripts use. The Usage tab names a request made with Claude's key
+**Claude Code**, whatever name the request gives itself.
+
+**Block Claude** on the Overview's Claude card (or **Let Claude use the stack** in Settings, or
+`uv run scripts/stack.py claude-access off`) makes both services refuse Claude's keys from the next request. The
+gateway answers `403` with "Claude's access to the personal agent stack is turned off", and the agent tools answer
+`401`, so Claude Code shows the orchestrator as failed. Nothing restarts, and the stack's own clients keep working.
+**Allow Claude** (`claude-access on`) lets Claude back in the same way. Even while Claude is allowed, its gateway key
+works only for model calls: admin pages, health checks, config and key routes refuse it.
+
+What the switch cannot stop:
+
+- Every program on this PC can connect to every local port. Claude Code runs commands as you, so it could read the
+  stack's own keys from `.env` and use them, or turn the switch back on (`stack.py claude-access on`, or by editing
+  the switch file or your machine profile). A separate Windows account for the stack would be the only real wall.
+- Ollama (port 11434) and ComfyUI (port 8188) take no key at all.
+
+Installing or updating the app from a checkout (`install.cmd`) gives Claude Code in that checkout and its worktrees
+its own keys, in place of the stack's. To do it again by hand, run this in the checkout:
+
+```
+uv run scripts/stack.py claude-access connect
+```
+
+Claude Code sessions pick up new keys when they start again. `uv run scripts/stack.py claude-access` shows the
+switch, whether the keys exist, and any settings file that still holds the stack's own keys.
 
 ## Checking your Claude setup
 

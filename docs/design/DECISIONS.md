@@ -47,6 +47,19 @@ entry stays and gets a "Done <date>" note.
   - Turned down: a CPU speed test (the project environment has no numpy, and a hash or zlib score would misjudge the
     vector work the models do; the check reads cores and AVX2 instead); a separate verdict column with words (the
     table outgrew a 1024-pixel screen; a mark column, with the words in the detail box, fits).
+- **Pending: Claude Code reaches the stack with keys of its own, behind a tray switch; one port per service, not a
+  second "Claude port".** Asked for by the owner: the stack runs every service and Claude only connects, and its use
+  should be switchable from the tray. Claude Code used the stack's own keys (the gateway's master key in profile B and
+  in `.claude/settings.local.json`, and the orchestrator's bearer), so it could not be shut out without shutting out
+  Open WebUI, OpenClaw and voice typing too. Now `LITELLM_CLAUDE_KEY` and `ORCHESTRATOR_CLAUDE_BEARER` are Claude's;
+  the gateway checks them in a LiteLLM custom auth hook (model routes only) and the orchestrator in its token
+  verifier. Both read a switch file on each request, so **Block Claude** takes effect at the next request without a
+  restart. Turned down: a second port per service, because a port cannot tell which program connects (every local
+  program reaches every 127.0.0.1 port, and Windows Firewall does not filter loopback), so it adds nothing over a
+  second key, and the gateway would need a second LiteLLM process (about 0.3 GB); refusing processes Claude starts
+  (peer process lookup) and a separate Windows account for the stack, left for later. What it cannot stop is said on
+  the tray card: Claude Code runs commands as the owner and could read `.env`; Ollama and ComfyUI take no key.
+  Source: `scripts/stacklib/claude_access.py`, user guide "Claude's access to the stack".
 
 ## 2026-11-08
 

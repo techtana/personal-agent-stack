@@ -189,7 +189,9 @@ Setup does the following, in this order:
 1. Installs uv if it is missing (`Installing uv (astral.sh)...`).
 2. Detects your hardware and writes `machines/<HOST>.yaml`. `<HOST>` is your computer name. The file stays on this
    computer: git ignores it, so your computer name and folders never reach the public repository.
-3. Creates `.env` with new random values for `LITELLM_MASTER_KEY`, `ORCHESTRATOR_BEARER` and `WEBUI_SECRET_KEY`.
+3. Creates `.env` with new random values for `LITELLM_MASTER_KEY`, `ORCHESTRATOR_BEARER` and `WEBUI_SECRET_KEY`,
+   and for Claude Code's own keys `LITELLM_CLAUDE_KEY` and `ORCHESTRATOR_CLAUDE_BEARER`
+   ([Claude's access to the stack](user-guide.md#claudes-access-to-the-stack)).
    It also adds an empty `ANTHROPIC_API_KEY`. It never overwrites values that are already there.
    Then **Check this PC (drives, GPU, memory)** uses the check page 1 made (or runs it, when setup started without
    the window or more than two hours later). It warns about slow drives and about any chosen model, context or
