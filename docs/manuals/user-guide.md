@@ -225,8 +225,9 @@ gets a text answer unless the image button is on.
 
 ## Voice typing
 
-Speak instead of typing, in any app: Logseq, Word, Notion, a browser text field, Open WebUI. Whisper runs on this
-PC (on the GPU when it can) and the cleanup uses the gateway's local model, so nothing leaves the machine.
+Speak instead of typing, in any app: Logseq, Word, Notion, a browser text field, Open WebUI. The speech model runs on
+this PC (Whisper by default, on the GPU when it can) and the cleanup uses the gateway's local model, so nothing leaves
+the machine.
 
 Set it up once with `uv run scripts/stack.py dictate install`. It builds its own Python environment under
 `<media.root>\dictation`, fetches the Whisper model into `HF_HOME` if it is not there yet (1.6 GB) and turns voice
@@ -292,7 +293,8 @@ Good to know:
   or **Keep voice typing history for** in the tray's Settings tab, which applies without a restart). The app checks
   once a minute, and the file goes with its last entry. Delete the file to forget everything at once.
 - **Names and jargon.** Add words Whisper should expect to `dictation.vocabulary` in `machines/<HOST>.yaml`, for
-  example `vocabulary: 'Logseq, LiteLLM, Ollama'`. In a test, "Logseq" came out as "Logsake" without it.
+  example `vocabulary: 'Logseq, LiteLLM, Ollama'`. In a test, "Logseq" came out as "Logsake" without it. Parakeet and
+  Canary-Qwen take no hints: both wrote "Ollama" as "Alama".
 - **Language.** It is detected from your first phrase. If short phrases come out in the wrong language, set one:
   **Language** in the button's menu (or on the tray's Settings tab) opens a search box over all 100 languages the
   Whisper model knows. Type part of a name, another common name or a code (`nor`, `farsi`, `pt`), move with the arrow
@@ -324,6 +326,42 @@ Good to know:
     **Speech-to-Text Engine** back to **Whisper (Local)** in Open WebUI's **Admin Settings > Audio**.
 
 Every setting is under `dictation:` in `machines/_defaults.yaml`; copy a line into `machines/<HOST>.yaml` to change it.
+
+### Choosing the speech model
+
+**Speech model** in the installer (beside Voice typing) or on the tray's Settings tab picks the model that writes down
+what you say (`dictation.model`). The installer's check marks the one it recommends for this PC. Measured on the
+reference PC (RTX 3060 12 GB, Ryzen 5 5500), with 15 s of speech:
+
+| Model | Languages | Runs on | 15 s of speech | Memory | Download | Licence |
+|---|---|---|---|---|---|---|
+| Whisper large-v3-turbo (default) | 100 | GPU | 0.6 s | 1.2 GB GPU | 1.6 GB | MIT |
+| Whisper large-v3 | 100 | GPU | about 1.4 s (estimate) | about 2.1 GB GPU | 3.1 GB | MIT |
+| NVIDIA Parakeet TDT 0.6B v3 | 25 European, found by itself | processor | 0.7 s | 1.1 GB RAM, no GPU | 0.7 GB | CC-BY-4.0 |
+| NVIDIA Canary-Qwen 2.5B | English only | GPU (Vulkan) | 0.55 s | 3.3 GB GPU | 2.8 GB | CC-BY-4.0 |
+| Whisper medium, small, base | 100 | GPU, or the processor without one | 0.2 to 0.8 s (estimates) | 0.3 to 1.1 GB | 0.15 to 1.5 GB | MIT |
+
+- **Whisper** knows the most languages and is the only one that takes `dictation.vocabulary`'s hints. On a PC without
+  an NVIDIA GPU, voice typing runs `dictation.cpu_model` (Whisper small) on the processor instead.
+- **Parakeet** runs on the processor at about 24 times real time and holds no GPU memory, so it leaves the card to
+  the chat model, images and read aloud. It knows Bulgarian, Croatian, Czech, Danish, Dutch, English, Estonian,
+  Finnish, French, German, Greek, Hungarian, Italian, Latvian, Lithuanian, Maltese, Polish, Portuguese, Romanian,
+  Russian, Slovak, Slovenian, Spanish, Swedish and Ukrainian, and finds the language itself. It shows the words while
+  you speak, as Whisper does on the GPU. Its int8 weights ran slower with CUDA than on the processor, so
+  `dictation.device: auto` keeps it there; `cuda` puts it on the GPU (with read aloud's GPU libraries).
+- **Canary-Qwen** is the most accurate for English (5.6% of words wrong on the Open ASR Leaderboard, against 6.3% for
+  Parakeet). It runs on the GPU through Vulkan, which needs no CUDA, so it works on AMD and Intel cards too. The first
+  start on a new graphics driver compiles its shaders, about 20 s; later starts take 4 to 5 s. On the processor alone it
+  is too slow (2x real time), so without a GPU voice typing runs Whisper small instead.
+
+Picking Parakeet or Canary-Qwen adds its engine to voice typing's environment the first time (onnx-asr, pure Python,
+or transcribe.cpp, 18 MB) and downloads the model; the tray's Settings tab starts this in the background, and the
+Features card shows it. Voice typing uses the new model from its next dictation. The words in the tray's Usage tab and
+Open WebUI's microphone come from the same model. To compare models on your own recording:
+`uv run scripts/stack.py dictate transcribe note.wav --model parakeet-tdt-0.6b-v3 --style verbatim`.
+
+SenseVoice Small (FunAudioLLM) was considered and left out: its weights use a custom licence (FunASR Model Open Source
+License 1.1), and the stack offers open licences only.
 
 ### Your own cleanup instructions
 

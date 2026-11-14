@@ -1,8 +1,8 @@
 # Choosing drives
 
 This manual helps you decide which drive holds each part of Agent Stack: the Ollama models, the Hugging Face cache,
-the Python tools, OpenClaw, and other large things such as games. It also explains the installer's
-**Check drive speed** step and what to do when it warns you.
+the Python tools, OpenClaw, and other large things such as games. It also explains the drive part of the installer's
+system check (**This PC** on its first page, and setup's **Check this PC** step) and what to do when it warns you.
 
 For the ideas behind it (sequential and random reads, USB link speeds, why a model load reads the disk only once),
 see [../knowledge/storage-and-drives.md](../knowledge/storage-and-drives.md).
@@ -85,8 +85,9 @@ Without administrator rights, `winsat` prints nothing at all and looks as if it 
 
 ### In the installer
 
-The installer has a **Check how fast each drive is and warn about slow ones** option, on by default. The setup step
-**Check drive speed** then measures every local drive and shows the models drive's result, for example:
+The installer's first page checks this PC when it opens, and that check times every local drive (`stack.py check`
+does the same in a terminal). The setup step **Check this PC (drives, GPU, memory)** then uses that check, or runs it
+again when it is more than two hours old, and shows the models drive's result, for example:
 
 ```
 models drive D: read 389 MB/s, write 325 MB/s (USB, 869 GB free, test file).

@@ -44,7 +44,8 @@ MODEL_CALLS = (
     (r"/prompt[\"']", "queues a ComfyUI job"),
     (r"/v1/(?:chat/completions|completions|embeddings|messages|audio/|images/)", "calls a model API"),
     (r"^\s*(?:import|from)\s+(?:anthropic|openai|transformers|diffusers|sentence_transformers|onnxruntime|"
-     r"ctranslate2|faster_whisper|llama_cpp|vllm|kokoro|spacy|presidio_analyzer|torch)\b", "imports a model library"),
+     r"ctranslate2|faster_whisper|onnx_asr|transcribe_cpp|llama_cpp|vllm|kokoro|spacy|presidio_analyzer|torch)\b",
+     "imports a model library"),
     (r"InferenceSession\(", "runs an ONNX model"),
     (r"\blitellm\.a?(?:completion|embedding|transcription|image_generation|speech)\(", "calls the LiteLLM SDK"),
 )
@@ -64,6 +65,8 @@ NOT_RECORDED = {
                                                     "upload; the Whisper call goes through engine.py, which records "
                                                     "it with the caller as client",
     "scripts/stacklib/dictation/control.py": "routes /v1/audio/transcriptions to transcriptions.py; runs no model",
+    "scripts/stacklib/dictation/stt.py": "the Parakeet (onnx-asr) and Canary-Qwen (transcribe.cpp) backends; engine.py "
+                                         "calls them and records every transcription",
 }
 
 SOURCE_DIRS = ("scripts", "orchestrator", "infrastructure")

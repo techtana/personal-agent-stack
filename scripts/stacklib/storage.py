@@ -125,7 +125,7 @@ def _image_models(profile: dict, out: list[Entry]) -> None:
 
 
 def _hf_models(profile: dict, out: list[Entry], status: dict) -> None:
-    from .dictation.models import REPOS
+    from .dictation.models import REPOS, SPEECH
     from .dictation.speak import KOKORO_REPO, TH_REPO, ZH_REPO
 
     home = uninstall.hf_home(profile)
@@ -138,6 +138,7 @@ def _hf_models(profile: dict, out: list[Entry], status: dict) -> None:
     if not hub.is_dir():
         return
     whisper = {repo: name for name, repo in REPOS.items() if name != "turbo"}   # "turbo" is large-v3-turbo again
+    whisper.update({m.repo: name for name, m in SPEECH.items() if m.repo})      # Parakeet's and Canary-Qwen's too
     users = {fid: uninstall.whisper_used(profile, fid) for fid in ("voice_typing", "recordings")
              if uninstall._installed(status, fid)}
     for d in sorted(hub.iterdir()):
@@ -152,7 +153,7 @@ def _hf_models(profile: dict, out: list[Entry], status: dict) -> None:
             name, note, level = "Kokoro Thai", "read aloud's Thai voices (Remove on the Features card)", "ok"
         elif repo in whisper:
             model = whisper[repo]
-            name = f"Whisper {model}"
+            name = SPEECH[model].label if model in SPEECH else f"Whisper {model}"
             who = [features.BY_ID[fid].short for fid, models in users.items() if model in models]
             note, level = (f"used by {' and '.join(who)}", "ok") if who else ("not used now", "off")
         else:
@@ -193,7 +194,7 @@ def _programs(profile: dict, out: list[Entry]) -> None:
             if models_dir.exists() and uninstall._within(models_dir, comfy):
                 size -= uninstall.dir_bytes(models_dir)
             _add(out, "Programs", "Image generation (ComfyUI)", comfy, "with its Python environment", size=max(size, 0))
-    _add(out, "Programs", "Voice typing (Whisper)", dictation.env_dir(profile) / ".venv", "read aloud's packages too")
+    _add(out, "Programs", "Voice typing (speech to text)", dictation.env_dir(profile) / ".venv", "read aloud's packages too")
     if m.get("whisper_dir"):
         _add(out, "Programs", "Recordings server", whisper.whisper_dir(profile),
              "no longer offered: Remove it on the Features card", "off")

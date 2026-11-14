@@ -387,6 +387,22 @@ def save_media(profile: dict, root: str) -> Path:
 FEATURE_SWITCHES = features.SWITCHES   # (section, key, on, off) per optional feature the profile switches
 
 
+def explicit_options(profile: dict) -> set[tuple[str, str]]:
+    """The installer's options that machines/<HOST>.yaml sets itself (the owner's or an earlier install's choice), as
+    opposed to defaults from the hardware class or machines/_defaults.yaml: the system check's recommendations replace
+    only the defaults."""
+    try:
+        machine = prof.load_machine(profile.get("name"))
+    except Exception:  # noqa: BLE001 - an unreadable file sets nothing; setup reports it elsewhere
+        return set()
+    out = set()
+    for opts in features.OPTIONS.values():
+        for opt, _fn in opts:
+            if ((machine.get(opt.section) or {}) if isinstance(machine, dict) else {}).get(opt.key) is not None:
+                out.add((opt.section, opt.key))
+    return out
+
+
 def option_edits(profile: dict, chosen, options: dict[tuple[str, str], str]) -> dict[tuple[str, str], object]:
     """The (section, key) values that the chosen features' options change. A new chat model also sets
     models.primary_options (memory-mapped experts for an MoE model, as Settings' "Memory-map primary weights"), and the
@@ -664,24 +680,64 @@ def default_hf_home(model_store: str) -> str:
 
 
 def step_disks(plan: Plan, profile: dict, report) -> str:
+    """Check this PC (stacklib/syscheck.py): drive speeds, as before, and the GPU, processor, memory and Windows, with
+    which of the chosen models and features are not recommended here. Reuses the report the installer's first page
+    made when it is young enough, so the drives are not tested twice."""
     if not plan.check_disks:
         raise Skip("not chosen")
-    speeds = disks.measure_all(disks.list_drives(), report)
-    for s in speeds:
-        info(f"      {s.summary()}")
+    from . import syscheck
+
+    r = syscheck.load(max_age_s=syscheck.REUSE_S)
+    reused = r is not None and bool(r.drives)
+    if reused:
+        r = syscheck.recommend(r, profile)   # the facts stay; the verdicts follow the profile as setup now has it
+        try:
+            syscheck.save(r)
+        except OSError:
+            pass
+    else:
+        r = syscheck.run(profile, report)
+    for line in syscheck.lines(r, profile):
+        info(f"      {line}")
+    speeds = r.speeds()
     need = pull_size_gb(profile, models_to_pull(profile))
     warnings, suggestion = disks.advise(speeds, plan.model_store, plan.tool_dir or current_tool_dir(), need)
     notes = warnings + ([suggestion] if suggestion else [])
+    notes += chosen_against_check(r, profile)
     for w in notes:
         warn(w)
     store = next((s for s in speeds if s.root.lower() == disks.drive_of(plan.model_store).lower()), None)
     head = f"models drive {store.summary()}." if store else "; ".join(s.summary() for s in speeds) + "."
+    head = (f"{r.describe()}. " + head) if r.gpu.name or r.cpu.name else head
+    if reused:
+        head += f" (Checked {time.strftime('%H:%M', time.localtime(r.checked_at))} in the installer.)"
     howto = disks.winsat_howto(speeds)
     for line in howto:
         info(f"      {line}")
     if notes:
         raise Warn(" ".join([head, *notes, *howto]))
     return " ".join([head, *howto])
+
+
+def chosen_against_check(r, profile: dict) -> list[str]:
+    """A sentence for each chosen model, setting or feature the system check does not recommend on this PC."""
+    from .dictation.models import label as speech_label
+
+    out = []
+    m, d = profile.get("models") or {}, profile.get("dictation") or {}
+    for key, value, what in (("models.primary", m.get("primary"), "The chat model {}"),
+                             ("models.primary_num_ctx", m.get("primary_num_ctx"), "A {}-token context"),
+                             ("dictation.model", d.get("model") if profile["services"].get("dictation") == "native"
+                              else None, "The speech model {}")):
+        v = r.verdict(key, str(value)) if value else None
+        if v and v.level in ("not_recommended", "unavailable"):
+            name = speech_label(str(value)) if key == "dictation.model" else value
+            out.append(f"{what.format(name)} is not recommended on this PC: {v.text}")
+    for fid, (section, key, on, _off) in features.SWITCHES.items():
+        v = r.verdict(fid)
+        if v and v.level in ("not_recommended", "unavailable") and (profile.get(section) or {}).get(key) == on:
+            out.append(f"{features.BY_ID[fid].title} is not recommended on this PC: {v.text}")
+    return out
 
 
 def step_huggingface(plan: Plan, profile: dict, report) -> str:
@@ -1039,7 +1095,7 @@ def step_links(plan: Plan, profile: dict, report) -> str:
 
 STEPS = (
     ("secrets", "Create local secrets (.env)", step_secrets),
-    ("disks", "Check drive speed", step_disks),
+    ("disks", "Check this PC (drives, GPU, memory)", step_disks),
     ("ollama_install", "Install Ollama", step_ollama_install),
     ("models_move", "Move models already downloaded", step_models_move),
     ("ollama_env", "Point Ollama at the models folder", step_ollama_env),
@@ -1049,7 +1105,7 @@ STEPS = (
     ("pull", "Download models", step_pull),
     ("huggingface", "Set up the Hugging Face cache", step_huggingface),
     ("media", "Install ComfyUI and the image model", step_media),
-    ("dictation", "Install voice typing (Whisper)", step_dictation),
+    ("dictation", "Install voice typing (speech model)", step_dictation),
     ("read_aloud", "Install read aloud (Kokoro voices)", step_read_aloud),
     ("openclaw", "Install OpenClaw", step_openclaw),
     ("links", "Point start-up entries at this app", step_links),

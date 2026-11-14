@@ -9,6 +9,44 @@ entry stays and gets a "Done <date>" note.
 
 ## 2026-11-09
 
+- **Pending: speech models beside Whisper for voice typing: NVIDIA Parakeet TDT 0.6B v3 and NVIDIA Canary-Qwen 2.5B.**
+  Asked for by the owner, with Whisper large-v3 (offered already) and SenseVoice Small.
+  - SenseVoice Small is left out, at the owner's word when asked: its code is MIT, but its weights use the FunASR Model
+    Open Source License 1.1, a custom licence (its terms can change, and it ends on "denigration"), which D-M3 (open
+    licences only) excludes. The catalog says so where the models are listed.
+  - Parakeet runs through onnx-asr 0.12.0 (pure Python, MIT) on the ONNX Runtime voice typing has already, with
+    istupakov's int8 ONNX export (0.67 GB, pinned revision, sha256 checked): no new compiled module for Smart App
+    Control to judge. On the reference PC the int8 weights ran faster on the CPU (24x real time) than with CUDA (18x),
+    and the CPU holds no GPU memory, so `device: auto` keeps it on the CPU. Not offered: the fp32 export (2.4 GB,
+    unmeasured) and Parakeet v2 (English only; v3 covers English).
+  - Canary-Qwen runs through transcribe.cpp 0.4.1 (ggml, MIT) from its prebuilt Windows wheel (CPU and Vulkan
+    libraries, 18 MB) and its Q8_0 GGUF (2.8 GB, handy-computer's conversion, pinned, sha256 checked). Smart App
+    Control allowed the DLLs on the first try. Vulkan needs no CUDA, so it runs on AMD and Intel cards too. Turned
+    down: NVIDIA's NeMo on PyTorch (Python 3.14 and Windows support doubtful, about 3 GB of PyTorch plus dozens of
+    compiled modules to clear with Smart App Control), NVIDIA's NeMo-Speech.cpp (no Canary-Qwen model; binaries from
+    an install script, no Python package), CrispASR (no Canary-Qwen), a locally built transcribe.cpp (a self-built
+    DLL has no reputation with Smart App Control), Q4_K_M (smaller, with the same test-clean score upstream, but Q8_0
+    is closest to NVIDIA's weights and fits).
+  - Voice typing's Engine keeps one interface: each catalog entry names its engine; a model slow on the CPU (more than
+    3 s per 15 s of speech) gives way to `dictation.cpu_model` there, as Whisper large does; whole files (Open WebUI's
+    microphone) are cut at their quietest moments into pieces of at most 25 s. Settings in the tray installs a missing
+    engine through the setup worker's voice typing step rather than in the running app.
+- **Pending: the installer checks this PC and recommends models and features.** Asked for by the owner: the drive speed
+  check became a check of the whole PC whose purpose is the recommendations (`stacklib/syscheck.py`).
+  - It runs when the installer's first page opens, because recommendations made during setup (where the drive check
+    ran) come after the choice. The drive test runs there too, announced on the card; a report younger than two hours
+    is reused, by the installer and by setup's **Check this PC** step, so the drives are not tested twice.
+  - It changes only what nobody chose: a value missing from `machines/<HOST>.yaml` starts at the recommended one, and a
+    feature it does not recommend starts unticked unless it is installed, on, required or ticked by the owner. Every
+    verdict says why, in the Fit column's detail, the drop-downs' tags, the summary, `stack.py check` and the tray's
+    Features card.
+  - Speech model rule: languages Windows has that Parakeet lacks take Whisper large-v3-turbo; English alone with room
+    on the card takes Canary-Qwen (the most accurate); Parakeet's languages take Parakeet (no GPU memory); vocabulary
+    hints keep Whisper. Context: the largest measured context that fits beside the speech model; a larger one that fits
+    only by estimate is "works", not recommended.
+  - Turned down: a CPU speed test (the project environment has no numpy, and a hash or zlib score would misjudge the
+    vector work the models do; the check reads cores and AVX2 instead); a separate verdict column with words (the
+    table outgrew a 1024-pixel screen; a mark column, with the words in the detail box, fits).
 - **Pending: Claude Code reaches the stack with keys of its own, behind a tray switch; one port per service, not a
   second "Claude port".** Asked for by the owner: the stack runs every service and Claude only connects, and its use
   should be switchable from the tray. Claude Code used the stack's own keys (the gateway's master key in profile B and

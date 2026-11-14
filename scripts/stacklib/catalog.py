@@ -86,9 +86,20 @@ def whisper() -> dict:
     return section("whisper")
 
 
+def speech_models() -> dict[str, dict]:
+    """Every speech-to-text model voice typing offers (config/installer.yaml speech_to_text.models), in the file's
+    order: name -> {label, engine, repo, revision, files, download_gb, device, vram_gb, ram_gb, speed, languages, ...}."""
+    return {str(k): dict(v or {}) for k, v in ((section("speech_to_text").get("models")) or {}).items()}
+
+
+def speech_engines() -> dict[str, dict]:
+    """Engine -> {module, packages, no_deps}: what each engine adds to voice typing's environment."""
+    return {str(k): dict(v or {}) for k, v in ((section("speech_to_text").get("engines")) or {}).items()}
+
+
 def whisper_models() -> dict[str, dict]:
-    """faster-whisper models offered: name -> {repo, download_gb, vram_gb, s_per_15s}, in the file's order."""
-    return {str(k): dict(v) for k, v in (whisper().get("models") or {}).items()}
+    """The faster-whisper models among speech_models(), in the file's order."""
+    return {k: v for k, v in speech_models().items() if (v.get("engine") or "faster-whisper") == "faster-whisper"}
 
 
 def whisper_repos() -> dict[str, str]:
