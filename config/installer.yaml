@@ -99,18 +99,141 @@ images:
         - {file: ae.safetensors, folder: vae, repo: Comfy-Org/z_image_turbo,
            path: split_files/vae/ae.safetensors, licence: apache-2.0, size_gb: 0.34}
 
-# ---------------------------------------------------------------- Whisper (voice typing)
+# ---------------------------------------------------------------- speech to text (voice typing)
+
+# The speech models voice typing offers (dictation.model; Settings and the installer list them in this order). Open
+# WebUI's microphone uses the same model through voice typing's transcription endpoint. Each names its engine:
+#   faster-whisper: CTranslate2, voice typing's base environment (whisper.voice_typing_packages); on the GPU through
+#                   cuBLAS 12 from Ollama's lib\ollama\cuda_v12, else the CPU.
+#   onnx-asr:       ONNX Runtime, already in voice typing's environment (onnxruntime, or onnxruntime-gpu when read
+#                   aloud runs on the GPU); onnx-asr itself is pure Python (MIT).
+#   transcribe.cpp: ggml with its prebuilt CPU and Vulkan libraries (MIT); Vulkan runs on any NVIDIA, AMD or Intel card
+#                   whose driver ships it, without CUDA.
+# Fields: label; repo (Hugging Face) and revision (pinned: a new revision is a new download to check); files to fetch
+# (name: sha256, '' = not checked; faster-whisper fetches its own); download_gb; device, where "auto" runs it (gpu or
+# cpu); vram_gb on the GPU and ram_gb in system memory while loaded; speed: seconds per 15 s of speech on the GPU and the
+# CPU (0 = not known); languages (omitted: Whisper's 100); licence of the weights, and what they were trained on.
+# measured: the figures come from the reference PC (RTX 3060 12 GB, Ryzen 5 5500 on 6 threads), else estimates scaled
+# from a measured model. Measured 2026-11-09 with the transcription of four Kokoro recordings (6.6 to 31.2 s) checked
+# word for word: Parakeet and Canary-Qwen each heard every word except "Ollama" (Alama, Allama).
+#
+# Left out (owner, 2026-11-09): SenseVoice Small (FunAudioLLM). Its code is MIT, but its weights use the FunASR Model
+# Open Source License 1.1, a custom licence (its terms can change, and the licence ends on "denigration"), which decision
+# D-M3 (open licences only) excludes.
+speech_to_text:
+  models:
+    large-v3-turbo:
+      label: Whisper large-v3-turbo
+      engine: faster-whisper
+      repo: mobiuslabsgmbh/faster-whisper-large-v3-turbo
+      download_gb: 1.6
+      device: gpu
+      vram_gb: 1.2              # int8_float16
+      ram_gb: 0.4
+      speed: {gpu: 0.6, cpu: 9.7}
+      licence: MIT
+      data: large-v3's data (below), pruned to 4 decoder layers and trained two more epochs (OpenAI; not published)
+      measured: true            # 2026-11-07: 0.3 s for 3.5 s of speech, 0.6 s for 15 s; the CPU took 9.7 s for 15 s
+    large-v3:
+      label: Whisper large-v3
+      engine: faster-whisper
+      repo: Systran/faster-whisper-large-v3
+      download_gb: 3.1
+      device: gpu
+      vram_gb: 2.1
+      ram_gb: 0.4
+      speed: {gpu: 1.4, cpu: 25}
+      licence: MIT
+      data: 1 million hours of weakly labelled web audio and 4 million labelled by large-v2 (OpenAI; not published)
+    parakeet-tdt-0.6b-v3:
+      label: NVIDIA Parakeet TDT 0.6B v3
+      engine: onnx-asr
+      onnx_asr: nemo-parakeet-tdt-0.6b-v3   # onnx-asr's model type
+      quantization: int8
+      repo: istupakov/parakeet-tdt-0.6b-v3-onnx   # istupakov's ONNX export of nvidia/parakeet-tdt-0.6b-v3
+      revision: 8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce   # 2026-02-17
+      files:
+        config.json: ''
+        vocab.txt: ''
+        nemo128.onnx: a9fde1486ebfcc08f328d75ad4610c67835fea58c73ba57e3209a6f6cf019e9f
+        encoder-model.int8.onnx: 6139d2fa7e1b086097b277c7149725edbab89cc7c7ae64b23c741be4055aff09
+        decoder_joint-model.int8.onnx: eea7483ee3d1a30375daedc8ed83e3960c91b098812127a0d99d1c8977667a70
+      download_gb: 0.67
+      device: cpu               # int8 ran faster on the CPU (24x real time) than with CUDA (18x), and holds no VRAM
+      vram_gb: 1.3              # when dictation.device is cuda (onnxruntime-gpu and cuDNN, as read aloud's GPU option)
+      ram_gb: 1.1
+      speed: {gpu: 0.8, cpu: 0.7}
+      languages: [bg, hr, cs, da, nl, en, et, fi, fr, de, el, hu, it, lv, lt, mt, pl, pt, ro, sk, sl, es, sv, ru, uk]
+      licence: CC-BY-4.0
+      data: >-
+        10,000 hours of transcribed speech (NeMo ASR Set 3.0: LibriSpeech, Fisher, VCTK, Europarl-ASR, Multilingual
+        LibriSpeech, Common Voice, AMI) and 660,000 pseudo-labelled hours of Granary (YouTube-Commons, MOSEL, YODAS)
+      measured: true            # 2026-11-09: load 3.7 s; 7.5 s of speech in 0.31 s, 31 s in 1.56 s on the CPU
+    canary-qwen-2.5b:
+      label: NVIDIA Canary-Qwen 2.5B
+      engine: transcribe.cpp
+      repo: handy-computer/canary-qwen-2.5b-gguf   # transcribe.cpp's GGUF of nvidia/canary-qwen-2.5b (commit b1469e1)
+      revision: a4480da236b7d99d7a12186868de021ef4ff5ced   # 2026-10-16
+      files:
+        canary-qwen-2.5b-Q8_0.gguf: d89aad1285d5bd5aa441c464d3a4cf37bd5474f70705408e71558d8627415b34
+        LICENSE: ''
+        NOTICE: ''
+      model_file: canary-qwen-2.5b-Q8_0.gguf   # every preset scored 1.63% WER on LibriSpeech test-clean upstream
+      n_ctx: 4096               # a session's context: about 5 minutes of audio; dictation sends phrases of 25 s or less
+      download_gb: 2.8
+      device: gpu               # Vulkan; on the CPU it makes only 2x real time
+      vram_gb: 3.3
+      ram_gb: 0.2
+      speed: {gpu: 0.55, cpu: 7.1}
+      languages: [en]
+      licence: CC-BY-4.0
+      data: >-
+        234,500 hours of English: Granary English (YouTube-Commons, YODAS2, LibriLight), LibriSpeech, Fisher,
+        Switchboard, WSJ, VoxPopuli, Common Voice, AMI, FLEURS; the LLM half is Qwen3-1.7B (Apache-2.0), kept frozen
+      measured: true            # 2026-11-09: load 4.5 s; 7.5 s in 0.28 s, 31 s in 1.10 s on Vulkan; the very first
+                                # run compiled Vulkan shaders for 20 s, which the driver keeps for later starts
+    medium:
+      label: Whisper medium
+      engine: faster-whisper
+      repo: Systran/faster-whisper-medium
+      download_gb: 1.5
+      device: gpu
+      vram_gb: 1.1
+      ram_gb: 0.4
+      speed: {gpu: 0.8, cpu: 12}
+      licence: MIT
+      data: 680,000 hours of web audio (OpenAI; not published)
+    small:
+      label: Whisper small
+      engine: faster-whisper
+      repo: Systran/faster-whisper-small
+      download_gb: 0.5
+      device: gpu
+      vram_gb: 0.5
+      ram_gb: 0.3
+      speed: {gpu: 0.3, cpu: 3.0}
+      licence: MIT
+      data: 680,000 hours of web audio (OpenAI; not published)
+    base:
+      label: Whisper base
+      engine: faster-whisper
+      repo: Systran/faster-whisper-base
+      download_gb: 0.15
+      device: gpu
+      vram_gb: 0.3
+      ram_gb: 0.2
+      speed: {gpu: 0.2, cpu: 1.2}
+      licence: MIT
+      data: 680,000 hours of web audio (OpenAI; not published)
+  # Packages each engine adds to voice typing's environment, beside whisper.voice_typing_packages, and the module that
+  # must import. Versions that loaded under Smart App Control on 2026-11-09 (python.org 3.14): onnx-asr is pure Python;
+  # transcribe-cpp-native's DLLs (transcribe.dll, ggml*.dll, ggml-vulkan.dll; 18 MB) loaded on the first try.
+  engines:
+    faster-whisper: {module: faster_whisper, packages: []}
+    onnx-asr: {module: onnx_asr, packages: [onnx-asr==0.12.0], no_deps: true}
+    transcribe.cpp: {module: transcribe_cpp, packages: [transcribe-cpp==0.4.1, transcribe-cpp-native==0.4.1]}
 
 whisper:
-  # faster-whisper models offered in Settings and the installer: Hugging Face repository, download GB, GPU GB in
-  # int8_float16, seconds per 15 s of speech on the reference GPU. large-v3-turbo was measured; the others are scaled
-  # from it by model size.
-  models:
-    large-v3-turbo: {repo: mobiuslabsgmbh/faster-whisper-large-v3-turbo, download_gb: 1.6, vram_gb: 1.2, s_per_15s: 0.6}
-    large-v3: {repo: Systran/faster-whisper-large-v3, download_gb: 3.1, vram_gb: 2.1, s_per_15s: 1.4}
-    medium: {repo: Systran/faster-whisper-medium, download_gb: 1.5, vram_gb: 1.1, s_per_15s: 0.8}
-    small: {repo: Systran/faster-whisper-small, download_gb: 0.5, vram_gb: 0.5, s_per_15s: 0.3}
-    base: {repo: Systran/faster-whisper-base, download_gb: 0.15, vram_gb: 0.3, s_per_15s: 0.2}
   # Other names faster-whisper knows (faster_whisper.utils._MODELS), for a name typed into machines/<HOST>.yaml.
   other_repos:
     tiny: Systran/faster-whisper-tiny

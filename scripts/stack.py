@@ -16,6 +16,8 @@ Commands
                 on this PC, then what the installed ones take together (--details for the reasoning)
   setup         profile + .env secrets + Ollama env + uv tools + build + settings.local.json (+ pull core models unless --no-pull)
   disks         measure each drive's read/write speed and say which drive should hold models, tools and caches
+  check         check this PC (GPU, processor, memory, drives, Windows, microphone, languages) and say which models
+                and features are recommended on it, which work and which are not recommended (--no-drives, --json)
   pull          pull the profile's models (--all includes the reviewer)
   up/down/status  manage native services: phoenix, litellm, orchestrator, open_webui
   bench         measure tok/s and GPU/CPU split for the primary (or --model) via Ollama
@@ -245,6 +247,10 @@ def install_in_terminal():
 
     from stacklib import install
 
+    def ask_yes(q, default=True):
+        ans = input(f"{q} [{'Y/n' if default else 'y/N'}]: ").strip().lower()
+        return default if not ans else ans.startswith("y")
+
     if not install.worker_running():
         prof.write_profile()
         p = prof.resolve_profile()
@@ -257,6 +263,14 @@ def install_in_terminal():
             # In the app the owner already answered when the source was copied (cmd_deploy).
             if not deploy.is_app() and not input("Install this older version anyway? [y/N]: ").strip().lower().startswith("y"):
                 return
+        from stacklib import syscheck
+
+        check = syscheck.load(max_age_s=syscheck.REUSE_S)
+        if check is None and ask_yes("Check this PC first (GPU, memory, drive speeds: a 256 MB test file per drive)?"):
+            check = syscheck.run(p, lambda text, *_: info(f"  {text}") if text != "done" else None)
+        if check is not None:
+            for line in syscheck.lines(check, p):
+                info(line)
         chosen = ask_features(d)
         if chosen is None:
             return
@@ -271,10 +285,6 @@ def install_in_terminal():
                 info(f"  {chk.message}")
                 if chk.ok:
                     return ans
-
-        def ask_yes(q, default=True):
-            ans = input(f"{q} [{'Y/n' if default else 'y/N'}]: ").strip().lower()
-            return default if not ans else ans.startswith("y")
 
         est, status = d["estimates"], d["features"]
         pull = ask_yes(f"Download models now ({', '.join(d['models'])}, about {d['models_gb']:.1f} GB)?")
@@ -362,6 +372,28 @@ def cmd_disks(a):
         info(f"no slow drives; models in {store}")
     for line in disks.winsat_howto(speeds):
         info(line)
+
+
+def cmd_check(a):
+    """Check this PC and say which models and features are recommended on it (stacklib/syscheck.py); the installer's
+    first page and setup's Check this PC step show the same."""
+    from dataclasses import asdict
+
+    from stacklib import disks, syscheck
+
+    p = prof.resolve_profile()
+    if not a.no_drives and not a.json:
+        info("checking this PC" + ("" if disks.is_admin() else "; each drive is timed with a 256 MB test file "
+                                                                  "(winsat needs administrator rights)"))
+    say = (lambda text, *_: None) if a.json else (lambda text, *_: info(f"  {text}") if text != "done" else None)
+    r = syscheck.run(p, say, drives=not a.no_drives)
+    if a.json:
+        print(json.dumps(asdict(r), indent=1))
+        return
+    for line in syscheck.lines(r, p):
+        info(line)
+    info(f"Checked in {r.seconds:.0f} s; the installer and the tray read the report from "
+         f"{syscheck.CHECK_FILE.relative_to(REPO)}.")
 
 
 def cmd_openclaw(a):
@@ -637,7 +669,8 @@ def cmd_dictate(a):
             die("transcribe needs a WAV file")
         argv.append(str(Path(a.file).resolve()))
         argv += [x for opt, val in (("--style", a.style), ("--mode", a.mode), ("--language", a.language),
-                                    ("--device", a.device), ("--vocabulary", a.vocabulary)) if val for x in (opt, val)]
+                                    ("--device", a.device), ("--vocabulary", a.vocabulary), ("--model", a.model))
+                 if val for x in (opt, val)]
     raise SystemExit(subprocess.run(argv, cwd=REPO, env=env).returncode)
 
 
@@ -776,6 +809,10 @@ def main(argv=None):
     s = sub.add_parser("features", help="each feature: required or optional, installed or not, and its load on this PC")
     s.add_argument("--details", action="store_true", help="also print what each feature does and where its figures come from")
     s.set_defaults(f=cmd_features)
+    s = sub.add_parser("check", help="check this PC and say which models and features are recommended on it")
+    s.add_argument("--no-drives", action="store_true", help="skip the drive speed test (writes 256 MB per drive)")
+    s.add_argument("--json", action="store_true", help="print the report as JSON")
+    s.set_defaults(f=cmd_check)
     s = sub.add_parser("disks", help="measure drive speeds and suggest where models, tools and caches go")
     s.add_argument("drives", nargs="*", help="drive roots such as C:\\ D:\\ (default: every local drive)"); s.set_defaults(f=cmd_disks)
     s = sub.add_parser("openclaw", help="make the gateway OpenClaw's only model endpoint (onboards it if needed)")
@@ -806,7 +843,8 @@ def main(argv=None):
     s.add_argument("action", choices=["install", "run", "start", "stop", "status", "toggle", "show", "hide", "reload", "check", "transcribe"])
     s.add_argument("file", nargs="?"); s.add_argument("--style", choices=["verbatim", "clean", "concise"])
     s.add_argument("--mode", choices=["polish", "live"]); s.add_argument("--language"); s.add_argument("--device", choices=["auto", "cuda", "cpu"])
-    s.add_argument("--vocabulary"); s.set_defaults(f=cmd_dictate)
+    s.add_argument("--vocabulary"); s.add_argument("--model", help="a speech model for transcribe (dictation.model by default)")
+    s.set_defaults(f=cmd_dictate)
     s = sub.add_parser("read-aloud", help="read selected text aloud (optional, in the voice typing app): install, off, "
                                           "voices, speak TEXT, read, stop")
     s.add_argument("action", choices=["install", "off", "voices", "speak", "read", "stop"]); s.add_argument("text", nargs="?")

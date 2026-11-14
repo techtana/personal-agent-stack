@@ -32,7 +32,7 @@ from . import (Config, cleanup, control, ensure_refine_section, hotkey, read_sta
 from . import api_key as transcription_key
 from . import player as playback
 from .audio import RATE, Recorder, RecorderError
-from .engine import Engine
+from .engine import Engine, on_gpu
 from .reader import Reader
 from .refinelog import LOG_NAME, RefineLog
 from .refiner import Refiner
@@ -380,9 +380,10 @@ class App:
     def summary(self) -> str:
         mode = "types when you finish, cleaned up" if self.cfg.mode == "polish" else "types as you speak"
         style = cleanup.STYLE_NAMES.get(self.cfg.style, self.cfg.style).lower()
-        engine = {"ready": f"{self.engine.model_name} on {'the GPU' if self.engine.device == 'cuda' else 'the CPU'}",
-                  "loading": "loading Whisper", "unloaded": "Whisper loads on first use",
-                  "failed": "Whisper failed to load"}.get(self.engine.state, self.engine.state)
+        family = self.engine.family
+        engine = {"ready": f"{self.engine.model_name} on {'the GPU' if on_gpu(self.engine.device) else 'the CPU'}",
+                  "loading": f"loading {family}", "unloaded": f"{family} loads on first use",
+                  "failed": f"{family} failed to load"}.get(self.engine.state, self.engine.state)
         return f"Mode: {mode}" + (f" ({style})" if self.cfg.mode == "polish" else "") + f". {engine.capitalize()}."
 
     def health(self) -> dict:
@@ -623,7 +624,7 @@ class App:
             return
         self.hotkeys.register("cancel", 0, hotkey.VK_ESCAPE)
         hint = f"Stops after {cfg.silence_stop_s:g} s of quiet. {self.hotkey_text()} stops now, Esc cancels."
-        loading = "" if self.engine.state == "ready" else "Loading Whisper; keep talking."
+        loading = "" if self.engine.state == "ready" else f"Loading {self.engine.family}; keep talking."
         self.ui(lambda: self.overlay.set_state("listening", "Listening", loading, hint))
         log(f"[dictation] session {s.id}: listening ({source}, {s.mode}/{s.style}) for {app or 'unknown window'}")
 
@@ -667,10 +668,10 @@ class App:
             self.commands.put(("stop", ev.reason))
 
     def _maybe_interim(self, s: Session) -> None:
-        """While you speak, show Whisper's guess for the current phrase (GPU only; it is not typed)."""
+        """While you speak, show the model's guess for the current phrase (on the GPU, or a model quick enough on the
+        CPU such as Parakeet; it is not typed)."""
         start = s.seg.phrase_start
-        if (start is None or s.interim_busy or self.engine.state != "ready" or self.engine.device != "cuda"
-                or not self.jobs.empty()):
+        if (start is None or s.interim_busy or not self.engine.previews or not self.jobs.empty()):
             return
         now = time.monotonic()
         if now - s.last_interim < 0.7 or (s.seg.n - start) * FRAME < 0.6 * RATE:
@@ -798,7 +799,7 @@ class App:
             raw += joiner(raw, p) + p
         secs = len(s.pcm) / 2 / RATE
         if not raw.strip():
-            why = "No speech heard." if not s.seg.heard else "Whisper heard no words."
+            why = "No speech heard." if not s.seg.heard else f"{self.engine.family} heard no words."
             self.ui(lambda: self.overlay.set_state("idle", why, "", "Nothing was typed.", hide_after=3))
             log(f"[dictation] session {s.id}: nothing to type ({s.stop_reason})")
             self._idle(s)

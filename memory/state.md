@@ -1,6 +1,7 @@
 # Stack state (mutable; machine facts, measurements, open items)
 
-Updated: 2026-11-08 (Thai voices for read aloud, Kokoro Thai; open item 40). Before that, the same day (Mandarin
+Updated: 2026-11-09 (speech models beside Whisper, and the installer's system check; open item 41). Before that,
+2026-11-08 (Thai voices for read aloud, Kokoro Thai; open item 40). Before that, the same day (Mandarin
 voices for read aloud, Kokoro v1.1-zh; open item 39). Before that, the same day
 (blocked sites for Open WebUI's web reading, and audit checks for Claude; open item 38). Before that, the same
 day (the installer's catalog in config/installer.yaml, install and remove from the tray and the
@@ -818,6 +819,62 @@ once across a session restart.
      (they use the tested pack_title/pack_note/ModelPack fields); the live tray and app (they run the installed app's
      code); a reading through the speaker button; a Thai listener's ear; text with rare names or Pali/Sanskrit words.
    - After merging: rerun install.cmd from the main checkout (it updates the app), then restart voice typing.
+
+41. Speech models beside Whisper, and the system check (2026-11-09, branch claude/install-system-check-stt-models-176891).
+   - Speech models: config/installer.yaml `speech_to_text` lists every model voice typing offers, each with its engine.
+     NVIDIA Parakeet TDT 0.6B v3 runs through onnx-asr 0.12.0 on ONNX Runtime, on the CPU by default; NVIDIA
+     Canary-Qwen 2.5B through transcribe.cpp 0.4.1 (prebuilt CPU and Vulkan wheel) on the GPU through Vulkan; Whisper
+     as before (large-v3 was offered already). Code: stacklib/dictation/stt.py, engine.py (device choice, CPU
+     fallback, warm-up), dictation.install_engines (packages and import checks), `python -m stacklib.dictation fetch`,
+     `stack.py dictate transcribe --model`. The installer's option and the tray's Settings entry are **Speech model**;
+     picking one whose engine is missing starts the setup worker's voice typing step. Voice typing reads **Model
+     missing** until the engine is there. SenseVoice Small left out (custom licence; the owner, when asked).
+   - On this PC, with the owner's OK (2026-11-09): Parakeet v3 int8 (0.67 GB) and Canary-Qwen Q8_0 (2.8 GB) are in
+     D:\huggingface at their pinned revisions, kept for later use. Voice typing's live environment and the machine
+     profile were not changed; the throwaway test environment was deleted.
+   - Measured on this PC (6 CPU threads; Kokoro recordings of 6.6 to 31.2 s, checked word for word; each heard every
+     word but "Ollama"):
+
+     | model | device | load | 7.5 s of speech | 31.2 s | memory |
+     |---|---|---|---|---|---|
+     | Parakeet v3 int8 | CPU | 3.7 s | 0.31 s (24x) | 1.56 s (20x) | +1.1 GB RAM |
+     | Parakeet v3 int8 | CUDA (onnxruntime-gpu 1.31.1) | 4.8 s | 0.41 s (18x) | 1.63 s (19x) | +1.3 GB VRAM |
+     | Canary-Qwen Q8_0 | Vulkan | 4.5 s | 0.28 s (27x) | 1.10 s (28x) | +3.3 GB VRAM, +0.2 GB RAM |
+     | Canary-Qwen Q8_0 | CPU | 0.8 s | 3.56 s (2.1x) | 15.9 s (2.0x) | mapped file |
+
+     Canary-Qwen's first Vulkan run ever took 20.8 s (shader compilation); in the next process 0.49 s. Through voice
+     typing's pipeline (VAD and phrases): 31.2 s in 1.20 s (Parakeet) and 1.28 s (Canary-Qwen). A 94.7 s file through
+     Engine.transcribe, as Open WebUI sends it: cut into 5 pieces of 16 to 22 s at pauses; 7.3 s (Parakeet, 3.7 s of it
+     loading, 1.5% of words wrong) and 7.8 s (Canary-Qwen, 4.5 s loading, none wrong). A later run gave the same text
+     but loaded in 5.8 s and 11.1 s (the files read from D: again).
+   - System check: stacklib/syscheck.py. The installer's first page runs it when it opens (card **This PC**, the
+     table's **Fit** column, tags in the drop-downs, recommended values for choices the machine file does not set,
+     not-recommended features unticked unless installed or ticked by hand); setup's **Check this PC (drives, GPU,
+     memory)** step reuses a report under two hours old and warns about chosen values it does not recommend;
+     `stack.py check [--no-drives] [--json]`; the tray's Features card adds "recommended here" or "not recommended
+     here". Report: .run/install/system-check.json. On this PC the full check took 6 s (C: 3,020 / 1,493 MB/s, D:
+     392 / 316 MB/s) and recommended qwen3.5:9b at 32k, Whisper large-v3-turbo, images, and read aloud on the GPU;
+     Phoenix not recommended (Smart App Control).
+   - Fixed on the way: a context with no measurement was sized from a generic KV figure (the 9B at 64k: 10.4 GB); it is
+     now scaled from the model's own measured contexts (6.1 GB). The installer's table had grown past a 1024-pixel
+     screen with the new column; the Fit column holds marks only (1,003 px).
+   - Verified: unit tests (tests/test_speech_models.py, tests/test_syscheck.py and the installer window tests; the
+     numpy ones in a python.org 3.14 venv), the real engines in that venv with Smart App Control on, dictation's
+     install_engines checks there, `stack.py check` with the drive test, and renders of the installer's first page
+     (dark theme) from this worktree with this PC's status and a fresh PC's.
+   - A code review (subagent, read-only) found no must-fix issue, 6 should-fix and 6 to consider; fixed: native engine
+     errors now reach the GPU-to-CPU fallback, a failed checksum deletes the cached blob too, broken or older reports
+     read as none, Settings also starts the worker when only the model's files are missing, the owner's chat model
+     sizes the rest, a working feature's options are tagged but not changed, setup skips its drive test while the
+     page's check runs, the tray ignores reports over 30 days old, nvidia-smi fields are asked one by one, Whisper
+     small stays usable on a slow processor. Not done: scaling the engine's CPU thresholds (previews, CPU_OK_S) by
+     the processor's cores, as the check does; on a 4-core PC Parakeet's previews may cost more than they should.
+   - Not verified: a dictation in the live app with the new models (its environment has neither engine yet), the
+     Settings switch and the worker's install for real, Open WebUI's microphone with them, Whisper large-v3 (still an
+     estimate, not downloaded), Parakeet on CUDA in voice typing's own environment, the page in the light theme and at
+     150% scaling, the check on Linux and macOS, an AMD or Intel card.
+   - After merging: rerun install.cmd from the main checkout (it updates the app); the installer's first page runs
+     the check. To try a model, pick it under Speech model in the tray's Settings tab.
 
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:

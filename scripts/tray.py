@@ -93,7 +93,7 @@ from stacklib import IS_WINDOWS, clients, media, ollama, process_metrics, procna
 from stacklib.icon import COLORS, make_icon  # noqa: E402
 from stacklib import settings as cfg  # noqa: E402
 from stacklib import comfy_usage, features, gpu_models, install, modules, startup, storage, uninstall  # noqa: E402
-from stacklib import usage, usage_log, webfilter  # noqa: E402
+from stacklib import syscheck, usage, usage_log, webfilter  # noqa: E402
 from stacklib import theme  # noqa: E402
 from stacklib.theme import FONT, THEMES, dark_title_bar, system_theme  # noqa: E402,F401
 
@@ -252,6 +252,8 @@ class TrayApp:
         self.hardware = features.hardware(self.profile)
         self.feature_status: dict[str, features.Status] = {}  # empty until the first check: service rows as before
         self.feature_est = features.estimates(self.profile, self.hardware)
+        self.check_report: syscheck.Report | None = None   # the last system check (installer, setup, stack.py check)
+        self.check_mtime = 0.0
         self.installer: tuple[int, str | None] | None = None  # (pid, start time) of the installer window we opened
         self.installer_note = ""  # what the last Add features click did, shown under the Features card
         self.openclaw_busy = False
@@ -1417,6 +1419,25 @@ class TrayApp:
             return repair, "Remove"
         return False, "Install"
 
+    def _check_word(self, fid: str, s) -> str:
+        """The last system check's verdict on a feature, for its load line: whether to add it (for one that is not
+        installed) and a warning on one that is but is not recommended here. Read again when the report changes."""
+        try:
+            mtime = syscheck.CHECK_FILE.stat().st_mtime
+        except OSError:
+            return ""
+        if mtime != self.check_mtime:
+            self.check_mtime, self.check_report = mtime, syscheck.load(max_age_s=30 * 86400)
+        v = self.check_report.verdict(fid) if self.check_report else None
+        if v is None or features.BY_ID[fid].required:
+            return ""
+        installed = bool(s and s.installed)
+        if v.level == "not_recommended":
+            return "  ·  not recommended here"
+        if v.level == "unavailable":
+            return "  ·  not available here"
+        return "  ·  recommended here" if v.level == "recommended" and not installed else ""
+
     def _render_features(self) -> None:
         """The Features card, from the last feature check (once a minute), the setup worker's state and OpenClaw's Use
         gateway state."""
@@ -1428,7 +1449,8 @@ class TrayApp:
         for fid, w in self.feature_widgets.items():
             f, s, e = features.BY_ID[fid], status.get(fid), self.feature_est.get(fid)
             if e:
-                w["load"].configure(text=("Required  ·  " if f.required else "") + features.brief(e))
+                w["load"].configure(text=("Required  ·  " if f.required else "") + features.brief(e)
+                                    + self._check_word(fid, s))
             listed = f.offered or (s is not None and features.present(fid, status)) or bool(self._feature_busy(fid))
             for widget in w["block"]:   # a feature no longer offered shows only while something of it is here
                 widget.grid() if listed else widget.grid_remove()

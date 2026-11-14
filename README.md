@@ -133,6 +133,7 @@ After any change: `uv run scripts/stack.py build` (and `up`/`down` to restart th
 
 ```
 uv run scripts/stack.py doctor [--write-profile [--refresh]]   hardware, tools, ports, chosen class
+uv run scripts/stack.py check [--no-drives] [--json]          this PC, and which models and features are recommended on it
 uv run scripts/stack.py profile | build | setup | pull [--all]
 uv run scripts/stack.py up [svc...] | down [svc...] | status
 uv run scripts/stack.py tray [--show | --foreground | --status | --stop | --install-startup | --remove-startup]
@@ -142,7 +143,7 @@ uv run scripts/stack.py smoke [--dept id] [--skip-mcp] [--media | --media-only]
 uv run scripts/stack.py media check|install|provision          ComfyUI and image models under media.root (path guard first)
 uv run scripts/stack.py media gpu chat|media                   hand the GPU to chat (free ComfyUI) or media (unload Ollama)
 uv run scripts/stack.py dictate install|start|stop|status|check voice typing in any app: Ctrl+Alt+D or the mic button; Ctrl+Alt+R or the pencil button refines selected text
-uv run scripts/stack.py dictate transcribe note.wav [--style concise]   the voice typing pipeline on a recording
+uv run scripts/stack.py dictate transcribe note.wav [--style concise] [--model m]   the voice typing pipeline on a recording
 uv run scripts/stack.py why-routed [--last n] [--days n]
 uv run scripts/stack.py retro -- --days 7 [--reflect local-small|none] [--pr]
 uv run scripts/stack.py skills-sync [--dry-run]                 copy your own skills into skills/ (rules: skills/sync.yaml)

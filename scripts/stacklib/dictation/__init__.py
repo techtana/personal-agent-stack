@@ -249,14 +249,76 @@ def _run(cmd: list, env: dict | None = None) -> None:
 
 
 def model_cached(profile: dict, model: str) -> bool:
-    """True when the faster-whisper model is already in the Hugging Face cache (or `model` is a local folder)."""
+    """True when the speech model is already in the Hugging Face cache (or `model` is a local folder): a faster-whisper
+    model's model.bin in any snapshot, another engine's pinned files in its pinned revision."""
     if Path(model).is_dir():
         return True
-    from .models import repo_for
+    from .models import SPEECH, repo_for
 
     home = Path(hf_home(profile) or Path.home() / ".cache" / "huggingface")
+    m = SPEECH.get(model)
+    if m is not None and m.engine != "faster-whisper":
+        snap = home / "hub" / f"models--{m.repo.replace('/', '--')}" / "snapshots" / m.revision
+        return all((snap / name).is_file() for name in m.files)
     snaps = home / "hub" / f"models--{repo_for(model).replace('/', '--')}" / "snapshots"
     return any((s / "model.bin").exists() for s in snaps.glob("*")) if snaps.exists() else False
+
+
+# What each engine's import check prints: its version and whether its GPU path is there. Loads the native libraries
+# too, so Smart App Control judges them during setup rather than at the first dictation.
+ENGINE_CHECK = {
+    "onnx-asr": ("import importlib.metadata as md, onnx_asr, onnxruntime; "
+                 "print('ok', md.version('onnx-asr'), 'on ONNX Runtime', onnxruntime.__version__)"),
+    "transcribe.cpp": ("import transcribe_cpp as t; print('ok', t.native_version(), "
+                       "'vulkan' if t.backend_available('vulkan') else 'cpu')"),
+}
+
+
+def wanted_engines(profile: dict) -> list[str]:
+    """The engines the chosen speech models need besides faster-whisper (dictation.model and dictation.cpu_model)."""
+    from .models import engine_of
+
+    cfg = Config.from_profile(profile)
+    return [e for e in dict.fromkeys(engine_of(n) for n in (cfg.model, cfg.cpu_model) if n) if e != "faster-whisper"]
+
+
+def engine_installed(profile: dict, engine: str) -> bool:
+    """The engine's module is in voice typing's environment (faster-whisper: the environment itself)."""
+    from .models import ENGINE_PACKAGES
+
+    if engine == "faster-whisper":
+        return installed(profile)
+    module = (ENGINE_PACKAGES.get(engine) or {}).get("module") or engine.replace("-", "_").replace(".", "_")
+    site = _site_packages(profile)
+    return (site / module / "__init__.py").exists()
+
+
+def missing_engines(profile: dict) -> list[str]:
+    return [e for e in wanted_engines(profile) if not engine_installed(profile, e)]
+
+
+def install_engines(profile: dict, python: Path, uv: str, env: dict, report=lambda *a: None) -> list[str]:
+    """Add the packages of the engines the chosen models need (config/installer.yaml speech_to_text.engines) and check
+    that each loads. Returns notes for the step's line."""
+    from .models import ENGINE_PACKAGES
+
+    notes = []
+    for engine in wanted_engines(profile):
+        spec = ENGINE_PACKAGES.get(engine) or {}
+        packages = [str(p) for p in spec.get("packages") or ()]
+        if packages and not engine_installed(profile, engine):
+            report(f"installing {engine} for the speech model ({', '.join(packages)})")
+            _run([uv, "pip", "install", "--python", python, *(["--no-deps"] if spec.get("no_deps") else []), *packages],
+                 env=env)
+        check = subprocess.run([str(python), "-P", "-c", ENGINE_CHECK.get(engine, "print('ok')")], capture_output=True,
+                               text=True, check=False, env=app_env(profile, env))
+        if check.returncode or not check.stdout.startswith("ok"):
+            tail = (check.stderr or check.stdout or "").strip().splitlines()[-1:] or ["no output"]
+            refused = "Application Control" in tail[0] or "4551" in tail[0]
+            hint = " Smart App Control refused a DLL; see CodeIntegrity event 3033 for the file." if refused else ""
+            raise RuntimeError(f"{engine} does not load in the voice typing environment ({tail[0]}).{hint}")
+        notes.append(f"{engine} {check.stdout.split(None, 1)[1].strip()}" if " " in check.stdout.strip() else engine)
+    return notes
 
 
 def install(profile: dict, report=lambda *a: None, download_model: bool = True) -> str:
@@ -303,11 +365,19 @@ def install(profile: dict, report=lambda *a: None, download_model: bool = True) 
             report("installing NVIDIA cuBLAS 12 for the GPU (about 0.5 GB)")
             _run([uv, "pip", "install", "--python", python, *CUDA_PACKAGES], env=env)
             notes.append(f"GPU libraries installed ({', '.join(CUDA_PACKAGES)})")
+    notes += install_engines(profile, python, uv, env, report)   # Parakeet (onnx-asr), Canary-Qwen (transcribe.cpp)
     cfg = Config.from_profile(profile)
+    from .models import speech_model
+
+    m = speech_model(cfg.model)
     if download_model and not model_cached(profile, cfg.model):
-        report(f"downloading the Whisper model {cfg.model} into {hf_home(profile) or 'the Hugging Face cache'}")
-        code = f"import faster_whisper; print(faster_whisper.download_model({cfg.model!r}))"
-        _run([python, "-c", code], env=app_env(profile, env))
+        report(f"downloading the speech model {m.label} ({m.download_gb:.1f} GB) into "
+               f"{hf_home(profile) or 'the Hugging Face cache'}")
+        if m.engine == "faster-whisper":
+            code = f"import faster_whisper; print(faster_whisper.download_model({cfg.model!r}))"
+            _run([python, "-c", code], env=app_env(profile, env))
+        else:   # the pinned files, each checked against its sha256 (stt.fetch)
+            _run([python, "-P", "-m", "stacklib.dictation", "fetch", cfg.model], env=app_env(profile, env))
         notes.append(f"downloaded {cfg.model}")
     elif download_model:
         notes.append(f"model {cfg.model} already cached")
