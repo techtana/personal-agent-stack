@@ -864,6 +864,16 @@ once across a session restart.
    After merging: rerun install.cmd from the main checkout. Its deploy step adds Claude's keys to the app's .env and
    puts them into Claude Code's settings in the checkout and its worktrees; setup then restarts the services with them.
    Start Claude Code sessions again (they read settings.local.json at start), then check `stack.py claude-access`.
+42. Start with the tray (2026-11-18, branch claude/module-selection-startup-cbc66d). Profile section `autostart:`
+   (one true/false per service in services.SERVICE_ORDER, all true by default): the tray starts at launch only the
+   managed services whose box is ticked (services.autostart_services) and logs the ones it left stopped. Each Services
+   row the tray starts (not Local models, not read aloud inside voice typing, not a module off in Settings) has a
+   "Start with the tray" box under its name, saved into machines/<HOST>.yaml at once (services.set_autostart); it
+   changes the next start, not what runs now. An unticked module still counts as down in the tray icon. Verified: unit
+   tests (tests/test_autostart.py; 805 passed in all); the Services card built in a hidden window with services stubbed
+   (boxes shown on the four managed rows only, a click wrote `autostart: open_webui: false` to a temp machine file, the
+   box left once Open WebUI was off). Not verified: the card's look, a real tray start at login. After merging: rerun
+   install.cmd from the main checkout, then restart the tray.
 
 15. Installer (2026-11-01, branch claude/interactive-installer-paths-77aabe): `install.cmd` / `stack.py install` asks for the models
    and Python tools folders, then runs setup in a detached worker (state in `.run/install/state.json`). That day drive D:

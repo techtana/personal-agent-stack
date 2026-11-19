@@ -309,7 +309,11 @@ class TrayApp:
         self.icon_color = COLORS["idle"]
         self.icon = pystray.Icon("agent-stack", make_icon(COLORS["idle"]), "Agent Stack: starting", menu=self._menu())
         if autostart:
-            self._act("start", self.managed)
+            first = services.autostart_services(self.profile, self.managed)  # "Start with the tray" on each row
+            skipped = [s for s in self.managed if s not in first]
+            if skipped:
+                print(f"[tray] not started (Start with the tray is off): {', '.join(skipped)}")
+            self._act("start", first)
             # Load the primary model now, so the first chat after login does not wait for it. Ollama may still be
             # starting at login, hence the wait.
             threading.Thread(target=lambda: print(f"[tray] {ollama.warm_primary(self.profile, wait=300)}"), daemon=True).start()
@@ -1020,6 +1024,12 @@ class TrayApp:
             ttk.Label(names, text=label, style="Card.Name.TLabel").pack(anchor="w")
             role_label = ttk.Label(names, text=role, style="Card.Muted.TLabel")
             role_label.pack(anchor="w")
+            auto = None
+            if svc in services.SERVICE_ORDER:   # Local models is the Ollama app's to start, not the tray's
+                var = tk.BooleanVar(value=services.starts_with_tray(self.profile, svc))
+                box = ttk.Checkbutton(names, text="Start with the tray", variable=var,
+                                      command=lambda s=svc, v=var: self.set_autostart(s, v))
+                auto = (box, var)   # shown by _render_services where the stack starts the module
             state = ttk.Label(card, text="", style="Card.Sub.TLabel", width=-20)
             state.grid(row=row, column=2, sticky="nw", padx=GAP_M)
             actions = ttk.Frame(card, style="Card.TFrame")
@@ -1036,7 +1046,7 @@ class TrayApp:
             toggle = ttk.Button(card, text="Stop", width=BTN_B, command=lambda s=svc: self.toggle(s))
             toggle.grid(row=row, column=4, sticky="ne")
             toggle.grid_remove()   # _render_services shows it where the stack starts and stops the module
-            self.row_widgets[svc] = {"dot": dot, "state": state, "toggle": toggle, "role": role_label,
+            self.row_widgets[svc] = {"dot": dot, "state": state, "toggle": toggle, "role": role_label, "auto": auto,
                                      "all": [w for w in (line, dot, names, state, actions) if w is not None]}
             if svc == "ollama":
                 self.runner_slots = [self._runner_slot(card, row + 1 + k, k) for k in range(OLLAMA_SLOTS)]
@@ -1356,6 +1366,32 @@ class TrayApp:
         if any(r["state"] == "starting" for r in self.rows.values()):
             self._tick_soon()
 
+    def _render_autostart(self, svc: str, auto) -> None:
+        """A row's "Start with the tray" box: shown where the tray starts the module (on in Settings, and not read
+        aloud running inside voice typing), and following the profile (Settings' Apply reloads it)."""
+        if auto is None:
+            return
+        box, var = auto
+        if svc in self.managed and not self._kokoro_in_app(svc):
+            if var.get() != services.starts_with_tray(self.profile, svc):
+                var.set(services.starts_with_tray(self.profile, svc))
+            if not box.winfo_manager():
+                box.pack(anchor="w", pady=(GAP_XS, 0))
+        elif box.winfo_manager():
+            box.pack_forget()
+
+    def set_autostart(self, svc: str, var: tk.BooleanVar) -> None:
+        """Save one row's "Start with the tray" tick. It changes what the next tray start does, not what runs now."""
+        on = bool(var.get())
+        try:
+            services.set_autostart(self.profile, svc, on)
+            print(f"[tray] {svc}: start with the tray {'on' if on else 'off'}")
+        except (OSError, ValueError) as e:
+            var.set(not on)
+            print(f"[tray] could not save autostart.{svc}: {e}")
+            messagebox.showerror("Agent Stack", f"Could not save the choice for {LABELS.get(svc, svc)}: {e}",
+                                 parent=self.window)
+
     def _render_services(self) -> None:
         """Service rows, the status pill and Start all / Stop all, from cached state only (no I/O): runs on every
         click and once a second while something is starting or stopping."""
@@ -1365,6 +1401,7 @@ class TrayApp:
         up = 0
         for svc, w in self.row_widgets.items():
             dot, state, toggle = w["dot"], w["state"], w["toggle"]
+            self._render_autostart(svc, w.get("auto"))
             if self._kokoro_in_app(svc):
                 level, text, _role = features.read_aloud_row(self.profile, self.dictation_health,
                                                              self.feature_status.get("read_aloud"))
