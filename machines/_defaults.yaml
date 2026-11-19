@@ -79,6 +79,17 @@ services:
   kokoro: 'off'     # native once `stack.py setup` installed Kokoro-FastAPI under media.root
   dictation: 'off'  # voice typing (Whisper, any app); native once `stack.py dictate install` built its environment
 
+autostart:
+  # Which of the services above the tray starts when it starts (at login): false leaves one stopped until you click
+  # its Start. A service that is off above never starts. Set with "Start with the tray" on the tray's Services card.
+  litellm: true
+  phoenix: true
+  orchestrator: true
+  open_webui: true
+  comfyui: true
+  kokoro: true
+  dictation: true
+
 media:
   # Image, video, music and speech tools (docs/design/plans/2026-11-01-multimodal-stack.md). Set `root` per machine,
   # inside agent_access.allowed_roots; ComfyUI, its models, inputs, outputs and the uv cache go below it.

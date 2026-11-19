@@ -194,6 +194,8 @@ def resolve_profile(name: str | None = None) -> dict:
         "ollama_env": ollama_env,
         "ports": {**defaults["ports"], **(m.get("ports") or {})},
         "services": {**defaults["services"], **(m.get("services") or {})},
+        "autostart": {**(defaults.get("autostart") or {}),
+                      **{k: v for k, v in (m.get("autostart") or {}).items() if v is not None}},
         "observability": {**defaults["observability"], **(m.get("observability") or {})},
         "claude_code": {**defaults["claude_code"], **(m.get("claude_code") or {})},
         "claude_access": {**(defaults.get("claude_access") or {}),

@@ -18,6 +18,34 @@ from . import webfilter
 # Voice typing (dictation) comes last: it needs only the gateway, for its cleanup.
 SERVICE_ORDER = ["phoenix", "litellm", "orchestrator", "comfyui", "kokoro", "open_webui", "dictation"]
 
+
+def starts_with_tray(profile: dict, svc: str) -> bool:
+    """Whether the tray starts this service when it starts (`autostart:`; anything but false counts as yes)."""
+    return (profile.get("autostart") or {}).get(svc, True) is not False
+
+
+def autostart_services(profile: dict, managed: list[str]) -> list[str]:
+    """The services the tray starts when it starts: those it manages whose box is ticked, in start order."""
+    return [s for s in managed if starts_with_tray(profile, s)]
+
+
+def set_autostart(profile: dict, svc: str, on: bool) -> None:
+    """Save "Start with the tray" for one service into machines/<HOST>.yaml (comments and other keys kept), and into
+    the profile in memory. Raises ValueError when the file does not read back the new value."""
+    import yaml
+
+    from . import profile as prof
+    from .yamledit import set_key
+
+    if svc not in SERVICE_ORDER:
+        raise ValueError(f"unknown service {svc!r}")
+    path = prof.machine_file(profile["name"])
+    text = set_key(path.read_text(encoding="utf-8"), "autostart", svc, bool(on))
+    if ((yaml.safe_load(text) or {}).get("autostart") or {}).get(svc) is not bool(on):
+        raise ValueError(f"could not write autostart.{svc} safely; edit {path.name} by hand")
+    path.write_text(text, encoding="utf-8", newline="\n")
+    profile.setdefault("autostart", {})[svc] = bool(on)
+
 # Services that are uv tools: (uv tool environment, console script). They start through the environment's own
 # Python, not the per-script launcher uv writes to ~/.local/bin. Smart App Control judges each executable by
 # reputation: every launcher is a unique file (the script is embedded), so it can be blocked (phoenix.exe was,
