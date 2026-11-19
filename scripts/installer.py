@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from stacklib import IS_WINDOWS, REPO  # noqa: E402
-from stacklib import features, install, theme, uninstall  # noqa: E402
+from stacklib import features, install, syscheck, theme, uninstall  # noqa: E402
 from stacklib import profile as prof  # noqa: E402
 
 POLL_MS = 500
@@ -33,6 +33,11 @@ FONT = theme.FONT
 MARK = {"pending": ("○", "muted"), "running": ("●", "accent"), "done": ("✓", "good"),
         "skipped": ("–", "muted"), "warning": ("!", "warn"), "failed": ("✗", "bad")}
 FINDING = {"ok": ("✓", "good"), "warn": ("!", "warn"), "bad": ("✗", "bad")}
+# The system check's verdicts in the Fit column: a mark of its own shape (not colour alone), its words for the detail
+# box and the summary, and its palette key.
+VERDICT = {"recommended": ("✓", "Recommended", "good"), "ok": ("·", "Works", "ink2"),
+           "not_recommended": ("!", "Not recommended", "warn"), "unavailable": ("✗", "Not available", "bad")}
+BAD = ("not_recommended", "unavailable")
 WIZARD = ("Features", "Folders", "Install")   # the three pages, shown as steps at the top of each
 COLUMNS = (("disk", "Disk GB"), ("vram", "GPU memory GB"), ("gpu", "GPU work"), ("cpu", "CPU while busy"),
            ("ram", "RAM GB"))
@@ -97,6 +102,13 @@ class Installer:
         self.behind = None
         self.behind_text = ""
         self.store_msg = self.media_msg = self.summary_box = None
+        self.check: syscheck.Report | None = None   # this PC, from the system check (stacklib/syscheck.py)
+        self.check_job: threading.Thread | None = None
+        self.check_progress = ["", 0.0]
+        self.check_error = ""
+        self.applied_check = False   # the recommendations were applied to the untouched choices once
+        self.touched: set = set()    # options ((section, key)) and features (ids) the owner changed on page 1
+        self.detail_fid = ""
         if install.worker_running():
             self.show_progress()
         else:
@@ -223,6 +235,15 @@ class Installer:
         named = set((self.profile.get("read_aloud") or {}).get("packs") or [])
         self.pack_vars = {k: tk.BooleanVar(value=k in have or k in named) for k in speak.PACK_KEYS}
         self.option_vars = {k: tk.StringVar(value=v) for k, v in d["options"].items()}   # (section, key) -> value
+        self.explicit = install.explicit_options(self.profile)   # set in machines/<HOST>.yaml: the check leaves them
+        self.option_widgets: dict = {}   # (section, key) -> (combo, shown var, [(value, name)])
+        self.option_back: dict = {}      # (section, key) -> {name shown: value}
+        # A report from the last REUSE_S (this window opened again, or a run started from it) is used as it is; else
+        # the check runs now, in a thread: the drive test writes and reads a test file on each drive.
+        self.check = syscheck.load(max_age_s=syscheck.REUSE_S)
+        self.applied_check = False
+        if self.check is None:
+            self._start_check()
         self.store = tk.StringVar(value=d["model_store"])
         self.tools = tk.StringVar(value=d["tool_dir"])
         self.media_root = tk.StringVar(value=d["media_root"])
@@ -321,26 +342,31 @@ class Installer:
                      "Tick the others you want; you can add or remove features later from the tray's Features card. "
                      "Settings in the tray turns a feature off without removing it.")
         self._behind_label(f)
+        self._check_card(f)
 
         table = self._card(f)
-        ttk.Label(table, text=f"This PC: {d['hardware'].describe()}. Each row is what that feature costs on its own; "
-                  "Your choice adds up the ones you tick.", style="Card.Muted.TLabel", wraplength=WRAP - 40,
-                  justify="left").grid(row=1, column=0, columnspan=3 + len(COLUMNS), sticky="w", pady=(0, GAP_M))
+        ttk.Label(table, text="Each row is what that feature costs on this PC on its own; Your choice adds up the ones "
+                  "you tick. Fit is what the check above says: ✓ recommended here, · works, ! not recommended, ✗ not "
+                  "available. Point at a row for why.",
+                  style="Card.Muted.TLabel", wraplength=WRAP - 40,
+                  justify="left").grid(row=1, column=0, columnspan=4 + len(COLUMNS), sticky="w", pady=(0, GAP_M))
         table.columnconfigure(0, weight=1)
         # Room for the longest status up front, so ticking Remove ("Will be removed") does not squeeze the names.
         from tkinter import font as tkfont   # tkinter is imported in main(), where a missing Tk is reported
 
         font = tkfont.Font(root=self.root, family=FONT, size=10)
         table.columnconfigure(1, minsize=14 + max(font.measure(x) for x in ("Will be removed", "Not installed")))
-        for c, head in enumerate(("Feature", "Status", *(title for _key, title in COLUMNS), "Remove")):
+        for c, head in enumerate(("Feature", "Status", "Fit", *(title for _key, title in COLUMNS), "Remove")):
             ttk.Label(table, text=head, style="Card.Head.TLabel").grid(
-                row=2, column=c, sticky="w" if c < 2 else "e", padx=(0 if c == 0 else 14, 0), pady=(0, 4))
+                row=2, column=c, sticky="w" if c < 2 else "n" if c == 2 else "e", padx=(0 if c == 0 else 14, 0),
+                pady=(0, 4))
         self.status_labels = {}
+        self.verdict_labels: dict = {}
         first = None
         self.feature_boxes, self.cell_labels, self.option_boxes, self.option_owner = {}, {}, {}, {}
         self.listed: list[str] = []
         r = 2
-        span = 3 + len(COLUMNS)
+        span = 4 + len(COLUMNS)
         for feat in features.FEATURES:
             if not feat.offered and not features.present(feat.id, d["features"]):
                 continue   # no longer offered, and nothing of it on this PC: not listed at all
@@ -361,16 +387,20 @@ class Installer:
             row = [box, ttk.Label(table, text=text, style="Card.TLabel", foreground=t[key])]
             row[1].grid(row=r, column=1, sticky="w", padx=(14, 0))
             self.status_labels[feat.id] = (row[1], text, t[key])
+            row.append(ttk.Label(table, text="", style="Card.TLabel", font=(FONT, 11)))
+            row[-1].grid(row=r, column=2, padx=(14, 0))
+            if not feat.required:   # required parts are installed whatever the check says
+                self.verdict_labels[feat.id] = row[-1]
             values = features.cells(d["estimates"][feat.id], d["hardware"])
             self.cell_labels[feat.id] = {}
-            for c, (key, _title) in enumerate(COLUMNS, start=2):
+            for c, (key, _title) in enumerate(COLUMNS, start=3):
                 row.append(ttk.Label(table, text=values[key], style="Card.TLabel"))
                 row[-1].grid(row=r, column=c, sticky="e", padx=(14, 0))
                 self.cell_labels[feat.id][key] = row[-1]
             if feat.id in self.remove_vars:   # installed: a box to take it off again
                 rm = ttk.Checkbutton(table, variable=self.remove_vars[feat.id],
                                      command=lambda fid=feat.id: self.remove_ticked(fid))
-                rm.grid(row=r, column=2 + len(COLUMNS), sticky="e", padx=(14, 0))
+                rm.grid(row=r, column=3 + len(COLUMNS), sticky="e", padx=(14, 0))
                 rm.bind("<FocusIn>", lambda _e, fid=feat.id: self.show_detail(fid), add="+")
                 row.append(rm)
             for w in row:   # the box below explains the row under the pointer, or the one with keyboard focus
@@ -383,14 +413,18 @@ class Installer:
                 for opt, fn in features.OPTIONS[feat.id]:
                     choices = fn(self.profile)
                     names = dict(choices)
-                    var = self.option_vars[(opt.section, opt.key)]
+                    k = (opt.section, opt.key)
+                    var = self.option_vars[k]
                     shown = self.tk.StringVar(value=names.get(var.get(), var.get()))
                     ttk.Label(line, text=f"{opt.label}:", style="Card.Sub.TLabel").pack(side="left", padx=(0, 4))
                     combo = ttk.Combobox(line, textvariable=shown, state="readonly", width=max(len(n) for n in names.values()) + 1,
                                          values=[n for _v, n in choices])
+                    self.option_widgets[k] = (combo, shown, choices)
+                    self.option_back[k] = {n: v for v, n in choices}
 
-                    def picked(event, var=var, shown=shown, back={n: v for v, n in choices}):
-                        var.set(back.get(shown.get(), shown.get()))
+                    def picked(event, var=var, shown=shown, k=k):
+                        var.set(self.option_back[k].get(shown.get(), shown.get()))
+                        self.touched.add(k)   # the check's recommendation no longer changes it
                         self.option_changed(event)
                     combo.bind("<<ComboboxSelected>>", picked)
                     combo.bind("<FocusIn>", lambda _e, fid=feat.id: self.show_detail(fid), add="+")
@@ -403,7 +437,7 @@ class Installer:
 
                 r += 1
                 grid = ttk.Frame(table, style="Card.TFrame")
-                grid.grid(row=r, column=0, columnspan=3 + len(COLUMNS), sticky="w", padx=(28, 0), pady=(0, 2))
+                grid.grid(row=r, column=0, columnspan=4 + len(COLUMNS), sticky="w", padx=(28, 0), pady=(0, 2))
                 ttk.Label(grid, text="More voices:", style="Card.Sub.TLabel").grid(row=0, column=0, sticky="nw",
                                                                                    padx=(0, 6))
                 chosen = self.option_vars.get(("read_aloud", "kokoro"))
@@ -428,7 +462,7 @@ class Installer:
                           text="* Piper voices fine-tuned from a voice whose training data is licensed for research "
                                "only; their own recordings are open (CC0, CC BY or CC BY-SA). They run on this PC's "
                                "CPU in read aloud's own environment." + zh + th).grid(
-                    row=r, column=0, columnspan=3 + len(COLUMNS), sticky="w", padx=(28, 0), pady=(0, 4))
+                    row=r, column=0, columnspan=4 + len(COLUMNS), sticky="w", padx=(28, 0), pady=(0, 4))
             if feat.id == "models" and self.model_vars:   # downloaded models nothing uses: delete them?
                 r += 1
                 line = ttk.Frame(table, style="Card.TFrame")
@@ -463,6 +497,8 @@ class Installer:
         self._hold_detail_height()
         self.show_detail(first or features.FEATURES[0].id)
         self.update_summary()
+        if self.check is not None:
+            self.root.after(0, self._check_done)   # a saved report: apply it once the page is up
 
     def _hold_detail_height(self):
         """Give the detail text the height of the longest feature's, measured once per page."""
@@ -479,6 +515,7 @@ class Installer:
         """Keep features with what they run inside: ticking read aloud ticks voice typing, and unticking voice typing
         unticks read aloud (a locked feature stays as it is). Ticking a feature takes back its Remove tick."""
         v = self.feature_vars
+        self.touched.add(fid)
         if v[fid].get():
             for need in features.BY_ID[fid].requires:
                 v[need].set(True)
@@ -571,9 +608,11 @@ class Installer:
             lines.append(f"{st.state}. {st.detail}")
         # One fact per line (GPU, CPU, Memory, When, Disk) instead of one paragraph.
         lines.append(re.sub(r" (?=(?:GPU|CPU|Memory|When|Disk): )", "\n", features.detail_text(d["estimates"][fid])))
+        lines += self._verdict_lines(fid)
         if fid in self.to_remove():
             r = self.removals.get(fid)
             lines = ["Ticked for removal.", r.text() if r else "Measuring what it deletes..."]
+        self.detail_fid = fid
         self.detail_title.configure(text=feat.title)
         self.detail_lead.configure(text=feat.summary)
         self.detail.configure(text=uninstall.short_text("\n".join(lines)))
@@ -586,6 +625,7 @@ class Installer:
             child.destroy()
         installed = {fid for fid, s in d["features"].items() if s.installed} - self.to_remove()
         findings = features.assess(self.chosen(), d["estimates"], d["hardware"], installed)
+        findings += self._check_findings()
         gone = self.to_remove()
         if gone:
             measured = [self.removals.get(f) for f in gone]
@@ -611,6 +651,191 @@ class Installer:
             if finding.level != "ok":
                 text.configure(foreground=t[key])
             text.grid(row=i, column=1, sticky="w", pady=1)
+
+    # ------------------------------------------------------------ the system check (page 1)
+
+    def _start_check(self):
+        """Check this PC in a thread: the drive test takes a few seconds per drive. Tk is touched only from the
+        poll on the Tk thread."""
+        if self.check_job is not None and self.check_job.is_alive():
+            return
+        self.check, self.check_error, self.check_progress = None, "", ["starting", 0.0]
+        result: list = []
+        profile = self.profile
+
+        def progress(text, fraction=None):
+            self.check_progress = [str(text), float(fraction or 0.0)]
+
+        def work():
+            try:
+                result.append(syscheck.run(profile, progress))
+            except Exception as e:  # noqa: BLE001 - shown in the card; the page works without the check
+                result.append(e)
+
+        self.check_job = threading.Thread(target=work, name="system-check", daemon=True)
+        self.check_job.start()
+
+        def poll():
+            if not result:
+                self._show_check()
+                self.root.after(POLL_MS // 2, poll)
+                return
+            if isinstance(result[0], Exception):
+                self.check_error = str(result[0]) or type(result[0]).__name__
+                self._show_check()
+                return
+            self.check = result[0]
+            self._check_done()
+        self.root.after(POLL_MS // 2, poll)
+
+    def _recheck(self):
+        self._start_check()
+        self._show_check()
+
+    def _check_card(self, parent):
+        ttk = self.ttk
+        card = self._card(parent, "This PC")
+        head = ttk.Frame(card, style="Card.TFrame")
+        head.grid(sticky="ew")
+        head.columnconfigure(0, weight=1)
+        self.check_label = ttk.Label(head, text="", style="Card.TLabel", wraplength=WRAP - 170, justify="left")
+        self.check_label.grid(row=0, column=0, sticky="w")
+        self.check_btn = ttk.Button(head, text="Check again", command=self._recheck)
+        self.check_btn.grid(row=0, column=1, sticky="ne", padx=(GAP_S, 0))
+        self.check_bar = ttk.Progressbar(card, mode="determinate", maximum=1.0)
+        self.check_bar.grid(sticky="ew", pady=(GAP_S, 0))
+        self.check_notes = ttk.Frame(card, style="Card.TFrame")
+        self.check_notes.grid(sticky="ew", pady=(GAP_S // 2, 0))
+        self.check_notes.columnconfigure(1, weight=1)
+        self._show_check()
+
+    def _show_check(self):
+        """The card: what is being checked while the check runs, then this PC in one line and the notes worth
+        reading (a slow drive, an old driver, Smart App Control)."""
+        if not self._alive(getattr(self, "check_label", None)):
+            return
+        r = self.check
+        for child in self.check_notes.winfo_children():
+            child.destroy()
+        if r is None and not self.check_error:
+            text, frac = self.check_progress
+            self.check_label.configure(text="Checking this PC: the graphics card, processor, memory and Windows, and "
+                                            "how fast each drive reads and writes (a 256 MB test file per drive, "
+                                            f"deleted at once). Now {text}...")
+            self.check_bar.grid()
+            self.check_bar["value"] = frac
+            self.check_btn.state(["disabled"])
+            return
+        self.check_bar.grid_remove()
+        self.check_btn.state(["!disabled"])
+        if r is None:
+            self.check_label.configure(text=f"The check did not finish ({self.check_error}). The estimates below use "
+                                            "what doctor saved about this PC.", foreground=self.t["warn"])
+            return
+        when = time.strftime("%H:%M", time.localtime(r.checked_at))
+        self.check_label.configure(text=f"{r.describe()}. Checked at {when}.", foreground=self.t["ink"])
+        notes = [n for n in r.notes if n.level != "ok"][:4]
+        for i, n in enumerate(notes):
+            sym, key = FINDING.get(n.level, FINDING["warn"])
+            self.ttk.Label(self.check_notes, text=sym, style="Card.TLabel", foreground=self.t[key], width=2,
+                           font=(FONT, 11)).grid(row=i, column=0, sticky="nw")
+            self.ttk.Label(self.check_notes, text=n.text, style="Card.TLabel", foreground=self.t[key],
+                           wraplength=WRAP - 70, justify="left").grid(row=i, column=1, sticky="w", pady=1)
+
+    def _check_done(self):
+        """A finished check: estimates from the measured hardware, the recommendations once into the choices the
+        owner has not set or touched, the For this PC column, the drop-downs' tags, the detail box and the total."""
+        r = self.check
+        if r is None or not self._alive(getattr(self, "summary_box", None)):
+            return
+        self.d["hardware"] = r.hardware()
+        if not self.applied_check:
+            self.applied_check = True
+            self._apply_recommendations(r)
+        self._refresh_verdicts()
+        self.option_changed()
+        self._show_check()
+        if self.listed:
+            self._hold_detail_height()
+            self.show_detail(self.detail_fid or self.listed[0])
+
+    def _apply_recommendations(self, r: syscheck.Report):
+        d = self.d
+        owners = {(o.section, o.key): fid for fid, opts in features.OPTIONS.items() for o, _fn in opts}
+        for k, var in self.option_vars.items():
+            st = d["features"].get(owners.get(k, ""))
+            if k in self.explicit or k in self.touched or (st and st.installed and st.on):
+                continue   # set by the owner, or a working feature's: the tag says what is recommended
+            value = r.recommended(f"{k[0]}.{k[1]}")
+            choices = [v for v, _n in (self.option_widgets.get(k) or (None, None, []))[2]]
+            if value is not None and value in choices and value != var.get():
+                var.set(value)
+        for fid, var in self.feature_vars.items():
+            st = d["features"].get(fid)
+            if fid in self.touched or features.locked(fid, d["features"]) or (st and (st.installed or st.on)):
+                continue
+            v = r.verdict(fid)
+            if v and v.level in BAD and var.get():
+                var.set(False)
+                for dep in features.dependents(fid):
+                    if dep in self.feature_vars and not features.locked(dep, d["features"]):
+                        self.feature_vars[dep].set(False)
+
+    def _refresh_verdicts(self):
+        r, t = self.check, self.t
+        if r is None:
+            return
+        for fid, label in getattr(self, "verdict_labels", {}).items():
+            v = r.verdict(fid)
+            if not self._alive(label) or v is None:
+                continue
+            sym, _word, key = VERDICT[v.level]
+            label.configure(text=sym, foreground=t[key])
+        for k, (combo, shown, choices) in self.option_widgets.items():
+            if not self._alive(combo):
+                continue
+            names = [(v, n + syscheck.tag(r.verdict(f"{k[0]}.{k[1]}", v))) for v, n in choices]
+            self.option_back[k] = {n: v for v, n in names}
+            combo.configure(values=[n for _v, n in names], width=max(len(n) for _v, n in names) + 1)
+            current = self.option_vars[k].get()
+            shown.set(next((n for v, n in names if v == current), current))
+
+    def _verdict_lines(self, fid: str) -> list[str]:
+        """The check's word on the row and on its chosen options, for the detail box."""
+        r = self.check
+        if r is None:
+            return ["For this PC: checking..."] if not self.check_error else []
+        out = []
+        v = r.verdict(fid)
+        if v and (v.level != "ok" or v.text):
+            out.append(f"For this PC: {syscheck.LEVEL_WORDS[v.level]}. {v.text}".strip())
+        for opt, _fn in features.OPTIONS.get(fid, []):
+            value = self.option_vars[(opt.section, opt.key)].get()
+            ov = r.verdict(f"{opt.section}.{opt.key}", value)
+            if ov and ov.level != "ok" and ov.text:
+                name = features.speech_choice_label(value) if (opt.section, opt.key) == ("dictation", "model") else value
+                out.append(f"{opt.label} {name}: {syscheck.LEVEL_WORDS[ov.level]}. {ov.text}")
+        return out
+
+    def _check_findings(self) -> list:
+        """The chosen features and options the check does not recommend here, for the summary."""
+        r = self.check
+        if r is None:
+            return []
+        out = []
+        chosen = self.chosen()
+        for fid in [f.id for f in features.FEATURES if f.id in chosen]:
+            v = r.verdict(fid)
+            if v and v.level in BAD:
+                out.append(features.Finding("warn", f"{features.BY_ID[fid].title}: not recommended here. {v.text}"))
+            for opt, _fn in features.OPTIONS.get(fid, []):
+                value = self.option_vars[(opt.section, opt.key)].get()
+                ov = r.verdict(f"{opt.section}.{opt.key}", value)
+                if ov and ov.level in BAD:
+                    name = features.speech_choice_label(value) if opt.key == "model" and opt.section == "dictation" \
+                        else value
+                    out.append(features.Finding("warn", f"{opt.label} {name}: not recommended here. {ov.text}"))
+        return out
 
     # ------------------------------------------------------------ page 2: folders and options
 
@@ -646,8 +871,6 @@ class Installer:
         if d["ollama_missing"]:
             ttk.Checkbutton(opts, variable=self.get_ollama, command=self.validate, text="Install Ollama with winget (it is not installed; "
                             "accepts the Ollama package agreement)").grid(sticky="w")
-        ttk.Checkbutton(opts, variable=self.disks, text="Check how fast each drive is and warn about slow ones "
-                        "(writes a 256 MB test file per drive)").grid(sticky="w")
         self.hf_box = ttk.Checkbutton(opts, variable=self.hf)
         self.hf_box.grid(sticky="w")
         ttk.Checkbutton(opts, variable=self.start, command=self.validate, text="Start the stack when setup finishes (tray app)").grid(sticky="w")
@@ -787,7 +1010,8 @@ class Installer:
                 install_ollama=self.d["ollama_missing"] and self.get_ollama.get(),
                 pull=self.pull.get(),
                 start_stack=self.start.get(),
-                check_disks=self.disks.get(),
+                # While the page's check still times the drives, setup does not time them at the same moment.
+                check_disks=self.disks.get() and not (self.check_job is not None and self.check_job.is_alive()),
                 setup_huggingface=self.hf.get(),
                 media_root=media_root,
                 remove=gone,

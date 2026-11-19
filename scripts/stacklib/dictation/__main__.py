@@ -3,6 +3,7 @@
     python -m stacklib.dictation run                  the app: button, hotkey, microphone
     python -m stacklib.dictation transcribe FILE.wav  the same pipeline on a recording: phrases, transcript, cleanup
     python -m stacklib.dictation check                imports, GPU, model, microphones, hotkey
+    python -m stacklib.dictation fetch MODEL          download a speech model's pinned files (Parakeet, Canary-Qwen)
     python -m stacklib.dictation speak "TEXT"         read aloud's voices: speak text (--out F.wav, --voice, --speed),
                                                       --list the voices, --download Kokoro's files (the installer),
                                                       --download-zh / --download-th the Mandarin or Thai voices' files
@@ -40,7 +41,7 @@ def _read_wav(path: str):
 
 
 def cmd_transcribe(a, profile: dict) -> int:
-    """Feed a recording through VAD, segmenter, Whisper and the cleanup exactly as a live session would."""
+    """Feed a recording through VAD, segmenter, the speech model and the cleanup exactly as a live session would."""
     import numpy as np
 
     from . import cleanup
@@ -59,6 +60,8 @@ def cmd_transcribe(a, profile: dict) -> int:
         cfg.device = a.device
     if a.vocabulary is not None:
         cfg.vocabulary = a.vocabulary
+    if getattr(a, "model", None):
+        cfg.model = a.model
     pcm = _read_wav(a.file)
     engine = Engine(cfg, lambda m: print(m, file=sys.stderr, flush=True), client="Stack scripts")
     t0 = time.monotonic()
@@ -109,7 +112,7 @@ def cmd_transcribe(a, profile: dict) -> int:
     for p in phrases:
         raw += joiner(raw, p) + p
     print(f"\nstopped: {stop} after {seg.elapsed_s:.1f} s; VAD {vad.name}; language {language or cfg.language}; "
-          f"Whisper {whisper_s:.2f} s in total")
+          f"{engine.family} {whisper_s:.2f} s in total")
     print(f"\nTRANSCRIPT ({len(raw)} chars):\n{raw}")
     if cfg.mode == "live":
         print(f"\nLIVE MODE WOULD TYPE:\n{typed}")
@@ -196,6 +199,22 @@ def cmd_speak(a, profile: dict) -> int:
     return 0
 
 
+def _engine_status(engine: str) -> str:
+    """The engine's version and whether its GPU path is there (Parakeet's onnx-asr, Canary-Qwen's transcribe.cpp)."""
+    if engine == "onnx-asr":
+        import importlib.metadata as md
+
+        import onnx_asr  # noqa: F401
+        import onnxruntime
+
+        return f"{md.version('onnx-asr')} on ONNX Runtime {onnxruntime.__version__}"
+    if engine == "transcribe.cpp":
+        import transcribe_cpp as t
+
+        return f"{t.native_version()} ({'Vulkan GPU' if t.backend_available('vulkan') else 'CPU only'})"
+    return "ok"
+
+
 def cmd_check(a, profile: dict) -> int:
     from . import audio, gpu
 
@@ -213,6 +232,13 @@ def cmd_check(a, profile: dict) -> int:
     out["cublas_dir"] = str((gpu.cublas_dirs() or [""])[0])
     out["model"] = cfg.model
     out["model_cached"] = model_cached(profile, cfg.model)
+    from . import wanted_engines
+
+    for engine in wanted_engines(profile):
+        try:
+            out[engine] = _engine_status(engine)
+        except Exception as e:  # noqa: BLE001
+            out[engine] = f"not available: {e}"
     out["microphones"] = audio.devices()
     try:
         hotkey.parse(cfg.hotkey)
@@ -238,8 +264,11 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--language")
     t.add_argument("--device", choices=["auto", "cuda", "cpu"])
     t.add_argument("--vocabulary", help="words Whisper should expect (overrides dictation.vocabulary)")
+    t.add_argument("--model", help="a speech model of config/installer.yaml (overrides dictation.model)")
     t.add_argument("--no-auto-stop", action="store_true", help="read the whole file, ignoring the silence stop")
     sub.add_parser("check")
+    f = sub.add_parser("fetch", help="download a speech model's pinned files into the Hugging Face cache")
+    f.add_argument("model")
     s = sub.add_parser("speak")
     s.add_argument("text", nargs="?", help="what to say (or --file, or standard input)")
     s.add_argument("--file")
@@ -265,7 +294,24 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_transcribe(a, profile)
     if a.cmd == "speak":
         return cmd_speak(a, profile)
+    if a.cmd == "fetch":
+        return cmd_fetch(a)
     return cmd_check(a, profile)
+
+
+def cmd_fetch(a) -> int:
+    """Download a speech model of another engine than faster-whisper at its pinned revision (the installer runs this
+    in voice typing's environment, which has huggingface_hub)."""
+    from . import stt
+    from .models import SPEECH
+
+    m = SPEECH.get(a.model)
+    if m is None or m.engine == "faster-whisper":
+        raise SystemExit(f"{a.model}: not a pinned speech model of config/installer.yaml (Whisper models download "
+                         "themselves)")
+    path = stt.fetch(m, lambda text, *_: print(text, flush=True))
+    print(path)
+    return 0
 
 
 if __name__ == "__main__":

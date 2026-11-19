@@ -177,12 +177,16 @@ def _whisper_items(profile: dict, fid: str, keep_for: set[str]) -> list[Item]:
     """The Whisper models only this feature uses (keep_for: other features that stay installed)."""
     from .dictation.models import repo_for
 
+    from .dictation.models import speech_model
+
     shared = set().union(*(whisper_used(profile, other) for other in keep_for)) if keep_for else set()
     items = []
     for name in sorted(whisper_used(profile, fid) - shared):
         d = hf_repo_dir(profile, repo_for(name))
         if d.exists():
-            items.append(Item(f"Whisper model {name}", str(d), _gb(d), "hf"))
+            m = speech_model(name)
+            what = f"Whisper model {name}" if m.engine == "faster-whisper" else f"Speech model {m.label}"
+            items.append(Item(what, str(d), _gb(d), "hf"))
     return items
 
 

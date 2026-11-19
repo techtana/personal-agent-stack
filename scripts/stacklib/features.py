@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import IS_WINDOWS, catalog, which
+from .dictation.models import SPEECH, SpeechModel, speech_model
 
 GIB = 2 ** 30
 REFERENCE = "an RTX 3060 12 GB"
@@ -61,9 +62,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("images", "Image generation (ComfyUI)", "ComfyUI",
             "ComfyUI with the Z-Image-Turbo model (Apache-2.0) makes pictures for the chat's image button.",
             services=("comfyui",), needs_media=True),
-    Feature("voice_typing", "Voice typing (Whisper)", "voice typing",
-            "A hotkey and a floating mic button type what you say into any app. Whisper transcribes on this PC.",
-            services=("dictation",)),
+    Feature("voice_typing", "Voice typing (speech to text)", "voice typing",
+            "A hotkey and a floating mic button type what you say into any app. The speech model (Whisper, or NVIDIA's "
+            "Parakeet or Canary-Qwen) transcribes on this PC.", services=("dictation",)),
     Feature("read_aloud", "Read aloud (Kokoro)", "read aloud",
             "A hotkey and a speaker button read selected text aloud in any app, with natural Kokoro voices on this "
             "PC's CPU, or Windows' own voices. It runs in the voice typing app, so it comes with voice typing.",
@@ -222,9 +223,20 @@ def chat_model_memory(profile: dict, hw: Hardware, loaded: list[dict] | None = N
             size, vram = int(row["size"]), int(row.get("size_vram") or 0)
             speed = MEASURED_MODELS.get((model, ctx), (0, 0, 0))[2]
             return vram / GIB, (size - vram) / GIB, "GPU memory measured now (the model is loaded).", speed
+    measured = sorted((c, v) for (n, c), v in MEASURED_MODELS.items() if n == model)
     if (model, ctx) in MEASURED_MODELS:
         vram, ram, speed = MEASURED_MODELS[(model, ctx)]
         basis = f"Measured on {REFERENCE}."
+    elif measured:   # another context of the same model was measured: scale by its own KV growth
+        near, (vram, ram, speed) = min(measured, key=lambda cv: abs(cv[0] - ctx))
+        if len(measured) >= 2:
+            (c1, v1), (c2, v2) = measured[0], measured[-1]
+            per_token = max(0.0, (v2[0] - v1[0]) / (c2 - c1))
+        else:
+            kv_type = (profile.get("ollama_env") or {}).get("OLLAMA_KV_CACHE_TYPE") or "f16"
+            per_token = KV_GB_PER_32K.get(kv_type, 4.0) / 32768
+        vram = max(0.3, vram + per_token * (ctx - near))
+        basis = f"Estimate: scaled from {near // 1024}k tokens measured on {REFERENCE}."
     else:
         size = float(((profile.get("catalog") or {}).get(model) or {}).get("size_gb") or 0) * 1e9 / GIB
         kv_type = (profile.get("ollama_env") or {}).get("OLLAMA_KV_CACHE_TYPE") or "f16"
@@ -426,30 +438,16 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
             basis=f"Measured on {REFERENCE}: {fp['disk_gb']:.1f} GB on disk, 11.6 GB of GPU memory on the card at the "
                   f"peak, {per_image:.0f} s per 1024 x 1024 image at 8 steps"
                   + ("" if exact else " (other sizes and steps scaled from that)") + ". System memory is an estimate.")
-    if fid in ("voice_typing", "recordings"):
-        typing = fid == "voice_typing"
-        d = profile.get("dictation") or {}
-        model = str((d.get("model") if typing else (profile.get("media") or {}).get("whisper_model")) or "large-v3-turbo")
+    if fid == "voice_typing":
+        return _voice_typing_estimate(profile, hw, fp, gpu)
+    if fid == "recordings":
+        model = str((profile.get("media") or {}).get("whisper_model") or "large-v3-turbo")
         size, vram, per15 = WHISPER.get(model, WHISPER["large-v3-turbo"])
         measured = model == "large-v3-turbo"
-        if measured and not typing and fp["vram_gb"]:
+        if measured and fp["vram_gb"]:
             vram = fp["vram_gb"]   # the recordings server measured 1.1 GB, voice typing 1.2 GB
         shared = ((f"whisper:{model}", size, _whisper_cached(profile, model)),)
         cpu_n = 1.0 if gpu else float(hw.threads)
-        if typing:
-            idle = float(d.get("unload_after_min") or 0)
-            return Estimate(
-                disk_gb=fp["disk_gb"], shared=shared, ram_gb=fp["ram_gb"], vram_gb=vram if gpu else 0.0, cpu_threads=cpu_n,
-                gpu_short=f"~{per15:.1f} s per phrase" if gpu else "none (CPU)",
-                gpu=(f"a moment per phrase: 15 s of speech in about {per15:.1f} s with {model}" if gpu
-                     else "none: on the CPU the small model takes about 10 s per 15 s of speech"),
-                cpu=(f"{_cpu(1.0, hw)} logical processors while you speak; close to none while it waits for the "
-                     "hotkey" if gpu else f"all {hw.threads} logical processors while it transcribes"),
-                held="Whisper loads on first use (5-8 s)" + (f" and is freed after {idle:.0f} idle minutes" if idle else ""),
-                basis=(f"Measured on {REFERENCE}: 1.2 GB of GPU memory, 0.3-0.6 s per phrase with large-v3-turbo."
-                       if measured else f"Estimate for {model}, scaled from large-v3-turbo measured on {REFERENCE}.")
-                      + " Memory is an estimate.",
-                note="Polish mode also asks the chat model to tidy the text, about 1 s per recording.")
         two_min = per15 * 8 * 0.75   # a long file runs in larger batches than live phrases
         return Estimate(
             disk_gb=fp["disk_gb"], shared=shared, ram_gb=fp["ram_gb"], vram_gb=vram if gpu else 0.0, cpu_threads=cpu_n,
@@ -529,6 +527,71 @@ def estimate(fid: str, profile: dict, hw: Hardware, loaded: list[dict] | None = 
     raise KeyError(fid)
 
 
+CPU_OK_S = 3.0   # seconds per 15 s of speech: quicker than this on the CPU, a model runs there itself (engine.py)
+
+
+def speech_run(profile: dict, hw: Hardware) -> tuple[SpeechModel, bool]:
+    """(model, on the GPU) that voice typing runs on this PC, as its engine picks them (engine.Engine._open): the
+    chosen model on the GPU when dictation.device and the model's own device say so and there is an NVIDIA card; on
+    the CPU the model itself when it is quick there (Parakeet), else dictation.cpu_model (Whisper small)."""
+    d = profile.get("dictation") or {}
+    m = speech_model(str(d.get("model") or "large-v3-turbo"))
+    device = str(d.get("device") or "auto")
+    if hw.vram_gb > 0 and device != "cpu" and (device == "cuda" or m.device == "gpu"):
+        return m, True
+    if m.engine != "faster-whisper" and 0 < m.speed_cpu <= CPU_OK_S:
+        return m, False
+    return speech_model(str(d.get("cpu_model") or "small")), False
+
+
+def _voice_typing_estimate(profile: dict, hw: Hardware, fp: dict, gpu: bool) -> Estimate:
+    d = profile.get("dictation") or {}
+    chosen = speech_model(str(d.get("model") or "large-v3-turbo"))
+    run, on_gpu = speech_run(profile, hw)
+    per15 = run.speed(on_gpu) or chosen.speed(on_gpu)
+    key = f"whisper:{chosen.name}" if chosen.engine == "faster-whisper" else f"speech:{chosen.name}"
+    shared = ((key, chosen.download_gb, _whisper_cached(profile, chosen.name)),)
+    vram = run.vram_gb if on_gpu else 0.0
+    ram = fp["ram_gb"] + (0.0 if on_gpu and run.engine == "faster-whisper" else run.ram_gb)
+    idle = float(d.get("unload_after_min") or 0)
+    load = "5-8" if run.engine == "faster-whisper" else "4-5"
+    held = f"{run.family} loads on first use ({load} s)" + (f" and is freed after {idle:.0f} idle minutes"
+                                                             if idle else "")
+    notes = ["Polish mode also asks the chat model to tidy the text, about 1 s per recording."]
+    if chosen.languages:
+        notes.insert(0, "English only, without vocabulary hints." if chosen.languages == ("en",) else
+                     f"{len(chosen.languages)} European languages, found by itself; no vocabulary hints.")
+    if chosen.engine == "transcribe.cpp":
+        notes.insert(1, "The first start on a new graphics driver compiles Vulkan shaders (about 20 s); later starts "
+                        "are quick.")
+    if run.name != chosen.name:
+        notes.insert(0, f"Without the GPU, {chosen.label} gives way to {run.label} on the CPU.")
+    if run.measured and run.name == "large-v3-turbo" and on_gpu:
+        basis = f"Measured on {REFERENCE}: 1.2 GB of GPU memory, 0.3-0.6 s per phrase with large-v3-turbo."
+    elif run.measured:
+        where = REFERENCE if on_gpu else "the reference PC's 6-core Ryzen 5 5500"
+        mem = f"{vram:.1f} GB of GPU memory" if on_gpu else f"{run.ram_gb:.1f} GB of RAM"
+        basis = f"Measured on {where}: 15 s of speech in about {per15:.1f} s with {run.label}, {mem}."
+    else:
+        basis = f"Estimate for {run.label}, scaled from the models measured on {REFERENCE}."
+    if on_gpu:
+        return Estimate(
+            disk_gb=fp["disk_gb"], shared=shared, ram_gb=ram, vram_gb=vram, cpu_threads=1.0,
+            gpu_short=f"~{per15:.1f} s per phrase",
+            gpu=f"a moment per phrase: 15 s of speech in about {per15:.1f} s with {run.label}",
+            cpu=f"{_cpu(1.0, hw)} logical processors while you speak; close to none while it waits for the hotkey",
+            held=held, basis=basis + " Memory is an estimate.", note=" ".join(notes))
+    quick = 0 < per15 <= CPU_OK_S
+    threads = hw.threads / 2 if quick else float(hw.threads)
+    return Estimate(
+        disk_gb=fp["disk_gb"], shared=shared, ram_gb=ram, cpu_threads=threads, cpu_bursts=quick,
+        gpu_short="none (CPU)",
+        gpu=f"none: {run.label} runs on the CPU" + (f", 15 s of speech in about {per15:.1f} s" if per15 else ""),
+        cpu=(f"{_cpu(threads, hw)} logical processors for a moment per phrase; none while it waits for the hotkey"
+             if quick else f"all {hw.threads} logical processors while it transcribes"),
+        held=held, basis=basis + " Faster or slower CPUs scale it.", note=" ".join(notes))
+
+
 def _node_requirement() -> str:
     from .install import node_requirement
 
@@ -582,10 +645,9 @@ def _kokoro_cached(profile: dict, variant: str) -> bool:
         return False
 
 
-# faster-whisper model: (download GB, GPU GB in int8_float16, seconds per 15 s of speech on the reference GPU).
-# large-v3-turbo was measured (memory/state.md, open items 22 and 23); the others are scaled from it by model size.
-WHISPER = {name: (float(m.get("download_gb") or 0), float(m.get("vram_gb") or 0), float(m.get("s_per_15s") or 0))
-           for name, m in catalog.whisper_models().items()}
+# Speech models (config/installer.yaml speech_to_text, read by dictation/models.py). WHISPER keeps the older shape for
+# its callers: model -> (download GB, GPU GB, seconds per 15 s of speech on the reference GPU).
+WHISPER = {name: (m.download_gb, m.vram_gb, m.speed_gpu) for name, m in SPEECH.items()}
 
 
 # ---------------------------------------------------------------- options chosen with a feature
@@ -609,8 +671,19 @@ def _model_choices(profile: dict) -> list[tuple[str, str]]:
     return [(n, f"{n} ({float((cat.get(n) or {}).get('size_gb') or 0):.1f} GB)") for n in names]
 
 
+def speech_choice_label(name: str) -> str:
+    """'NVIDIA Parakeet TDT 0.6B v3 (0.7 GB, CPU, 25 languages)' for the installer's drop-down."""
+    m = speech_model(name)
+    extra = [f"{m.download_gb:.1f} GB"]
+    if m.device == "cpu":
+        extra.append("CPU")
+    if m.languages:
+        extra.append("English" if m.languages == ("en",) else f"{len(m.languages)} languages")
+    return f"{m.label} ({', '.join(extra)})"
+
+
 def _whisper_choices(_profile: dict) -> list[tuple[str, str]]:
-    return [(m, f"{m} ({WHISPER[m][0]:.1f} GB)") for m in WHISPER]
+    return [(m, speech_choice_label(m)) for m in SPEECH]
 
 
 def _hotkey_choices(_profile: dict) -> list[tuple[str, str]]:
@@ -643,7 +716,7 @@ OPTIONS: dict[str, list[tuple[Option, object]]] = {
          lambda _p: [(str(n), f"{n} steps") for n in catalog.images().get("steps") or (8,)]),
     ],
     "voice_typing": [
-        (Option("dictation", "model", "Whisper model", "large-v3-turbo"), _whisper_choices),
+        (Option("dictation", "model", "Speech model", "large-v3-turbo"), _whisper_choices),
         (Option("dictation", "hotkey", "Hotkey", "ctrl+alt+d"), _hotkey_choices),
     ],
     "read_aloud": [
@@ -953,8 +1026,14 @@ def _status_read_aloud(profile: dict, **_) -> Status:
 def _status_voice_typing(profile: dict, **_) -> Status:
     from . import dictation
 
-    return _switch(dictation.installed(profile), switch_on("voice_typing", profile), "Voice typing",
-                   f"Press {dictation.hotkey_label(profile)} or click the mic button; Whisper runs from "
+    installed, on = dictation.installed(profile), switch_on("voice_typing", profile)
+    m = speech_model(dictation.Config.from_profile(profile).model)
+    missing = dictation.missing_engines(profile) if installed else []
+    if missing:   # the program is there, the chosen model's engine is not: Repair (the dictation step) adds it
+        return Status(False, on, "Model missing", f"{m.label} needs {', '.join(missing)} in voice typing's "
+                                                  "environment: Repair installs it, or run the installer again.", "warn")
+    return _switch(installed, on, "Voice typing",
+                   f"Press {dictation.hotkey_label(profile)} or click the mic button; {m.label} runs from "
                    f"{dictation.env_dir(profile)}.", "Voice typing")
 
 

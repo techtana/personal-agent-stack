@@ -106,16 +106,36 @@ class Media(unittest.TestCase):
         for m in media.MODELS:
             self.assertIn(m.licence, media.OPEN_LICENCES)
 
-    def test_whisper_models(self):
-        offered = catalog.whisper_models()
+    def test_speech_models(self):
+        offered = catalog.speech_models()
         self.assertEqual(wmodels.CHOICES, list(offered))
+        self.assertEqual(list(catalog.whisper_models()),
+                         [n for n, m in offered.items() if m["engine"] == "faster-whisper"])
+        engines = catalog.speech_engines()
         for name, m in offered.items():
             with self.subTest(model=name):
                 self.assertIn("/", m["repo"])
-                self.assertEqual(features.WHISPER[name], (m["download_gb"], m["vram_gb"], m["s_per_15s"]))
+                self.assertIn(m["engine"], engines)
+                self.assertIn(m["device"], ("gpu", "cpu"))
+                self.assertIn(m["licence"], ("MIT", "CC-BY-4.0", "Apache-2.0"))   # D-M3: open licences only
+                self.assertEqual(features.WHISPER[name], (m["download_gb"], m["vram_gb"], m["speed"]["gpu"]))
+                if m["engine"] != "faster-whisper":   # pinned files, each big one checked by its sha256
+                    self.assertRegex(m["revision"], r"^[0-9a-f]{40}$")
+                    self.assertTrue(any(len(sha) == 64 for sha in m["files"].values()))
+                    for sha in m["files"].values():
+                        self.assertRegex(sha, r"^([0-9a-f]{64})?$")
+                for code in m.get("languages") or ():
+                    self.assertIn(code, wmodels.WHISPER_LANGUAGES)
+        for engine, spec in engines.items():
+            with self.subTest(engine=engine):
+                self.assertTrue(spec["module"].isidentifier())
+                for pkg in spec["packages"]:
+                    self.assertRegex(pkg, r"^[A-Za-z0-9_.-]+==[0-9][0-9A-Za-z.]*$")   # pinned
         for key in ("model", "cpu_model"):
             self.assertIn(DEFAULTS["dictation"][key], offered)
         self.assertEqual(wmodels.repo_for("turbo"), offered["large-v3-turbo"]["repo"])
+        self.assertEqual(wmodels.repo_for("canary-qwen-2.5b"), offered["canary-qwen-2.5b"]["repo"])
+        self.assertNotIn("sensevoice-small", offered)   # left out by the owner (custom licence, 2026-11-09)
 
     def test_kokoro(self):
         k = catalog.kokoro()

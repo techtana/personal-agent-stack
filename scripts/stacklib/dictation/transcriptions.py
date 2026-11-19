@@ -347,7 +347,7 @@ def transcribe_with(engine, data: bytes, *, language: str = "", prompt: str = ""
         if engine.state == "ready":
             raise
         # The load error can name folders; the reply only needs what went wrong.
-        raise ApiError(503, f"Whisper is not ready: {usage_log.scrub(engine.note or str(e))}",
+        raise ApiError(503, f"The speech model is not ready: {usage_log.scrub(engine.note or str(e))}",
                        code="model_not_ready") from None
 
 

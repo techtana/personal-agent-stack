@@ -18,7 +18,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "scripts"))
 sys.path.insert(0, str(REPO / "tests"))
-from stacklib import features, install, uninstall  # noqa: E402
+from stacklib import features, install, syscheck, uninstall  # noqa: E402
 from stacklib import profile as prof  # noqa: E402
 from test_features import hw, make_profile  # noqa: E402
 
@@ -282,6 +282,10 @@ class InstallerWindow(Temp):
             mock.patch.object(prof, "write_profile", return_value=None),
             mock.patch.object(prof, "resolve_profile", return_value=self.profile),
             mock.patch.object(uninstall, "model_rows", return_value=[]),   # not this PC's Ollama
+            # Not this PC's hardware or drives: no saved report, and a check that never runs the real probes.
+            mock.patch.object(syscheck, "load", return_value=None),
+            mock.patch.object(syscheck, "run", return_value=syscheck.Report()),
+            mock.patch.object(install, "explicit_options", return_value=set()),
             *[mock.patch.object(install, name, m) for name, m in self.calls.items()],
         ]
         for p in patches:
@@ -388,6 +392,65 @@ class InstallerWindow(Temp):
         self.app.poll()
         self.assertTrue(self.app.retry_btn.winfo_manager())
         self.assertEqual(str(self.app.retry_btn.cget("style")), "Accent.TButton")   # run again is the next step
+
+    def check(self) -> syscheck.Report:
+        import time
+
+        return syscheck.Report(checked_at=time.time(), verdicts=[
+            syscheck.Verdict("images", "", "not_recommended", "Too little GPU memory."),
+            syscheck.Verdict("web_filter", "", "recommended", "Lists only."),
+            syscheck.Verdict("dictation.model", "parakeet-tdt-0.6b-v3", "recommended", "Quick on the CPU."),
+            syscheck.Verdict("dictation.model", "canary-qwen-2.5b", "not_recommended", "English only."),
+        ])
+
+    def test_the_check_marks_rows_and_applies_its_recommendations(self):
+        self.assertTrue(self.app.feature_vars["images"].get())   # the first tick, before the check
+        self.app.check = self.check()
+        self.app._check_done()
+        self.assertFalse(self.app.feature_vars["images"].get())   # untouched and not installed: unticked
+        self.assertEqual(self.app.verdict_labels["images"].cget("text"), "!")
+        self.assertEqual(self.app.verdict_labels["web_filter"].cget("text"), "✓")
+        self.assertNotIn("models", self.app.verdict_labels)   # required: no mark
+        self.assertEqual(self.app.options()[("dictation", "model")], "parakeet-tdt-0.6b-v3")
+        values = self.app.option_boxes[("dictation", "model")].cget("values")
+        self.assertIn("NVIDIA Parakeet TDT 0.6B v3 (0.7 GB, CPU, 25 languages)  · recommended", values)
+        self.assertIn("NVIDIA Canary-Qwen 2.5B (2.8 GB, English)  · not recommended", values)
+        self.app.show_detail("images")
+        self.assertIn("For this PC: Not recommended. Too little GPU memory.", self.app.detail.cget("text"))
+
+    def test_the_owners_own_choices_stay(self):
+        box = self.app.option_boxes[("dictation", "model")]
+        box.set(next(n for n in box.cget("values") if n.startswith("Whisper large-v3 ")))
+        box.event_generate("<<ComboboxSelected>>")
+        self.app.feature_ticked("images")   # a tick the owner made (here: kept on)
+        self.app.feature_vars["images"].set(True)
+        self.app.check = self.check()
+        self.app._check_done()
+        self.assertEqual(self.app.options()[("dictation", "model")], "large-v3")
+        self.assertTrue(self.app.feature_vars["images"].get())
+        self.assertIn("Image generation (ComfyUI): not recommended here. Too little GPU memory.", self.summary())
+
+    def test_a_working_feature_keeps_its_options(self):
+        self.d["features"]["voice_typing"] = features.Status(True, True, "Installed")
+        self.app.check = self.check()
+        self.app._check_done()
+        self.assertEqual(self.app.options()[("dictation", "model")], "large-v3-turbo")   # tagged only
+
+    def test_a_choice_the_machine_file_sets_stays(self):
+        self.app.explicit = {("dictation", "model")}
+        self.app.check = self.check()
+        self.app._check_done()
+        self.assertEqual(self.app.options()[("dictation", "model")], "large-v3-turbo")
+
+    def test_the_card_shows_the_check_running_then_this_pc(self):
+        self.app.check, self.app.check_progress = None, ["measuring D: (2 of 3)", 0.4]
+        self.app._show_check()
+        self.assertIn("Now measuring D: (2 of 3)", self.app.check_label.cget("text"))
+        self.assertTrue(self.app.check_btn.instate(["disabled"]))
+        self.app.check = self.check()
+        self.app._show_check()
+        self.assertIn("Checked at", self.app.check_label.cget("text"))
+        self.assertFalse(self.app.check_btn.instate(["disabled"]))
 
     def test_install_writes_the_choice_and_starts_the_plan(self):
         self.app.show_folders()

@@ -34,6 +34,42 @@ for a hotkey, record the microphone, and put the text where the caret is. The st
 On an RTX 3060, faster-whisper's `large-v3-turbo` transcribes 15 s of speech in 0.6 s and holds about 1.2 GB of VRAM;
 on a 6-core CPU the same model needs about 10 s, which is why the CPU fallback uses `small`.
 
+#### Beyond Whisper: transducers and speech-LLMs (2026-11-09)
+
+Whisper is an encoder-decoder: an audio encoder, then a text decoder that writes one token at a time, like a small
+language model. Two other designs top the open benchmarks now, and voice typing offers one of each:
+
+- **A transducer (TDT): NVIDIA Parakeet TDT 0.6B v3.** A FastConformer encoder and a small "joint" network that, for
+  each stretch of audio, emits a token and how many frames to skip (Token-and-Duration Transducer). It never writes
+  more text than the audio holds, so it does not invent sentences in silence, and it is fast: 600 million parameters,
+  RTFx above 3,000 on NVIDIA's data-centre GPUs. v3 knows 25 European languages and finds the language itself; v2 is
+  English only. Weights CC-BY-4.0, trained on 10,000 hours of transcribed speech and 660,000 pseudo-labelled hours of
+  Granary. It runs without PyTorch: an ONNX export (istupakov's, three graphs: a mel-spectrogram front-end, the
+  encoder and the decoder-joint) on ONNX Runtime, driven by onnx-asr (pure Python, MIT). On the reference PC its int8
+  weights ran 24x real time on 6 CPU threads, faster than with CUDA (18x), because ONNX Runtime keeps int8 matrix
+  products on the CPU and copied the activations back and forth (742 copy nodes in the graph).
+- **A speech-augmented language model (SALM): NVIDIA Canary-Qwen 2.5B.** The FastConformer encoder of Canary-1B-flash,
+  a linear projection into the embedding space of Qwen3-1.7B, and LoRA adapters on the LLM; the LLM was kept frozen.
+  The audio becomes a few hundred "tokens" the LLM reads as context, and the LLM writes the transcript with
+  punctuation and capitals. It leads the English Open ASR Leaderboard (5.63% word error rate on average, 418x real
+  time), but knows English only (234,500 hours). Weights CC-BY-4.0; NVIDIA runs it through NeMo on PyTorch.
+  transcribe.cpp (ggml, MIT) converts it to one GGUF file and runs it on the CPU, Metal or Vulkan; its Q8_0 file
+  (2.8 GB) scored the same 1.63% on LibriSpeech test-clean as NVIDIA's own BF16 run. Through Vulkan on the RTX 3060 it
+  made 27x real time with 3.3 GB of VRAM; on the CPU only 2x.
+
+Whisper keeps two things the others lack: 100 languages and a prompt (`dictation.vocabulary`'s hints, and the text so
+far for continuity). Neither Parakeet nor Canary-Qwen takes hints in these runtimes; both wrote "Ollama" as "Alama".
+
+**SenseVoice Small** (FunAudioLLM, Alibaba), a fast non-autoregressive model for Chinese, Cantonese, English, Japanese
+and Korean with emotion and sound-event tags, has MIT code but weights under the FunASR Model Open Source License 1.1:
+a custom licence whose terms can change and which ends on "denigration" of the software. The stack's open-licence rule
+(decision D-M3) leaves it out. Check a model card's `license_link`, not only the code repository's LICENSE.
+
+The installer's system check (`stacklib/syscheck.py`) picks among them from the languages Windows is set up for and
+the GPU memory the chat model leaves: Whisper large-v3-turbo when a language falls outside Parakeet's 25, Canary-Qwen
+for English when it fits beside the chat model, Parakeet for European languages (no GPU memory at all), Whisper when
+`dictation.vocabulary` is set.
+
 ### Text to speech
 
 A TTS model turns text into a voice. **Kokoro** (82 million parameters, Apache-2.0 weights) gives natural voices and
@@ -147,8 +183,14 @@ Not measured here yet. Smart App Control may block Kokoro's compiled modules; sp
 | [Qwen 3.5 on Ollama](https://summarizemeeting.com/en/news/ollama-qwen-3-5-local-tool-calling-multimodal) | 2026 | image support in all sizes |
 | [LiteLLM proxy endpoints](https://docs.litellm.ai/docs/providers/litellm_proxy) | LiteLLM, 2026 | audio endpoints through the gateway |
 | [Open WebUI media docs (summary)](https://deepwiki.com/open-webui/docs/3.5-media-generation) | DeepWiki, 2026 | STT and TTS engines, image backends |
+| [nvidia/parakeet-tdt-0.6b-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) | NVIDIA, 2025 | languages, training data, licence, Open ASR figures |
+| [nvidia/canary-qwen-2.5b](https://huggingface.co/nvidia/canary-qwen-2.5b) | NVIDIA, 2025 | SALM design, training data, licence, 5.63% WER |
+| [onnx-asr](https://github.com/istupakov/onnx-asr) | istupakov, 2026 | Parakeet and Canary on ONNX Runtime without PyTorch; model aliases |
+| [transcribe.cpp: Canary-Qwen 2.5B](https://github.com/handy-computer/transcribe.cpp/blob/main/docs/models/canary-qwen-2.5b.md) | handy-computer, 2026 | GGUF conversion, accuracy against NeMo, speed per backend |
+| [FunASR Model Open Source License](https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE) | Alibaba, 2023 | why SenseVoice Small is left out |
 
 ## Changes
 
 - 2026-11-01: first version.
 - 2026-11-05: local Whisper MCP server for recordings (Claude Desktop / Cowork).
+- 2026-11-09: Parakeet TDT and Canary-Qwen beside Whisper in voice typing; SenseVoice Small left out (licence).

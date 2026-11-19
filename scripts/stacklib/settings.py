@@ -83,11 +83,16 @@ SETTINGS = [
     Setting("dictation", "silence_stop_s", "Stop after quiet (seconds)", "choice",
             "How long a pause ends the recording once you have spoken.", "dictation", ["1.5", "2.0", "3.0", "4.0", "6.0"]),
     Setting("dictation", "language", "Language", "search",
-            "Any of Whisper's 100 languages; type to search. Detect automatically uses the first phrase; a fixed "
-            "language is more reliable for short phrases.", "dictation",
+            "Any of Whisper's 100 languages; type to search. Parakeet knows 25 European ones and finds them itself; "
+            "Canary-Qwen only English. Detect automatically uses the first phrase; a fixed language is more reliable "
+            "for short phrases.", "dictation",
             [code for code, _ in LANGUAGES], labels=dict(LANGUAGES)),
-    Setting("dictation", "model", "Whisper model", "choice",
-            "large-v3-turbo: best on the GPU (1.6 GB). small or base: lighter, for the CPU.", "dictation", MODEL_CHOICES),
+    Setting("dictation", "model", "Speech model", "choice",
+            "large-v3-turbo: Whisper, 100 languages, best on the GPU (1.6 GB). large-v3: Whisper's largest (3.1 GB). "
+            "parakeet-tdt-0.6b-v3: NVIDIA, 25 European languages, quick on the CPU with no GPU memory (0.7 GB). "
+            "canary-qwen-2.5b: NVIDIA, English only, most accurate, 3.3 GB of GPU memory (2.8 GB). small or base: "
+            "Whisper for a PC without a GPU. A model whose engine is missing is installed in the background.",
+            "dictation", MODEL_CHOICES),
     Setting("dictation", "insert", "Insert text by", "choice",
             "paste: fast, the clipboard is restored afterwards. type: simulated keystrokes for apps that block paste.",
             "dictation", ["paste", "type"]),
@@ -398,6 +403,37 @@ def _update_dictation(profile: dict, ids: set[str], log) -> bool:
     return True
 
 
+def _install_speech_engine(profile: dict, ids: set[str], log) -> None:
+    """A new speech model whose engine is not in voice typing's environment (Parakeet's onnx-asr, Canary-Qwen's
+    transcribe.cpp): run the setup worker's voice typing step, which adds the engine and downloads the model. Voice
+    typing picks the model up at its next dictation; the Features card shows the worker's progress."""
+    if not ids & {"dictation.model", "dictation.cpu_model"}:
+        return
+    from . import dictation, install
+
+    model = str(profile["dictation"].get("model") or "")
+    try:
+        if not dictation.installed(profile):
+            return
+        missing = dictation.missing_engines(profile)
+        if not missing and not dictation.model_cached(profile, model):
+            missing = ["the model's files"]
+    except OSError:
+        return
+    if not missing:
+        return
+    from .dictation.models import label
+
+    try:
+        install.start_feature(profile, "voice_typing")
+    except (RuntimeError, ValueError, OSError) as e:
+        log(f"{label(profile['dictation'].get('model') or '')} needs {', '.join(missing)}: {e}. Use Repair on the "
+            "Features card")
+        return
+    log(f"Installing {', '.join(missing)} for {label(profile['dictation'].get('model') or '')} in the background "
+        "(the Features card shows it); voice typing uses the model from the next dictation")
+
+
 def rebuild(profile: dict) -> None:
     """Same generators as `stack.py build`."""
     agents_build.build_all(profile)
@@ -454,6 +490,7 @@ def apply(old_profile: dict, edits: dict[str, object], log=print) -> dict:
         if profile["services"].get("dictation") == "native":
             problems = services.start(profile, ["dictation"])
             log(f"Voice typing did not start: {problems['dictation']}" if problems.get("dictation") else "Voice typing restarted")
+            _install_speech_engine(profile, {setting_id(s) for s in todo}, log)
         else:
             log("Voice typing stopped")
     if "web_filter" in effects:

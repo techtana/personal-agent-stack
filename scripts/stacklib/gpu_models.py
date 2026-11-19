@@ -63,12 +63,14 @@ def _whisper_row(health: dict | None) -> dict | None:
     """Voice typing's Whisper while it is loaded; None while it waits for the first dictation or after it unloaded."""
     if not isinstance(health, dict) or health.get("engine") != "ready":
         return None
-    from .features import WHISPER
+    from .dictation.models import SPEECH, speech_model
 
     model = str(health.get("model") or "")
-    on_gpu = health.get("device") == "cuda"
-    gb = WHISPER.get(model, WHISPER["large-v3-turbo"])[1] if on_gpu else 0.0
-    return {"name": f"whisper {model}" if model else "whisper", "by": "Voice typing", "bytes": int(gb * GIB),
+    on_gpu = health.get("device") in ("cuda", "vulkan")   # vulkan: Canary-Qwen through transcribe.cpp
+    m = SPEECH.get(model) or speech_model(model or "large-v3-turbo")
+    gb = (m.vram_gb or SPEECH["large-v3-turbo"].vram_gb) if on_gpu else 0.0
+    name = (f"whisper {model}" if m.engine == "faster-whisper" else model) if model else "whisper"
+    return {"name": name, "by": "Voice typing", "bytes": int(gb * GIB),
             "estimate": True, "gpu": "100%" if on_gpu else "CPU", "context": 0, "unloads": _unloads_after(health)}
 
 

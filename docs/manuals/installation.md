@@ -82,8 +82,25 @@ The installer then opens from the app folder. It has three steps, named at the t
 **Folders** and **Install** (the progress). It follows Windows' light or dark theme and looks like the tray. Without a
 display, or with `--no-gui`, it asks the same questions in the terminal.
 
-**Page 1: Which features do you want?** One row per feature. Two are required and always installed; the others are
-your choice:
+**Page 1: Which features do you want?** The card **This PC** at the top checks the computer when the page opens: the
+graphics card (its memory, what the desktop holds on it, the driver and the CUDA version it runs, Vulkan), the
+processor (cores, threads, AVX2), the memory (size, speed, free now), Windows (Smart App Control, long paths, battery,
+microphones and speakers, the languages it is set up for) and how fast each drive reads and writes (a 256 MB test file
+per drive, deleted at once). It takes a few seconds, shows what it measures meanwhile, and then this PC in one line
+with the notes worth reading (an old driver, a slow drive, Smart App Control). **Check again** runs it again; opened
+within two hours of a check, the installer uses that one. `uv run scripts/stack.py check` prints the same report in a
+terminal (`--no-drives` skips the drive test, `--json` for a script).
+
+From that check every feature and every choice gets a verdict: **recommended** here, **works**, **not recommended**
+(with the reason) or **not available**. The table's **Fit** column marks each feature with ✓, ·, ! or ✗; point at a
+row for the reason. The drop-downs mark their choices `· recommended` or `· not recommended`, and a choice your machine
+profile does not set yet starts at the recommended value (the chat model that fits the card whole, the largest
+measured context that fits next to the speech model, the speech model for the languages Windows has). A feature the
+check does not recommend starts unticked. Nothing you set yourself is changed: a value in `machines/<HOST>.yaml`, or a
+tick or choice you made on the page, stays. The card **Your choice on this PC** names every chosen feature and value
+the check does not recommend.
+
+One row per feature. Two are required and always installed; the others are your choice:
 
 | Feature | Required | What you get |
 |---|---|---|
@@ -93,7 +110,7 @@ your choice:
 | Blocked sites (web filter) | no | Keeps Open WebUI's web search and page fetches away from request catchers, data brokers and phishing sites ([details](user-guide.md#blocked-sites)). Ticked by default. |
 | Trace viewer (Phoenix) | no | Each request's steps, for debugging. The tray's Usage tab works without it. |
 | Image generation (ComfyUI) | no | ComfyUI with Z-Image-Turbo for the chat's image button. Needs the media folder. |
-| Voice typing (Whisper) | no | A hotkey and a mic button that type what you say into any app ([details](user-guide.md#voice-typing)). |
+| Voice typing (speech to text) | no | A hotkey and a mic button that type what you say into any app, with Whisper, NVIDIA Parakeet or NVIDIA Canary-Qwen on this PC ([details](user-guide.md#voice-typing)). |
 | Recordings in Claude Desktop (Whisper) | retired | No longer offered (2026-11-08): the stack keeps no ties to closed-source apps. Listed only while an old install is on this PC, with a **Remove** box. |
 | OpenClaw | no | An agent app set up to use only the gateway ([details](choosing-drives.md#openclaw)). |
 
@@ -111,7 +128,7 @@ below follow each change:
 |---|---|---|
 | Local models | **Chat model** (with its download size), **Context** | `models.primary`, `models.primary_num_ctx`; an MoE model also gets `primary_options: {use_mmap: true}`, and the small model's context follows when it is the same model |
 | Image generation | **Image size**, **Steps** | `media.image_size`, `media.image_steps` |
-| Voice typing | **Whisper model**, **Hotkey** | `dictation.model`, `dictation.hotkey` |
+| Voice typing | **Speech model** (Whisper large-v3-turbo, Whisper large-v3, NVIDIA Parakeet TDT 0.6B v3, NVIDIA Canary-Qwen 2.5B, Whisper medium, small, base), **Hotkey** | `dictation.model`, `dictation.hotkey` |
 
 Only values you change are written, and only for features you install. Settings in the tray changes them later.
 
@@ -155,8 +172,8 @@ catalog: change a pin or add a model there, not in the code.
 Which drive to pick for each: [choosing-drives.md](choosing-drives.md). In short, models and the Hugging Face cache
 can go on a second or USB drive that reads at 200 MB/s or more; the Python tools stay on the internal drive.
 
-Under **Options** you can also choose to download the models now, check each drive's speed and put the Hugging Face
-cache next to the models (all on by default). When models already sit in another folder, it offers to move them.
+Under **Options** you can also choose to download the models now and put the Hugging Face cache next to the models
+(both on by default). The drive speeds come from the check on page 1. When models already sit in another folder, it offers to move them.
 **What happens next** lists, before you press the button, what it will remove, install, download and start.
 
 Under each folder it shows the free space on that drive and what the chosen features need there; **Install** stays
@@ -176,8 +193,10 @@ Setup does the following, in this order:
    and for Claude Code's own keys `LITELLM_CLAUDE_KEY` and `ORCHESTRATOR_CLAUDE_BEARER`
    ([Claude's access to the stack](user-guide.md#claudes-access-to-the-stack)).
    It also adds an empty `ANTHROPIC_API_KEY`. It never overwrites values that are already there.
-   Then **Check drive speed** measures every local drive and warns about slow ones; a warning shows as an amber **!**
-   and does not stop setup ([choosing-drives.md](choosing-drives.md#check-a-drives-speed)).
+   Then **Check this PC (drives, GPU, memory)** uses the check page 1 made (or runs it, when setup started without
+   the window or more than two hours later). It warns about slow drives and about any chosen model, context or
+   feature the check does not recommend on this PC; a warning shows as an amber **!** and does not stop setup
+   ([choosing-drives.md](choosing-drives.md#check-a-drives-speed)).
 4. Sets the Ollama user environment variables and restarts the Ollama app if they changed.
 5. Installs LiteLLM, and Open WebUI and Phoenix when chosen, as `uv tool`s.
 6. Generates the configs (`stack.py build`).
@@ -189,8 +208,9 @@ Setup does the following, in this order:
 10. **Install OpenClaw**: upgrades Node.js with winget if it is older than OpenClaw needs (Windows asks for
     administrator approval), runs `npm install -g openclaw@latest`, then sets OpenClaw up with the gateway as its only
     model provider ([details](choosing-drives.md#openclaw)).
-11. **Install voice typing (Whisper)**: only when voice typing is chosen (`services.dictation: native`); it builds
-    its environment under the media folder and fetches the Whisper model. Without the installer:
+11. **Install voice typing (speech model)**: only when voice typing is chosen (`services.dictation: native`); it
+    builds its environment under the media folder, adds the engine the speech model needs (onnx-asr for Parakeet,
+    transcribe.cpp for Canary-Qwen; Whisper's is always there) and fetches the model. Without the installer:
     `uv run scripts/stack.py dictate install` ([details](user-guide.md#voice-typing)).
 12. *(Retired 2026-11-08.)* **Install recordings for Claude Desktop (Whisper)**: no longer a step; the stack keeps no
     ties to closed-source apps. Until then it built Whisper's environment under the
