@@ -240,7 +240,7 @@ Open `machines/<HOST>.yaml` in the app folder (`%LOCALAPPDATA%\Programs\AgentSta
 Settings tab. The `detected:` block is regenerated on refresh. You can change everything else, for example:
 
 - `model_store`: the folder for Ollama models; the installer sets it (and `ollama_env.OLLAMA_MODELS`) for you.
-- `models.primary`: replace the class default model. The reference machine uses `qwen3.5:9b`.
+- `models.primary`: replace the class default model (`qwen3.5:9b` on a 12 GB card, which the reference machine uses).
 
 After you edit it, run:
 

@@ -106,9 +106,10 @@ Ollama disables mmap by default on Windows+CUDA, which turns the CPU-side expert
 the first load time out under normal desktop memory pressure.
 Measured throughput (2026-10-25): MoE primary ~25 tok/s decode with ~1 GB RAM left available; dense 9B ~52 tok/s
 with ~18 GB available. Details in `memory/state.md` (section Benchmarks); re-run with `uv run scripts/stack.py bench`.
-On that evidence the reference machine overrides the class default: `local-primary` is qwen3.5:9b at 32k, sharing one Ollama
-runner with `local-small` (same num_ctx, no use_mmap). The 35B remains the class default for 32 GB machines with less
-desktop memory pressure, and returns here by deleting the override in `machines/<HOST>.yaml`.
+On that evidence `local-primary` is qwen3.5:9b at 32k, sharing one Ollama runner with `local-small` (same num_ctx, no
+use_mmap): first as the reference machine's override, and since 2026-11-26 as the `moe-12gb-32ram` class default
+(`docs/decisions/2026-11-26-12gb-32gb-default-primary.md`). The 35B stays an opt-in primary for that class: pick it in
+the installer or Settings, with "Memory-map primary weights" on.
 
 ## 7. Routing (LiteLLM complexity router, per department)
 
