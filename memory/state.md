@@ -59,8 +59,11 @@ Stable instructions live in AGENTS.md; durable lessons in memory/lessons.md; des
 ## Local model roles on this machine (since 2026-10-25 evening)
 - `local-primary` and `local-small` both serve qwen3.5:9b at num_ctx 32768 with Ollama's default load options, so all
   eight 9B deployments (primary, small, six `<dept>-local`) share one runner and never reload between tiers.
-- The class default primary, qwen3.6:35b-a3b-coding, stays on disk (22 GB on D:) but no gateway alias uses it now.
-  To bring it back as the default, delete the four override lines under `models:` in machines/<HOST>.yaml and rebuild.
+- The former class default primary, qwen3.6:35b-a3b-coding, stays on disk (22 GB on D:) but no gateway alias uses it now.
+  Since 2026-11-26 the `moe-12gb-32ram` class itself defaults to the 9B at 32k (both tiers, no use_mmap), so the
+  four override lines in machines/<HOST>.yaml are redundant; the 35B is an opt-in there
+  (docs/decisions/2026-11-26-12gb-32gb-default-primary.md). Owner's Task Manager figures that day: 31.9 GB RAM, ~15 GB
+  in use at idle, 12.0 GB dedicated VRAM.
 - `local-reviewer` still points at flint:40b-a2b, which is not pulled; no department tier routes to it.
 
 ## Services (native, `uv run scripts/stack.py up|down|status`)

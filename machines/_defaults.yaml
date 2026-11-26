@@ -16,13 +16,18 @@ hardware_classes:
     max_loaded_models: 2
   - name: moe-12gb-32ram
     when: {vram_mib_min: 10000, ram_gb_min: 28}
-    models: {fim: qwen2.5-coder:1.5b-base, embed: nomic-embed-text, small: qwen3.5:9b, primary: qwen3.6:35b-a3b-coding, reviewer: flint:40b-a2b}
+    # Primary is the dense 9B, whole on the GPU (docs/decisions/2026-11-26-12gb-32gb-default-primary.md). The 35B MoE
+    # (qwen3.6:35b-a3b-coding) still runs on this class as an opt-in: pick it in the installer (which turns on
+    # memory-mapped experts by itself) or in the tray's Settings with "Memory-map primary weights" on.
+    # Small and primary are one 9B runner, so their contexts match (Ollama reloads a model whose num_ctx changes).
+    models: {fim: qwen2.5-coder:1.5b-base, embed: nomic-embed-text, small: qwen3.5:9b, primary: qwen3.5:9b, reviewer: flint:40b-a2b}
     primary_num_ctx: 32768
-    small_num_ctx: 16384
+    small_num_ctx: 32768
     max_loaded_models: 2
     # Ollama turns mmap off by default on Windows+CUDA, which copies the ~12.6 GB of CPU-side expert weights into
-    # anonymous memory. With desktop apps open that forces paging and the load times out. Keep them file-backed.
-    primary_options: {use_mmap: true}
+    # anonymous memory. With desktop apps open that forces paging and the load times out. Keep an MoE's experts
+    # file-backed (the reviewer is one); the dense primary keeps Ollama's defaults, like local-small, to share its runner.
+    primary_options: {}
     reviewer_options: {use_mmap: true}
   - name: dense-12gb-16ram
     when: {vram_mib_min: 10000}
